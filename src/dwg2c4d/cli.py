@@ -29,6 +29,27 @@ def _area(text: str) -> tuple[float, float, float, float]:
     return vals  # type: ignore[return-value]
 
 
+def _box5(text: str) -> tuple[float, ...]:
+    try:
+        vals = tuple(float(t) for t in text.split(","))
+    except ValueError:
+        vals = ()
+    if len(vals) not in (4, 5):
+        raise argparse.ArgumentTypeError(
+            "usare xmin,ymin,xmax,ymax[,quota_Y_pavimento] (numeri separati da virgola)")
+    return vals
+
+
+def _pair(text: str) -> tuple[float, float]:
+    try:
+        vals = tuple(float(t) for t in text.split(","))
+    except ValueError:
+        vals = ()
+    if len(vals) != 2:
+        raise argparse.ArgumentTypeError("usare dx,dy (due numeri separati da virgola)")
+    return vals  # type: ignore[return-value]
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="dwg2c4d",
@@ -65,6 +86,26 @@ def build_parser() -> argparse.ArgumentParser:
                    help="come interpretare i muri: auto (default), solidi (polilinee chiuse/campiture), "
                         "doppia-linea, asse")
 
+    g = p.add_argument_group("prospetti e tetto")
+    g.add_argument("--prospetto", type=_box5, action="append", metavar="XMIN,YMIN,XMAX,YMAX[,QUOTA_Y]",
+                   help="zona di un prospetto (ripetibile, uno per facciata): da li' si leggono le quote "
+                        "di porte e finestre. Va disegnato sotto (facciata sud) o sopra (nord) la pianta, "
+                        "con le stesse coordinate X. La quota zero e' il fondo della porta; per forzarla "
+                        "indica come quinto valore la Y del pavimento finito")
+    g.add_argument("--tetto", action="store_true",
+                   help="costruisci il tetto dalla pianta del tetto (layer Tetto/Roof/Copertura): "
+                        "contorno + colmi/displuvi")
+    g.add_argument("--layer-tetto", help="layer della pianta del tetto (virgole, * jolly)")
+    g.add_argument("--area-tetto", type=_area, metavar="XMIN,YMIN,XMAX,YMAX",
+                   help="dove e' disegnata la pianta del tetto (default: tutto il disegno)")
+    g.add_argument("--pendenza", type=float, metavar="GRADI",
+                   help="pendenza delle falde; se manca viene dedotta dai colmi del prospetto, "
+                        "altrimenti 25 gradi")
+    g.add_argument("--spessore-tetto", type=float, help="spessore del tetto (default 0.15 m)")
+    g.add_argument("--sposta-tetto", type=_pair, metavar="DX,DY",
+                   help="spostamento della pianta del tetto sulla pianta, in unita' del disegno "
+                        "(default: centrata sui muri)")
+
     g = p.add_argument_group("elementi aggiuntivi")
     g.add_argument("--no-pavimento", action="store_true")
     g.add_argument("--spessore-pavimento", type=float)
@@ -86,8 +127,8 @@ def build_parser() -> argparse.ArgumentParser:
 def config_from_args(args: argparse.Namespace) -> Config:
     cfg = Config.from_json(args.config) if args.config else Config()
     overrides = dict(cfg.layers.overrides)
-    for cat, value in (("wall", args.muri), ("door", args.porte),
-                       ("window", args.finestre), ("column", args.pilastri)):
+    for cat, value in (("wall", args.muri), ("door", args.porte), ("window", args.finestre),
+                       ("column", args.pilastri), ("roof", args.layer_tetto)):
         if value:
             overrides[cat] = _globs(value)
     cfg.layers = LayerRules(overrides)
@@ -98,12 +139,18 @@ def config_from_args(args: argparse.Namespace) -> Config:
         "wall_thickness": args.spessore_muro, "max_wall_thickness": args.spessore_max,
         "floor_thickness": args.spessore_pavimento, "units": args.unita,
         "out_units": args.unita_output, "area": args.area, "converter": args.converter,
+        "roof_area": args.area_tetto, "roof_pitch": args.pendenza,
+        "roof_thickness": args.spessore_tetto, "roof_offset": args.sposta_tetto,
     }
     for name, value in simple.items():
         if value is not None:
             setattr(cfg, name, value)
     if args.modalita_muri:
         cfg.wall_mode = MODE_NAMES[args.modalita_muri]
+    if args.prospetto:
+        cfg.elevations = list(args.prospetto)
+    if args.tetto or args.layer_tetto:
+        cfg.roof = True
     if args.no_pavimento:
         cfg.floor_thickness = 0.0
     if args.soffitto:
@@ -158,6 +205,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Ingombro muri      : {w:.2f} x {h:.2f} m")
     print(f"  Muri               : {report.wall_pieces} corpi, {report.wall_area_m2:.1f} m2 in pianta")
     print(f"  Porte / finestre   : {report.doors} / {report.windows}")
+    for ev in report.elevations:
+        side = {"south": "sud", "north": "nord"}[ev["side"]]
+        src = "dal fondo della porta" if ev["zero_source"] == "porta" else "indicata"
+        print(f"  Prospetto {side:<5}    : {ev['matched']} di {ev['total']} aperture con le quote del prospetto "
+              f"(quota zero {src})")
+    if report.roof:
+        r = report.roof
+        src = {"indicata": "indicata", "prospetto": "dedotta dal prospetto",
+               "predefinita": "predefinita"}[r["pitch_source"]]
+        lo, hi = r["pitch_range"]
+        slope = f"{r['pitch_deg']:.0f}" if hi - lo < 1.0 else f"{lo:.0f}-{hi:.0f}"
+        print(f"  Tetto              : {r['faces']} falde, pendenza {slope} gradi ({src}), "
+              f"colmo a {r['ridge_height']:.2f} m")
     if report.columns:
         print(f"  Pilastri           : {report.columns}")
     print(f"  Facce / oggetti    : {report.faces} / {', '.join(report.groups)}")

@@ -96,6 +96,29 @@ class Mesh:
             else:
                 self._cap(group, geom.difference(snapped[k - 1]), slab.z0, up=False)
 
+    def add_surface_solid(self, group: str, triangles, edges, z_base: float, thickness: float) -> None:
+        """A sloped surface given as triangles, closed into a solid by a vertical thickness.
+
+        ``triangles`` are counter-clockwise seen from above; ``edges`` are the outline edges
+        (right-hand side = outside). Heights are offset by ``z_base``."""
+        for tri in triangles:
+            top = [(x, y, z + z_base) for x, y, z in tri]
+            n = _normal(top)
+            if n is None:
+                continue
+            self.add_face(group, top, n)
+            self.add_face(group, [(x, y, z - thickness) for x, y, z in reversed(top)], (-n[0], -n[1], -n[2]))
+        for (ax, ay, az), (bx, by, bz) in edges:
+            length = math.hypot(bx - ax, by - ay)
+            if length < 1e-9:
+                continue
+            self.add_face(
+                group,
+                [(ax, ay, az + z_base - thickness), (bx, by, bz + z_base - thickness),
+                 (bx, by, bz + z_base), (ax, ay, az + z_base)],
+                ((by - ay) / length, -(bx - ax) / length, 0.0),
+            )
+
     def _side(self, group: str, edge: tuple, z0: float, z1: float) -> None:
         (ax, ay), (bx, by) = edge
         length = math.hypot(bx - ax, by - ay)
@@ -119,6 +142,16 @@ class Mesh:
             for tri in tris:
                 pts = [(x, y, z) for x, y in tri]
                 self.add_face(group, pts if up else pts[::-1], normal)
+
+
+def _normal(pts: list[Vec3]) -> Vec3 | None:
+    """Unit normal of a counter-clockwise triangle/polygon (None if degenerate)."""
+    (ax, ay, az), (bx, by, bz), (cx, cy, cz) = pts[0], pts[1], pts[2]
+    ux, uy, uz = bx - ax, by - ay, bz - az
+    vx, vy, vz = cx - ax, cy - ay, cz - az
+    nx, ny, nz = uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx
+    length = math.sqrt(nx * nx + ny * ny + nz * nz)
+    return (nx / length, ny / length, nz / length) if length > 1e-12 else None
 
 
 def _ring_edges(poly: Polygon):

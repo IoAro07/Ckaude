@@ -1,0 +1,147 @@
+"""Read door/window heights (and roof silhouette lines) from elevation drawings.
+
+An elevation (prospetto) is only usable when it is drawn *aligned with the plan*: for a
+south (north) elevation placed below (above) the plan, the horizontal drawing coordinate
+x is the same as in the plan. That is how elevations are normally projected from a plan.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+from shapely.geometry import LineString, box
+from shapely.geometry.base import BaseGeometry
+
+from .config import Config
+from .geom import polygons_of
+from .openings import Opening, _symbols
+from .reader import Item
+
+MIN_LINE = 0.5  # horizontal lines shorter than this are not roof/eave candidates (m)
+HORIZONTAL_TOL = 1e-3  # a line is horizontal if its endpoints differ in y by less than this (m)
+MIN_OVERLAP = 0.6  # fraction of the narrower of {symbol, opening} that must overlap in x
+FACADE_DEPTH = 1.0  # an opening must be within this distance of the building's outer face (m)
+
+
+@dataclass
+class Symbol:
+    kind: str  # "door" | "window"
+    x0: float
+    x1: float
+    y0: float  # absolute drawing y, metres
+    y1: float
+
+
+@dataclass
+class Elevation:
+    side: str  # "south" | "north"
+    zero: float  # drawing y (m) of the finished floor
+    zero_source: str  # "porta" | "indicata"
+    symbols: list[Symbol] = field(default_factory=list)
+    hlines: list[tuple[float, float, float]] = field(default_factory=list)  # (y, x0, x1), metres
+
+
+def _horizontal_segments(items: list[Item]) -> list[tuple[float, float, float]]:
+    out = []
+    for it in items:
+        for p in it.prims:
+            geoms = [p.geom] if p.geom.geom_type == "LineString" else \
+                [LineString(poly.exterior.coords) for poly in polygons_of(p.geom)]
+            for ls in geoms:
+                c = list(ls.coords)
+                for (ax, ay), (bx, by) in zip(c, c[1:]):
+                    if abs(ay - by) < HORIZONTAL_TOL and abs(bx - ax) >= MIN_LINE:
+                        out.append((round((ay + by) / 2.0, 4), min(ax, bx), max(ax, bx)))
+    return sorted(set(out))
+
+
+def read_elevation(items: list[Item], spec: tuple[float, ...], unit_scale: float,
+                   plan_bounds: tuple[float, float, float, float], warnings: list[str],
+                   index: int) -> Elevation | None:
+    """Interpret one elevation drawing. ``items`` come from ``read_items`` restricted to its
+    area (veto ignored, loose lines kept); ``spec`` is (xmin, ymin, xmax, ymax[, floor_y])."""
+    label = f"Prospetto {index + 1}"
+    _, py0, _, py1 = plan_bounds
+    centre_y = (spec[1] + spec[3]) / 2.0 * unit_scale
+    if centre_y < py0:
+        side = "south"
+    elif centre_y > py1:
+        side = "north"
+    else:
+        warnings.append(
+            f"{label}: l'area si sovrappone alla pianta (o sta di lato): i prospetti vanno disegnati "
+            "sotto (facciata sud) o sopra (facciata nord) la pianta, con le stesse coordinate X."
+        )
+        return None
+
+    symbols: list[Symbol] = []
+    for kind in ("door", "window"):
+        for geom in _symbols(items, kind):
+            if geom.is_empty:
+                continue
+            x0, y0, x1, y1 = geom.bounds
+            symbols.append(Symbol(kind, x0, x1, y0, y1))
+    if not symbols:
+        warnings.append(f"{label}: nessuna porta o finestra riconosciuta nell'area.")
+        return None
+
+    if len(spec) == 5:
+        zero, source = spec[4] * unit_scale, "indicata"
+    else:
+        doors = [s.y0 for s in symbols if s.kind == "door"]
+        if not doors:
+            warnings.append(
+                f"{label}: nessuna porta da cui ricavare la quota del pavimento: aggiungi la quota Y "
+                "del pavimento finito come quinto valore di --prospetto."
+            )
+            return None
+        zero, source = min(doors), "porta"
+    return Elevation(side, zero, source, symbols, _horizontal_segments(items))
+
+
+def apply_elevation(elev: Elevation, openings: list[Opening], walls: BaseGeometry,
+                    cfg: Config, warnings: list[str]) -> tuple[int, int]:
+    """Set z0/z1 of the plan openings that appear in ``elev``.
+    Returns (symbols matched, symbols in the elevation)."""
+    matched = 0
+    south = elev.side == "south"
+    for sym in elev.symbols:
+        width = sym.x1 - sym.x0
+        best: tuple[float, Opening] | None = None
+        for o in openings:
+            if abs(o.axis[0]) < 0.85:  # only walls running along x can face a south/north elevation
+                continue
+            ox0, _, ox1, _ = o.cut.bounds
+            overlap = min(sym.x1, ox1) - max(sym.x0, ox0)
+            if overlap < MIN_OVERLAP * min(width, ox1 - ox0):
+                continue
+            # the opening on the facade: the outermost one in this x range
+            key = o.center[1] if south else -o.center[1]
+            if best is None or key < best[0]:
+                best = (key, o)
+        if best is None:
+            continue
+        o = best[1]
+        # it must really be on the outer face of the building at that x
+        strip = walls.intersection(box(max(sym.x0, o.cut.bounds[0]), -1e9,
+                                       min(sym.x1, o.cut.bounds[2]), 1e9))
+        if strip.is_empty:
+            continue
+        outer = strip.bounds[1] if south else strip.bounds[3]
+        if abs(o.center[1] - outer) > FACADE_DEPTH:
+            continue
+        z0 = max(0.0, sym.y0 - elev.zero)
+        z1 = min(cfg.wall_height, sym.y1 - elev.zero)
+        if sym.kind == "door" or z0 < 0.05:
+            z0 = 0.0
+        if z1 - z0 < 0.2:
+            continue
+        o.z0, o.z1, o.from_elevation = z0, z1, True
+        matched += 1
+    unmatched = len(elev.symbols) - matched
+    if unmatched:
+        warnings.append(
+            f"Prospetto ({'sud' if south else 'nord'}): {unmatched} su {len(elev.symbols)} simboli "
+            "non corrispondono a nessuna apertura della pianta (stesse coordinate X?)."
+        )
+    return matched, len(elev.symbols)

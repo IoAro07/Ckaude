@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import cached_property
 
 from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
@@ -11,6 +12,7 @@ from .config import Config
 from .geom import polygons_of, union
 from .mesh import Mesh, Slab
 from .openings import Opening
+from .roof import Roof
 from .walls import clean_footprint
 
 SLIVER = 0.004  # wall remnants thinner than 2*SLIVER next to an opening are removed
@@ -23,8 +25,9 @@ class Plan:
     columns: BaseGeometry
     openings: list[Opening] = field(default_factory=list)
     merge_tolerance: float = 0.01
+    roof: Roof | None = None
 
-    @property
+    @cached_property
     def solid_walls(self) -> BaseGeometry:
         """Walls with every opening footprint filled in. The openings are cut back
         out between their own z0/z1, so a wall drawn with a gap at a door or window
@@ -73,6 +76,10 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
     glass = [o for o in plan.openings if o.glass is not None]
     for o in glass:
         mesh.add_extrusion("Vetri", [Slab(o.z0, o.z1, o.glass)], bottom=True)
+
+    if plan.roof is not None:
+        mesh.add_surface_solid("Tetto", plan.roof.triangles, plan.roof.edges,
+                               z_base=cfg.wall_height, thickness=cfg.roof_thickness)
 
     if cfg.floor_thickness > 0 or cfg.ceiling:
         footprint = floor_footprint(walls)

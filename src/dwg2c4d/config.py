@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
-CATEGORIES = ("wall", "door", "window", "column")
+CATEGORIES = ("wall", "door", "window", "column", "roof")
 
 # Drawing-unit name -> metres. Names follow the DXF $INSUNITS table.
 UNIT_TO_METERS = {
@@ -47,21 +47,24 @@ class LayerRules:
         "door": ("door",),
         "window": ("finestr", "window", "glaz"),
         "column": ("pilast", "colonn", "column", "pillar", "cols"),
+        "roof": ("tett", "roof", "copertur"),
     }
     # A layer holding elevations, furniture, dimensions... is never a plan element even if
     # its name also says "parete" (e.g. "Prospetto Parete Attrezzata").
     _VETO = ("prospett", "sezion", "section", "elevat", "arred", "furnit", "quot", "dimens",
              "text", "testi", "tett", "roof", "verde", "landscap")
     # Checked in this order: "MURI_PORTANTI" must not become a door layer.
-    _ORDER = ("door", "window", "column", "wall")
+    _ORDER = ("door", "window", "column", "wall", "roof")
 
     @staticmethod
     def tokens(name: str) -> list[str]:
         return [t for t in re.split(r"[^a-z]+", name.lower()) if t]
 
-    def _default_match(self, category: str, name: str) -> bool:
+    def _default_match(self, category: str, name: str, ignore_veto: bool = False) -> bool:
         toks = self.tokens(name)
-        if any(t.startswith(self._VETO) for t in toks):
+        # "Tetto"/"Roof" are on the veto list for plan elements, but they are what the
+        # roof category looks for.
+        if category != "roof" and not ignore_veto and any(t.startswith(self._VETO) for t in toks):
             return False
         exact = self._EXACT.get(category, ())
         prefixes = self._PREFIX.get(category, ())
@@ -71,24 +74,24 @@ class LayerRules:
         low = name.lower()
         return any(fnmatch.fnmatchcase(low, p.lower()) for p in self.overrides[category])
 
-    def matches(self, category: str, name: str) -> bool:
+    def matches(self, category: str, name: str, ignore_veto: bool = False) -> bool:
         if category in self.overrides:
             return self._override_match(category, name)
-        return self._default_match(category, name)
+        return self._default_match(category, name, ignore_veto)
 
-    def classify_layer(self, layer: str) -> str | None:
+    def classify_layer(self, layer: str, ignore_veto: bool = False) -> str | None:
         for cat in self._ORDER:
-            if self.matches(cat, layer):
+            if self.matches(cat, layer, ignore_veto):
                 return cat
         return None
 
-    def classify_block(self, block_name: str) -> str | None:
+    def classify_block(self, block_name: str, ignore_veto: bool = False) -> str | None:
         """Block-name hint (doors and windows only), e.g. block ``PORTA90``.
         Same token rules as layers, so ``PORTANTE`` is not a door."""
         if block_name.startswith("*"):  # anonymous / dynamic blocks
             return None
         for cat in ("door", "window"):
-            if self.matches(cat, block_name):
+            if self.matches(cat, block_name, ignore_veto):
                 return cat
         return None
 
@@ -97,12 +100,15 @@ class LayerRules:
         not even a block called "Porta Asciugamani" (towel rail) or "Porta TV"."""
         return any(t.startswith(self._VETO) for t in self.tokens(layer))
 
-    def classify(self, layer: str, block_name: str | None = None) -> str | None:
-        if block_name and not self.vetoed(layer):
-            hint = self.classify_block(block_name)
+    def classify(self, layer: str, block_name: str | None = None,
+                 ignore_veto: bool = False) -> str | None:
+        """``ignore_veto``: used when reading an elevation drawing, whose layers are named
+        "Prospetto ..." and whose door/window blocks are exactly what we want."""
+        if block_name and (ignore_veto or not self.vetoed(layer)):
+            hint = self.classify_block(block_name, ignore_veto)
             if hint:
                 return hint
-        return self.classify_layer(layer)
+        return self.classify_layer(layer, ignore_veto)
 
 
 @dataclass
@@ -136,6 +142,19 @@ class Config:
     arc_tolerance: float = 0.002  # max deviation when flattening curves, metres
     converter: str | None = None  # path of ODAFileConverter / dwg2dxf
 
+    # Elevations (prospetti): each entry is (xmin, ymin, xmax, ymax[, floor_y]) in drawing
+    # units. Door/window heights are read from them; floor_y (the drawing y of the finished
+    # floor) defaults to the bottom of the lowest door in that elevation.
+    elevations: list[tuple[float, ...]] = field(default_factory=list)
+
+    # Roof built from the roof plan (layers named Tetto/Roof/Copertura, or --layer-tetto).
+    roof: bool = False
+    roof_area: tuple[float, float, float, float] | None = None  # where the roof plan is drawn
+    roof_offset: tuple[float, float] | None = None  # drawing units; default: centre on the walls
+    roof_pitch: float | None = None  # degrees; default: from the elevations, else 25
+    roof_thickness: float = 0.15
+    roof_default_pitch: float = 25.0
+
     layers: LayerRules = field(default_factory=LayerRules)
 
     def validate(self) -> None:
@@ -151,10 +170,19 @@ class Config:
                 raise ValueError(f"{name} deve essere positivo")
         if self.window_sill < 0 or self.floor_thickness < 0:
             raise ValueError("davanzale e spessore pavimento non possono essere negativi")
-        if self.area is not None:
-            x0, y0, x1, y1 = self.area
-            if not (x1 > x0 and y1 > y0):
-                raise ValueError("area: servono xmin,ymin,xmax,ymax con max > min")
+        for name, box_ in (("area", self.area), ("roof_area", self.roof_area)):
+            if box_ is not None:
+                x0, y0, x1, y1 = box_
+                if not (x1 > x0 and y1 > y0):
+                    raise ValueError(f"{name}: servono xmin,ymin,xmax,ymax con max > min")
+        for ev in self.elevations:
+            if len(ev) not in (4, 5) or not (ev[2] > ev[0] and ev[3] > ev[1]):
+                raise ValueError("prospetto: servono xmin,ymin,xmax,ymax (con max > min) "
+                                 "ed eventualmente la quota Y del pavimento finito")
+        if self.roof_pitch is not None and not (1.0 <= self.roof_pitch <= 80.0):
+            raise ValueError("pendenza del tetto: tra 1 e 80 gradi")
+        if self.roof_thickness <= 0:
+            raise ValueError("roof_thickness deve essere positivo")
 
     @classmethod
     def from_json(cls, path: str | Path) -> "Config":
@@ -173,8 +201,11 @@ class Config:
         bad = set(layers) - set(CATEGORIES)
         if bad:
             raise ValueError(f"categorie di layer sconosciute: {sorted(bad)} (valide: {CATEGORIES})")
-        if "area" in data and data["area"] is not None:
-            data["area"] = tuple(float(v) for v in data["area"])
+        for key in ("area", "roof_area", "roof_offset"):
+            if data.get(key) is not None:
+                data[key] = tuple(float(v) for v in data[key])
+        if "elevations" in data:
+            data["elevations"] = [tuple(float(v) for v in ev) for ev in data["elevations"]]
         cfg = cls(**data)
         cfg.layers = LayerRules({k: list(v) for k, v in layers.items()})
         return cfg

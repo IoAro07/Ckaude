@@ -37,6 +37,9 @@ class Opening:
     z0: float
     z1: float
     glass: Polygon | None  # thin pane for windows
+    axis: tuple[float, float] = (1.0, 0.0)  # unit vector along the wall
+    center: tuple[float, float] = (0.0, 0.0)
+    from_elevation: bool = False  # z0/z1 were read from an elevation drawing
 
 
 def _symbols(items: list[Item], kind: str) -> list[BaseGeometry]:
@@ -210,7 +213,8 @@ def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
             if kind == "window" and cfg.glass:
                 m, h = (s0 + s1) / 2.0, cfg.glass_thickness / 2.0
                 glass = oriented_rect(cx, cy, ux, uy, a1 - a0, m - h, m + h)
-            openings.append(Opening(kind, cut, fill, z0, z1, glass))
+            openings.append(Opening(kind, cut, fill, z0, z1, glass, axis=(ux, uy),
+                                    center=(cut.centroid.x, cut.centroid.y)))
     if skipped:
         warnings.append(f"{skipped} porte/finestre non toccano nessun muro e sono state ignorate.")
     return openings

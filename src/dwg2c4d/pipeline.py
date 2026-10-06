@@ -8,12 +8,14 @@ from pathlib import Path
 from shapely.geometry.base import BaseGeometry
 
 from .config import Config
+from .elevation import apply_elevation, read_elevation
 from .dwgfile import ConversionError, open_drawing
 from .geom import polygons_of
 from .model import Plan, build_mesh
 from .objwriter import write_obj
 from .openings import build_openings
 from .reader import read_items
+from .roof import build_roof, ridge_hints_from
 from .walls import build_columns, build_walls
 
 
@@ -31,6 +33,8 @@ class ConversionReport:
     faces: int
     groups: list[str]
     warnings: list[str] = field(default_factory=list)
+    elevations: list[dict] = field(default_factory=list)  # side, matched, total, zero source
+    roof: dict | None = None  # pitch_deg, pitch_source, ridge_height, faces
 
 
 def _extent(geom: BaseGeometry) -> tuple[float, float]:
@@ -71,6 +75,31 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         )
     plan = Plan(walls=walls, columns=columns, openings=openings, merge_tolerance=cfg.merge_tolerance)
     solid = plan.solid_walls
+
+    elevations = []
+    elevation_report: list[dict] = []
+    for i, spec in enumerate(cfg.elevations):
+        er = read_items(doc, cfg, area=tuple(spec[:4]), ignore_veto=True, keep_other=True,
+                        unit=result.unit)
+        ev = read_elevation(er.items, spec, result.unit_scale, solid.bounds, warnings, i)
+        if ev is None:
+            continue
+        elevations.append(ev)
+        matched, total = apply_elevation(ev, openings, solid, cfg, warnings)
+        elevation_report.append({"side": ev.side, "matched": matched, "total": total,
+                                 "zero_source": ev.zero_source})
+
+    roof_report = None
+    if cfg.roof:
+        rr = read_items(doc, cfg, area=cfg.roof_area, unit=result.unit)
+        roof = build_roof(rr.items, cfg, result.unit_scale, solid.bounds,
+                          ridge_hints_from(elevations, cfg.wall_height), warnings)
+        if roof is not None:
+            plan.roof = roof
+            roof_report = {"pitch_deg": roof.pitch_deg, "pitch_range": roof.pitch_range, "pitch_source": roof.pitch_source,
+                           "ridge_height": roof.ridge_height + cfg.wall_height, "faces": roof.faces,
+                           "ridges_from_elevation": roof.ridges_from_elevation}
+
     mesh = build_mesh(plan, cfg, warnings)
     write_obj(mesh, output_path, cfg.out_units, cfg.mirror)
 
@@ -87,4 +116,6 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         faces=mesh.face_count,
         groups=list(mesh.groups),
         warnings=warnings,
+        elevations=elevation_report,
+        roof=roof_report,
     )

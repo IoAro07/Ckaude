@@ -116,8 +116,11 @@ def _flatten(entities, on_error, depth: int = 0):
 
 
 class _Reader:
-    def __init__(self, doc: Drawing, cfg: Config, dist: float):
+    def __init__(self, doc: Drawing, cfg: Config, dist: float, ignore_veto: bool = False,
+                 keep_other: bool = False):
         self.doc, self.cfg, self.dist = doc, cfg, dist
+        self.ignore_veto = ignore_veto
+        self.keep_other = keep_other
         self.items: list[Item] = []
         self.skipped = 0
         self.wall_layer_blocks = 0
@@ -151,7 +154,7 @@ class _Reader:
                 continue
             if t == "INSERT":
                 block = e.dxf.name
-                cat = rules.classify(layer, block)
+                cat = rules.classify(layer, block, self.ignore_veto)
                 try:
                     virtual = list(e.virtual_entities())
                 except Exception:
@@ -171,20 +174,35 @@ class _Reader:
                     # e.g. a whole plan inserted as one block: classify inner entities
                     self.walk(virtual, depth + 1)
                 continue
-            cat = rules.classify(layer)
+            cat = rules.classify_layer(layer, self.ignore_veto)
             if not cat:
-                continue
+                if not (self.keep_other and t in LINE_TYPES):
+                    continue
+                cat = "other"  # loose linework of any layer (e.g. an elevation's roof silhouette)
             prims = self.prims_of([e])
             if prims:
                 self.items.append(Item(layer, None, cat, prims))
 
 
-def read_items(doc: Drawing, cfg: Config) -> ReadResult:
+_ALL = object()  # "use cfg.area" marker
+
+
+def read_items(doc: Drawing, cfg: Config, area=_ALL, ignore_veto: bool = False,
+               keep_other: bool = False, unit: str | None = None) -> ReadResult:
+    """Read the modelspace into categorised items, scaled to metres.
+
+    ``area``: crop window in drawing units (default ``cfg.area``; ``None`` = everything).
+    ``unit``: reuse the drawing unit already decided by the main read, so secondary reads
+    (elevations, roof plan) never guess differently.
+    ``ignore_veto`` / ``keep_other``: used for elevation drawings (see ``LayerRules.classify``).
+    """
     warnings: list[str] = []
-    unit = cfg.units or INSUNITS_TO_NAME.get(int(doc.header.get("$INSUNITS", 0) or 0))
+    area = cfg.area if area is _ALL else area
+    unit = unit or cfg.units or INSUNITS_TO_NAME.get(int(doc.header.get("$INSUNITS", 0) or 0))
     guessed = unit is None
     provisional = UNIT_TO_METERS[unit] if unit else 0.01
-    reader = _Reader(doc, cfg, dist=cfg.arc_tolerance / provisional)
+    reader = _Reader(doc, cfg, dist=cfg.arc_tolerance / provisional, ignore_veto=ignore_veto,
+                     keep_other=keep_other)
     reader.walk(doc.modelspace())
     items = reader.items
 
@@ -204,7 +222,7 @@ def read_items(doc: Drawing, cfg: Config) -> ReadResult:
     scale = UNIT_TO_METERS[unit]
 
     # Optional crop (given in drawing units), then scale everything to metres.
-    window = box(*cfg.area) if cfg.area else None
+    window = box(*area[:4]) if area else None
     kept: list[Item] = []
     for it in items:
         if window is not None and not any(window.intersects(p.geom) for p in it.prims):

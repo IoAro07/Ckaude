@@ -18,7 +18,7 @@ from dwg2c4d.config import Config, LayerRules
     # mention walls/doors
     ("1 Porte", "door"), ("2 Finestre", "window"), ("12 Prospetto Parete Attrezzata", None),
     ("11 Prospetto Frontale", None), ("6 Arredo Camera da Letto", None), ("17 Quote e Testi", None),
-    ("16 Tetto", None), ("15 Verde", None), ("Sezione A-A Muri", None),
+    ("16 Tetto", "roof"), ("15 Verde", None), ("Sezione A-A Muri", None),
 ])
 def test_default_layer_classification(layer, expected):
     assert LayerRules().classify_layer(layer) == expected
