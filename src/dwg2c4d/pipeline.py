@@ -19,6 +19,7 @@ from .openings import build_openings
 from .reader import read_items
 from .roof import build_roof, ridge_hints_from
 from .walls import build_columns, build_walls
+from .table import apply_table, read_table, write_table
 
 
 @dataclass
@@ -37,6 +38,7 @@ class ConversionReport:
     warnings: list[str] = field(default_factory=list)
     origin_offset: tuple[float, float] = (0.0, 0.0)  # metres added to the drawing coordinates
     json_path: Path | None = None
+    table_path: Path | None = None  # the openings table written next to the model
     openings: list = field(default_factory=list)  # the Opening objects, with ids
     mesh: object | None = None  # the final Mesh (for previews); not part of the printed summary
     elevations: list[dict] = field(default_factory=list)  # side, matched, total, zero source
@@ -118,6 +120,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         elevation_report.append({"side": ev.side, "matched": matched, "total": total,
                                  "zero_source": ev.zero_source})
 
+    if cfg.table_in:
+        rows = read_table(cfg.table_in)
+        changed = apply_table(openings, rows, cfg, warnings)
+        if changed:
+            plan.__dict__.pop("solid_walls", None)  # widths/kinds changed: the filled walls too
+            solid = plan.solid_walls
+
     roof_report = None
     if cfg.roof:
         rr = read_items(doc, cfg, area=cfg.roof_area, unit=result.unit)
@@ -141,6 +150,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         json_path = write_json(to_model_dict(mesh, output_path.stem, offset),
                                output_path.with_name(output_path.stem + "_model.json"))
 
+    table_path = None
+    if cfg.write_table and openings:
+        table_path = output_path.with_name(output_path.stem + "_aperture.csv")
+        if cfg.table_in and Path(cfg.table_in).resolve() == table_path.resolve():
+            table_path = output_path.with_name(output_path.stem + "_aperture_nuova.csv")  # never overwrite the input
+        write_table(table_path, openings, result.unit_scale)
+
     return ConversionReport(
         output=output_path,
         unit=result.unit,
@@ -158,6 +174,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         roof=roof_report,
         origin_offset=offset,
         json_path=json_path,
+        table_path=table_path,
         mesh=mesh,
         openings=openings,
     )

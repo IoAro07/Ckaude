@@ -127,6 +127,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--json-c4d", action="store_true",
                    help="scrivi anche NOME_model.json, da importare con uno script in Cinema 4D "
                         "(oggetti nativi, un materiale per tipo, anche Corona)")
+    g.add_argument("--tabella", metavar="FILE.csv",
+                   help="applica la tabella delle aperture corretta a mano (colonne MODIFICA_*), "
+                        "scritta da una conversione precedente come NOME_aperture.csv")
+    g.add_argument("--no-tabella", action="store_true",
+                   help="non scrive NOME_aperture.csv")
     g.add_argument("--specchia", action="store_true",
                    help="specchia la pianta (se in Cinema 4D risulta capovolta)")
     g.add_argument("--converter", help="percorso di ODAFileConverter o dwg2dxf")
@@ -176,6 +181,10 @@ def config_from_args(args: argparse.Namespace) -> Config:
     cfg.origin = {"centro": "center", "minimo": "min", "disegno": "drawing"}[args.origine]
     if args.json_c4d:
         cfg.c4d_json = True
+    if args.tabella:
+        cfg.table_in = args.tabella
+    if args.no_tabella:
+        cfg.write_table = False
     return cfg
 
 
@@ -215,6 +224,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Creato {report.output}  (+ {report.output.with_suffix('.mtl').name})")
     if report.json_path:
         print(f"Creato {report.json_path}  (per lo script di importazione di Cinema 4D)")
+    if report.table_path:
+        print(f"Creato {report.table_path}  (tabella delle aperture: correggi le colonne MODIFICA_* "
+              f"e rilancia con --tabella)")
     note = " (dedotte: verifica!)" if report.unit_guessed else ""
     print(f"  Unita' del disegno : {report.unit}{note}")
     if report.origin_offset != (0.0, 0.0):

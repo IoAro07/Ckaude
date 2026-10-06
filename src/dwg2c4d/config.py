@@ -141,6 +141,8 @@ class Config:
     include_hidden: bool = False
     origin: str = "drawing"  # where the model's zero is: drawing | center | min (of the walls)
     c4d_json: bool = False  # also write <name>_model.json for a Cinema 4D import script
+    write_table: bool = True  # write <name>_aperture.csv: every door/window, editable by hand
+    table_in: str | None = None  # an edited openings table to apply (MODIFICA_* columns)
     walls_from_blocks: bool = False  # read blocks inserted on wall layers as walls
     mirror: bool = False  # mirror the plan (if Cinema 4D shows it flipped)
     arc_tolerance: float = 0.002  # max deviation when flattening curves, metres

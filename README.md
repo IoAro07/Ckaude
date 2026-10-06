@@ -188,6 +188,45 @@ dwg2c4d pianta.dwg -o casa.obj --muri "0" --unita cm --area=72400,48300,74600,49
 > Attenzione: se il primo numero di un valore è negativo scrivi `--area=-200,-200,…` con il segno uguale
 > (altrimenti la riga di comando lo scambia per un'opzione).
 
+## Infissi dettagliati e tabella delle aperture
+
+Di default (`--infissi dettagliati`) ogni apertura diventa un oggetto riconoscibile, fatto di scatole orientate
+(niente booleane), in quattro gruppi: `Telai`, `Ante`, `Vetri`, `Maniglie`.
+
+* **Porte**: imbotto (spallette e architrave), cornice sui due lati del muro, un'anta per ogni **arco di
+  rotazione** del simbolo in pianta. Il centro dell'arco è la **cerniera**: la maniglia (con placca e **toppa**)
+  sta sul lato opposto, con la leva rivolta verso la cerniera. Porta doppia = due archi = due ante.
+  Senza arco la cerniera non si deduce: l'anta è incernierata a sinistra e la nota lo dice.
+* **Finestre e finestroni**: telaio fisso, un'anta per ogni spazio tra le **linee che tagliano il simbolo**
+  di traverso al muro (una linea = 2 ante, due = 3...; le doppie linee vicine contano una volta), un vetro e una
+  maniglia per ogni anta, davanzale e cornice. Una porta-finestra (davanzale 0) è la stessa cosa senza soglia.
+* `--infissi semplici` dà solo la lastra di vetro (modello più leggero).
+
+Ogni conversione scrive anche **`NOME_aperture.csv`** (separatore `;`, centimetri, virgola decimale: si apre
+con Excel): una riga per apertura, con sigla (`F01`, `P01`... in ordine di lettura, dall'alto a sinistra), tipo,
+posizione, larghezza, spessore del muro, davanzale, altezza, numero di ante, cerniera e **da dove viene ogni
+misura** (simbolo, prospetto, predefinita...).
+
+Per correggere qualcosa non serve toccare il disegno: compila le colonne `MODIFICA_*` (solo le celle compilate
+valgono) e rilancia con la tabella:
+
+```bash
+dwg2c4d pianta.dwg --tabella pianta_aperture.csv
+```
+
+| Colonna | Valori |
+|---|---|
+| `MODIFICA_tipo` | `finestra`, `porta`, `vano` |
+| `MODIFICA_larghezza`, `MODIFICA_davanzale`, `MODIFICA_altezza` | centimetri |
+| `MODIFICA_ante` | da 1 a 8 |
+| `MODIFICA_cerniera` | `sinistra`, `destra`, `ovest`/`est` (muro lungo X), `sud`/`nord` (muro lungo Y), `doppia` |
+| `MODIFICA_tieni` | `no` = l'apertura non esiste: il vano viene chiuso con il muro |
+
+Le sigle seguono l'ordine di lettura: se cambi le opzioni (area, layer) possono cambiare. Una riga con sigla
+inesistente o con un valore non valido viene segnalata e ignorata; il file in ingresso non viene mai
+sovrascritto (la nuova tabella si chiama `NOME_aperture_nuova.csv` se il nome coincide). `--no-tabella` non la scrive.
+Ordine di priorità per le misure: **tabella > prospetto > simbolo > valori predefiniti**.
+
 ## Importare in Cinema 4D
 
 Ci sono due modi. Il secondo è consigliato se usi Corona.
@@ -236,6 +275,8 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--spessore-max` | spessore massimo di un muro a doppia linea (0,60) |
 | `--altezza-muri`, `--altezza-porte`, `--davanzale`, `--altezza-finestre` | quote in metri |
 | `--no-pavimento`, `--spessore-pavimento`, `--soffitto`, `--no-vetri` | elementi aggiuntivi |
+| `--infissi` | `dettagliati` (default: telai, ante, maniglie, toppe) o `semplici` (solo vetro) |
+| `--tabella`, `--no-tabella` | applica la tabella delle aperture corretta a mano / non scrivere `NOME_aperture.csv` |
 | `--unita` | unità del disegno: `mm`, `cm`, `m`, `in`, `ft` (default: lette dal file) |
 | `--unita-output` | unità dell'OBJ: `m` (default), `cm`, `mm` |
 | `--area` | converti solo questa zona del disegno |
