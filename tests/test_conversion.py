@@ -561,3 +561,14 @@ def test_closed_shapes_inside_a_hole_are_kept_as_islands(tmp_path):
     ring = 10.0 ** 2 - 9.4 ** 2
     assert rep.wall_area_m2 == pytest.approx(ring + 6.7 * 0.1 + 0.4 * 0.4, rel=1e-3)
     assert rep.wall_pieces == 2  # ring + partition (touching) and the free-standing column
+
+
+def test_wall_direction_averages_edges_that_point_the_opposite_way():
+    """Edges at angle 0 and pi-1e-13 are the same line: their mean is horizontal, not vertical."""
+    from shapely.geometry import Point, Polygon
+
+    from dwg2c4d.openings import _WallEdges
+
+    wall = Polygon([(0, 0), (10, 0), (10, 0.2), (0, 0.2 + 1e-12)])
+    (ux, uy), *_ = _WallEdges(wall).directions_near(Point(5, 0.1).buffer(0.5))
+    assert abs(ux) > 0.9999 and abs(uy) < 0.01

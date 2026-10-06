@@ -152,7 +152,12 @@ class _WallEdges:
             centre = (b + 0.5) * math.pi / nbins
             diff = np.abs((ang - centre + math.pi / 2) % math.pi - math.pi / 2)
             near = diff < math.radians(3)
-            theta = float(np.average(ang[near], weights=w[near])) if near.any() else centre
+            if near.any():
+                # directions are mod pi: 0 and pi-eps are the same line, so average the doubled angle
+                theta = 0.5 * math.atan2(float((w[near] * np.sin(2 * ang[near])).sum()),
+                                         float((w[near] * np.cos(2 * ang[near])).sum())) % math.pi
+            else:
+                theta = centre
             out.append((math.cos(theta), math.sin(theta)))
         return out
 
@@ -223,11 +228,19 @@ def _locate_opening(sym: Symbol, walls: BaseGeometry, edges: _WallEdges,
     for d in edges.directions_near(region):
         if not any(abs(d[0] * c[0] + d[1] * c[1]) > 0.999 for c in candidates):
             candidates.append(d)
+    fallback = None
     for ux, uy in candidates:
+        if ux < -1e-9 or (abs(ux) <= 1e-9 and uy < 0):
+            ux, uy = -ux, -uy  # a fixed sense (east / north): hinge and table sides are named from it
         found = _try_direction(hull, walls, ux, uy, max_t)
-        if found:
+        if not found:
+            continue
+        if found[5] - found[4] <= max_t:
             return found
-    return None
+        # Too thick to be the wall's section: this is the section along a crossing wall (the opening
+        # was assumed to run the wrong way). Try the other directions, keep this one as a last resort.
+        fallback = fallback or found
+    return fallback
 
 
 def _door_leaves(sym: Symbol, centre: tuple[float, float], u, v, width: float) -> list[dict]:

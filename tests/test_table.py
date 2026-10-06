@@ -270,3 +270,10 @@ def test_table_x_y_are_in_drawing_units_even_with_a_recentred_model(plan, tmp_pa
     door = next(r for r in read_table(rep.table_path) if r["tipo"] == "porta")
     assert door["x"] == "245" and door["y"] == "15"
     assert (DOOR[0] + DOOR[1]) / 2 == 245 and T / 2 == 15 and WIN_N and WIN_S
+
+
+def test_opening_axes_point_east_or_north(plan, tmp_path):
+    """Hinge sides in the table are named from the axis: it must not depend on how edges were drawn."""
+    for o in run(plan, tmp_path).openings:
+        ux, uy = o.axis
+        assert ux > 1e-9 or (abs(ux) <= 1e-9 and uy > 0)
