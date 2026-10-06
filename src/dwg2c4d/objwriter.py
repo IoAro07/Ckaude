@@ -1,0 +1,71 @@
+"""Wavefront OBJ + MTL writer, oriented for Cinema 4D (Y up)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from .mesh import Mesh
+
+OUT_SCALE = {"m": 1.0, "cm": 100.0, "mm": 1000.0}
+
+# name -> (diffuse RGB, opacity)
+MATERIALS = {
+    "Muri": ((0.90, 0.89, 0.86), 1.0),
+    "Pilastri": ((0.78, 0.78, 0.78), 1.0),
+    "Pavimento": ((0.60, 0.56, 0.52), 1.0),
+    "Soffitto": ((0.95, 0.95, 0.95), 1.0),
+    "Vetri": ((0.70, 0.85, 0.95), 0.3),
+}
+
+
+def _fmt(v: float) -> str:
+    s = f"{v:.6f}".rstrip("0").rstrip(".")
+    return "0" if s in ("-0", "") else s
+
+
+def write_obj(mesh: Mesh, obj_path: str | Path, out_units: str = "m", mirror: bool = False) -> Path:
+    """Write ``mesh`` (plan x/y, z up, metres) as OBJ with Y up.
+
+    Normal: (x, y, z) -> (x, z, -y), a pure rotation, so a plan read from the top
+    keeps its orientation in a right-handed viewer. ``mirror`` flips it
+    (x, y, z) -> (x, z, y) and reverses the face winding to compensate.
+    """
+    obj_path = Path(obj_path)
+    mtl_path = obj_path.with_suffix(".mtl")
+    s = OUT_SCALE[out_units]
+    sy = 1.0 if mirror else -1.0
+
+    def pos(p):
+        return p[0] * s, p[2] * s, p[1] * s * sy
+
+    def nrm(n):
+        return n[0], n[2], n[1] * sy
+
+    lines = [
+        "# Generato da dwg2c4d",
+        f"# Unita': {out_units}  |  asse verticale: Y",
+        f"mtllib {mtl_path.name}",
+    ]
+    lines += ["v " + " ".join(_fmt(c) for c in pos(v)) for v in mesh.vertices]
+    lines += ["vn " + " ".join(_fmt(c) for c in nrm(n)) for n in mesh.normals]
+    for name, faces in mesh.groups.items():
+        lines += [f"o {name}", f"usemtl {name}", "s off"]
+        for ids, ni in faces:
+            order = ids[::-1] if mirror else ids
+            lines.append("f " + " ".join(f"{i + 1}//{ni + 1}" for i in order))
+    obj_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    mtl = ["# Generato da dwg2c4d"]
+    for name in mesh.groups:
+        (r, g, b), alpha = MATERIALS.get(name, ((0.8, 0.8, 0.8), 1.0))
+        mtl += [
+            f"newmtl {name}",
+            f"Kd {r} {g} {b}",
+            "Ka 0 0 0",
+            "Ks 0.05 0.05 0.05" if name != "Vetri" else "Ks 0.6 0.6 0.6",
+            f"d {alpha}",
+            "illum 2",
+            "",
+        ]
+    mtl_path.write_text("\n".join(mtl), encoding="utf-8")
+    return obj_path
