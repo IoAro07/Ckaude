@@ -40,6 +40,8 @@ def test_cli_list_layers(capsys, sample_lines):
         assert any(line.startswith(layer) and use in line for line in text.splitlines())
     assert any(line.startswith("QUOTE") and "-" in line for line in text.splitlines())
     assert "PORTA90" in text
+    assert "Unita' dichiarate nel file: cm" in text
+    assert "zona: x" in text  # where each layer's content sits, to pick a --area
 
 
 def test_cli_options_are_applied(tmp_path, sample_lines):

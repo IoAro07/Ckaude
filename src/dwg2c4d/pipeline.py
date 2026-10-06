@@ -62,6 +62,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         columns = columns.difference(walls)
     openings = build_openings(result.items, walls, cfg, warnings)
 
+    span = max(_extent(walls))
+    if not (3.0 <= span <= 300.0):
+        warnings.append(
+            f"Dimensioni insolite per un edificio: {_extent(walls)[0]:.2f} x {_extent(walls)[1]:.2f} m "
+            f"(unita' del disegno lette: {result.unit}). Se non tornano, forza l'unita' con --unita "
+            "(mm, cm, m)."
+        )
     plan = Plan(walls=walls, columns=columns, openings=openings, merge_tolerance=cfg.merge_tolerance)
     solid = plan.solid_walls
     mesh = build_mesh(plan, cfg, warnings)

@@ -7,3 +7,4 @@ dist/
 *.mtl
 !examples/*.obj
 !examples/*.mtl
+output/

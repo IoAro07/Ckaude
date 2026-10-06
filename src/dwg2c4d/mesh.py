@@ -75,10 +75,19 @@ class Mesh:
         differs from its neighbour's, the difference becomes a top/bottom face.
         """
         snapped = [_snap(s.geom) for s in slabs]
+        # Side faces: an edge that stays the same in consecutive slabs becomes one tall quad
+        # instead of one quad per slab, so walls far from any opening get no extra edge loops.
+        running: dict[tuple, float] = {}
+        for k, slab in enumerate(slabs):
+            edges = {e for poly in polygons_of(snapped[k]) for e in _ring_edges(poly)}
+            for edge in [e for e in running if e not in edges]:
+                self._side(group, edge, running.pop(edge), slab.z0)
+            for edge in edges:
+                running.setdefault(edge, slab.z0)
+        for edge, z0 in running.items():
+            self._side(group, edge, z0, slabs[-1].z1)
         for k, slab in enumerate(slabs):
             geom = snapped[k]
-            for poly in polygons_of(geom):
-                self._sides(group, poly, slab.z0, slab.z1)
             above = snapped[k + 1] if k + 1 < len(slabs) else None
             self._cap(group, geom if above is None else geom.difference(above), slab.z1, up=True)
             if k == 0:
@@ -87,20 +96,16 @@ class Mesh:
             else:
                 self._cap(group, geom.difference(snapped[k - 1]), slab.z0, up=False)
 
-    def _sides(self, group: str, poly: Polygon, z0: float, z1: float) -> None:
-        poly = orient(poly, 1.0)  # exterior CCW, holes CW: the right-hand normal points outwards
-        for ring in (poly.exterior, *poly.interiors):
-            c = list(ring.coords)
-            for (ax, ay), (bx, by) in zip(c, c[1:]):
-                dx, dy = bx - ax, by - ay
-                length = math.hypot(dx, dy)
-                if length < 1e-9:
-                    continue
-                self.add_face(
-                    group,
-                    [(ax, ay, z0), (bx, by, z0), (bx, by, z1), (ax, ay, z1)],
-                    (dy / length, -dx / length, 0.0),
-                )
+    def _side(self, group: str, edge: tuple, z0: float, z1: float) -> None:
+        (ax, ay), (bx, by) = edge
+        length = math.hypot(bx - ax, by - ay)
+        if length < 1e-9 or z1 - z0 < 1e-9:
+            return
+        self.add_face(
+            group,
+            [(ax, ay, z0), (bx, by, z0), (bx, by, z1), (ax, ay, z1)],
+            ((by - ay) / length, -(bx - ax) / length, 0.0),  # right-hand normal: outwards
+        )
 
     def _cap(self, group: str, geom: BaseGeometry, z: float, up: bool) -> None:
         normal = (0.0, 0.0, 1.0 if up else -1.0)
@@ -116,10 +121,19 @@ class Mesh:
                 self.add_face(group, pts if up else pts[::-1], normal)
 
 
+def _ring_edges(poly: Polygon):
+    """Directed boundary edges, exterior counter-clockwise and holes clockwise."""
+    poly = orient(poly, 1.0)
+    for ring in (poly.exterior, *poly.interiors):
+        c = [(round(x, 9), round(y, 9)) for x, y in ring.coords]
+        yield from zip(c, c[1:])
+
+
 def _snap(geom: BaseGeometry) -> BaseGeometry:
     if geom.is_empty:
         return geom
-    return shapely.set_precision(geom, GRID)
+    # snap to the grid, then drop collinear vertices left by boolean operations
+    return shapely.set_precision(geom, GRID).simplify(GRID / 10, preserve_topology=True)
 
 
 def _is_convex(ring: list[tuple[float, float]]) -> bool:

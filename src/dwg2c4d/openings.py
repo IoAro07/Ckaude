@@ -18,7 +18,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.strtree import STRtree
 
 from .config import Config
-from .geom import oriented_rect, polygons_of, union
+from .geom import long_axis, oriented_rect, polygons_of, union
 from .reader import Item
 
 CLUSTER_TOL = 0.03  # loose lines closer than this belong to the same symbol
@@ -79,21 +79,33 @@ class _WallEdges:
         self.angles = np.asarray(self.angles)
         self.tree = STRtree(segs) if segs else None
 
-    def direction_near(self, region: BaseGeometry) -> tuple[float, float] | None:
-        """Unit vector of the dominant wall direction among edges touching ``region``,
-        weighting each edge by its full length (long faces beat short jamb ends)."""
+    def directions_near(self, region: BaseGeometry, limit: int = 3) -> list[tuple[float, float]]:
+        """Unit vectors of the dominant wall directions among edges touching ``region``,
+        strongest first. Edges are weighted by their full length (long faces beat short
+        jamb ends); weaker directions are kept as fallbacks (a long perpendicular wall
+        nearby can outweigh the wall the opening is in)."""
         if self.tree is None:
-            return None
+            return []
         idx = self.tree.query(region, predicate="intersects")
         if len(idx) == 0:
-            return None
+            return []
         ang, w = self.angles[idx], self.lengths[idx]
-        bins = np.bincount((ang / math.pi * 90).astype(int) % 90, weights=w, minlength=90)
-        best = (int(np.argmax(bins)) + 0.5) * math.pi / 90
-        diff = np.abs((ang - best + math.pi / 2) % math.pi - math.pi / 2)
-        near = diff < math.radians(3)
-        theta = float(np.average(ang[near], weights=w[near])) if near.any() else best
-        return math.cos(theta), math.sin(theta)
+        nbins = 90
+        bins = np.bincount((ang / math.pi * nbins).astype(int) % nbins, weights=w, minlength=nbins)
+        out: list[tuple[float, float]] = []
+        taken: list[int] = []
+        for b in np.argsort(bins)[::-1]:
+            if len(out) >= limit or bins[b] < 0.15 * bins.max():
+                break
+            if any(min((b - t) % nbins, (t - b) % nbins) <= 2 for t in taken):
+                continue
+            taken.append(int(b))
+            centre = (b + 0.5) * math.pi / nbins
+            diff = np.abs((ang - centre + math.pi / 2) % math.pi - math.pi / 2)
+            near = diff < math.radians(3)
+            theta = float(np.average(ang[near], weights=w[near])) if near.any() else centre
+            out.append((math.cos(theta), math.sin(theta)))
+        return out
 
 
 def _cross_section(walls: BaseGeometry, p: Point, vx: float, vy: float,
@@ -109,22 +121,10 @@ def _cross_section(walls: BaseGeometry, p: Point, vx: float, vy: float,
     return min(vs), max(vs)
 
 
-def _locate_opening(sym: BaseGeometry, walls: BaseGeometry, edges: _WallEdges,
-                    max_t: float) -> tuple[float, float, float, float, float, float] | None:
-    """(ux, uy, a0, a1, s0, s1): wall direction u, the opening's extent [a0, a1] along u
-    and the wall's extent [s0, s1] across it (absolute coordinates), or None."""
-    hull = sym.convex_hull
-    if not isinstance(hull, Polygon):
-        hull = hull.buffer(0.005)
-    region = hull.buffer(REGION)
-    if not region.intersects(walls):
-        return None
-    direction = edges.direction_near(region)
-    if direction is None:
-        return None
-    ux, uy = direction
+def _try_direction(hull: Polygon, walls: BaseGeometry, ux: float, uy: float,
+                   max_t: float) -> tuple[float, float, float, float, float, float] | None:
+    """Opening geometry assuming the wall runs along (ux, uy)."""
     vx, vy = -uy, ux
-
     pts = np.asarray(hull.exterior.coords)
     us, vs = pts @ [ux, uy], pts @ [vx, vy]
     a0, a1 = float(us.min()), float(us.max())
@@ -136,6 +136,9 @@ def _locate_opening(sym: BaseGeometry, walls: BaseGeometry, edges: _WallEdges,
     for off in STATION_OFFSETS:
         stations += [a0 - off, a1 + off]
 
+    # Measure the wall at every station that lands on it and keep the thinnest section:
+    # next to a T-junction the section runs along the crossing wall and comes out too thick.
+    sections: list[tuple[float, float]] = []
     for u in stations:
         best = None
         for v in v_candidates:
@@ -146,8 +149,35 @@ def _locate_opening(sym: BaseGeometry, walls: BaseGeometry, edges: _WallEdges,
         if best:
             section = _cross_section(walls, best[1], vx, vy, max_t)
             if section:
-                s0, s1 = section
-                return ux, uy, a0, a1, s0, s1
+                sections.append(section)
+    if not sections:
+        return None
+    s0, s1 = min(sections, key=lambda sec: sec[1] - sec[0])
+    return ux, uy, a0, a1, s0, s1
+
+
+def _locate_opening(sym: BaseGeometry, walls: BaseGeometry, edges: _WallEdges,
+                    max_t: float) -> tuple[float, float, float, float, float, float] | None:
+    """(ux, uy, a0, a1, s0, s1): wall direction u, the opening's extent [a0, a1] along u
+    and the wall's extent [s0, s1] across it (absolute coordinates), or None."""
+    hull = sym.convex_hull
+    if not isinstance(hull, Polygon):
+        hull = hull.buffer(0.005)
+    region = hull.buffer(REGION)
+    if not region.intersects(walls):
+        return None
+
+    candidates: list[tuple[float, float]] = []
+    axis = long_axis(hull)
+    if axis is not None and axis[4] >= 2.0 * max(axis[5], 0.05):
+        candidates.append((axis[2], axis[3]))  # a window-like symbol: it lies along its wall
+    for d in edges.directions_near(region):
+        if not any(abs(d[0] * c[0] + d[1] * c[1]) > 0.999 for c in candidates):
+            candidates.append(d)
+    for ux, uy in candidates:
+        found = _try_direction(hull, walls, ux, uy, max_t)
+        if found:
+            return found
     return None
 
 

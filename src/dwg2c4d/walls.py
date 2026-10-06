@@ -49,6 +49,8 @@ def closure_segments(segs: list[LineString], max_t: float) -> list[LineString]:
     1. A free endpoint that almost touches another line is snapped onto it.
     2. Two free endpoints of parallel lines, facing the same way and no further
        apart than ``max_t``, are joined (the 'jamb' of a door opening).
+    3. A line that stops short of the end of a perpendicular line (no further than
+       ``max_t``) is prolonged to it (a wall ending against another at an opening).
     """
     ends: dict[tuple[int, int], list[tuple[int, int]]] = defaultdict(list)  # key -> [(seg, which)]
     for i, s in enumerate(segs):
@@ -96,11 +98,15 @@ def closure_segments(segs: list[LineString], max_t: float) -> list[LineString]:
             dist = math.hypot(vx, vy)
             if not (MIN_JAMB <= dist <= max_t):
                 continue
-            if da[0] * db[0] + da[1] * db[1] < 0.9:
-                continue
-            if abs((vx * da[0] + vy * da[1]) / dist) > 0.3:
-                continue
-            pairs.append((dist, a, b))
+            ux, uy = vx / dist, vy / dist
+            dot_a, dot_b = ux * da[0] + uy * da[1], ux * db[0] + uy * db[1]
+            # 1. jamb: parallel lines ending at the same station, joined across the wall
+            jamb = da[0] * db[0] + da[1] * db[1] >= 0.9 and abs(dot_a) <= 0.3
+            # 2. T/L end: one line, prolonged, runs into the end of a perpendicular line
+            #    (a wall ending against another where an opening starts, with no jamb drawn)
+            runs_into = (dot_a >= 0.95 and abs(dot_b) <= 0.3) or (-dot_b >= 0.95 and abs(dot_a) <= 0.3)
+            if jamb or runs_into:
+                pairs.append((dist, a, b))
     used: set[int] = set()
     for _dist, a, b in sorted(pairs):
         if a in used or b in used:

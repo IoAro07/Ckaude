@@ -27,6 +27,9 @@ Il formato DWG è chiuso: lo strumento lo converte in DXF con uno di questi prog
 | [ODA File Converter](https://www.opendesign.com/guestfiles/oda_file_converter) | Consigliato. Windows, macOS, Linux. |
 | [LibreDWG](https://www.gnu.org/software/libredwg/) (`dwg2dxf`) | Open source, da riga di comando. |
 
+Provato con LibreDWG 0.13.3 su un DWG AutoCAD 2018 reale (formato `AC1032`): si converte in meno di un secondo.
+LibreDWG può lasciare senza definizione qualche blocco anonimo (`*U`, `*X`): lo strumento lo salta e te lo segnala.
+
 **Senza nessuno dei due** apri il DWG nel tuo CAD, scegli *Salva con nome → DXF* (versione 2013 o 2018)
 e passa il `.dxf`: tutto il resto funziona uguale.
 
@@ -49,6 +52,27 @@ python examples/make_sample.py lines esempio.dxf     # stili: lines, jambs, poly
 dwg2c4d esempio.dxf
 ```
 
+## Il flusso tipico con un DWG reale
+
+I disegni veri non hanno quasi mai un layer chiamato "MURI" e contengono spesso più cose insieme (pianta,
+prospetti, tetto, verde). Il metodo che funziona:
+
+```bash
+dwg2c4d pianta.dwg --elenca-layer
+```
+
+1. Guarda le **unità dichiarate** in testa all'elenco: se le misure non tornano (es. dichiara `mm` ma la porta è larga 90),
+   forzale con `--unita cm`.
+2. Trova il **layer dei muri** (spesso `0` o uno con le linee dei muri a doppia linea) e la **zona della pianta**
+   (la riga `zona:` sotto ogni layer dà le coordinate): serve a escludere prospetti e sezioni.
+3. Converti:
+
+```bash
+dwg2c4d pianta.dwg -o casa.obj --muri "0" --unita cm --area 72400,48300,74600,49350
+```
+
+4. Leggi il riepilogo e gli avvisi, importa in Cinema 4D.
+
 ## Prima di convertire: i layer
 
 Lo strumento capisce cosa è un muro dal **nome del layer**. Per vedere come vengono letti i tuoi:
@@ -68,6 +92,12 @@ QUOTE     -          1 LINE, 1 TEXT
 Riconosce da solo i nomi italiani e inglesi più comuni (`MURI`, `PARETI`, `TRAMEZZI`, `A-WALL`, `PORTE`, `A-DOOR`,
 `FINESTRE`, `SERRAMENTI`, `A-GLAZ`, `PILASTRI`, `A-COLS`…). `MURI_PORTANTI` è un layer di muri, non di porte.
 Anche un blocco chiamato `PORTA90` o `FINESTRA120` viene riconosciuto, qualunque sia il suo layer.
+
+I layer con nomi come `Prospetto…`, `Sezione…`, `Arredo…`, `Quote…`, `Testi`, `Tetto`, `Verde` non vengono mai presi per muri,
+porte o finestre, anche se contengono parole come "parete" o "porta" (es. il blocco `Porta Asciugamani`).
+
+I **blocchi inseriti su un layer di muri** (arredi, sanitari: capita molto sul layer `0`) vengono ignorati e contati
+in un avviso; se invece contengono davvero muri usa `--muri-da-blocchi`.
 
 Se un layer è classificato male, indicalo tu (nomi separati da virgola, `*` come jolly):
 
@@ -136,6 +166,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--elenca-layer` | mostra i layer e come sono classificati, poi esce |
 | `--muri`, `--porte`, `--finestre`, `--pilastri` | layer per categoria (virgole, `*` jolly) |
 | `--includi-nascosti` | usa anche i layer spenti/congelati |
+| `--muri-da-blocchi` | leggi come muri anche i blocchi inseriti su un layer di muri |
 | `--modalita-muri` | `auto`, `solidi`, `doppia-linea`, `asse` |
 | `--spessore-muro` | spessore dei muri disegnati a linea singola (0,30) |
 | `--spessore-max` | spessore massimo di un muro a doppia linea (0,60) |
@@ -162,11 +193,15 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 ## Cose da sapere (limiti)
 
 - **Le unità**: se il file non le dichiara, vengono dedotte dalle dimensioni (con un avviso). È un'ipotesi:
-  verifica `Ingombro muri` nel riepilogo e, se serve, forza con `--unita cm`.
+  verifica `Ingombro muri` nel riepilogo e, se serve, forza con `--unita cm`. Se le unità dichiarate sono sbagliate
+  (succede: un file in cm che dichiara mm), lo strumento avvisa quando l'edificio risulta più piccolo di 3 m o più
+  grande di 300 m.
 - **Un piano alla volta.** Più piani sovrapposti o affiancati nello stesso file vanno separati con `--area`
   o su file distinti.
 - Non vengono generati: scale, tetti, arredi, tratteggi, quote, testi. Le porte sono solo aperture (senza anta);
   le finestre hanno una lastra di vetro, senza telaio.
+- Gli elementi **non muro** disegnati su un layer che usi per i muri (bordi di piscine, muretti, pavimentazioni)
+  diventano muri: scegli bene i layer o ritaglia con `--area`.
 - Un muro a doppia linea con le estremità aperte viene chiuso in modo automatico solo se le due linee finiscono
   all'incirca allo stesso punto (entro `--spessore-max`). Disegni con linee molto sconnesse possono richiedere un
   po' di pulizia nel CAD (o la modalità `solidi`/`asse`).

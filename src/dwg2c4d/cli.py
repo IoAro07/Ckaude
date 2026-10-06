@@ -9,7 +9,7 @@ from . import __version__
 from .config import UNIT_TO_METERS, Config, LayerRules
 from .dwgfile import ConversionError, open_drawing
 from .pipeline import convert
-from .reader import layer_summary
+from .reader import declared_units, layer_summary
 
 MODE_NAMES = {"auto": "auto", "solidi": "solid", "doppia-linea": "faces", "asse": "centerline"}
 CATEGORY_IT = {"wall": "muri", "door": "porte", "window": "finestre", "column": "pilastri"}
@@ -48,6 +48,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--finestre")
     g.add_argument("--pilastri")
     g.add_argument("--includi-nascosti", action="store_true", help="usa anche layer spenti/congelati")
+    g.add_argument("--muri-da-blocchi", action="store_true",
+                   help="leggi come muri anche i blocchi inseriti su un layer di muri "
+                        "(di solito sono arredi e vengono ignorati)")
 
     g = p.add_argument_group("altezze e spessori (metri)")
     g.add_argument("--altezza-muri", type=float)
@@ -109,12 +112,16 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.glass = False
     if args.includi_nascosti:
         cfg.include_hidden = True
+    if args.muri_da_blocchi:
+        cfg.walls_from_blocks = True
     if args.specchia:
         cfg.mirror = True
     return cfg
 
 
-def _print_layers(rows: list[dict]) -> None:
+def _print_layers(rows: list[dict], units: str | None) -> None:
+    print(f"Unita' dichiarate nel file: {units or 'nessuna'} "
+          "(se le misure non tornano, forzale con --unita)\n")
     width = max([len(r["layer"]) for r in rows] + [5])
     print(f"{'LAYER'.ljust(width)}  USO COME   CONTENUTO")
     for r in rows:
@@ -124,6 +131,9 @@ def _print_layers(rows: list[dict]) -> None:
             what += f"  [blocchi: {', '.join(r['blocks'][:4])}{'...' if len(r['blocks']) > 4 else ''}]"
         flag = "  (nascosto)" if r["hidden"] else ""
         print(f"{r['layer'].ljust(width)}  {cat.ljust(9)}  {what}{flag}")
+        if r["bounds"]:
+            x0, y0, x1, y1 = r["bounds"]
+            print(f"{' ' * width}  {' ' * 9}    zona: x {x0:.0f}..{x1:.0f}   y {y0:.0f}..{y1:.0f}")
     print("\nSe un layer e' classificato male, indicalo a mano, es.: --muri \"A-MURI*,TRAMEZZI\"")
 
 
@@ -134,7 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg.validate()
         if args.elenca_layer:
             doc = open_drawing(args.input, cfg.converter)
-            _print_layers(layer_summary(doc, cfg))
+            _print_layers(layer_summary(doc, cfg), declared_units(doc))
             return 0
         report = convert(args.input, args.output, cfg)
     except (ConversionError, ValueError, OSError) as exc:

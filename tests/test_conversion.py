@@ -420,3 +420,116 @@ def test_continuous_walls_with_symbols_drawn_on_top(tmp_path, style):
     rep = convert(dxf, tmp_path / "o.obj")
     assert rep.doors == 2 and rep.windows == 2
     assert Obj(rep.output).volume("Muri") == pytest.approx(expected_wall_volume(), rel=0.01)
+
+
+# --- regressions found on a real DWG -------------------------------------------------------
+
+def _square_with_block_on_wall_layer(tmp_path):
+    path = make_square_plan(tmp_path / "p.dxf")
+    doc = ezdxf.readfile(path)
+    blk = doc.blocks.new("Divano")
+    for a, b in (((0, 0), (200, 0)), ((200, 0), (200, 90)), ((200, 90), (0, 90)), ((0, 90), (0, 0))):
+        blk.add_line(a, b, dxfattribs={"layer": "0"})
+    # furniture inserted on the wall layer (very common, also on layer 0)
+    doc.modelspace().add_blockref("Divano", (150, 150), dxfattribs={"layer": "MURI"})
+    doc.saveas(path)
+    return path
+
+
+def test_blocks_on_a_wall_layer_are_ignored_as_furniture(tmp_path):
+    rep = convert(_square_with_block_on_wall_layer(tmp_path), tmp_path / "o.obj")
+    assert rep.wall_area_m2 == pytest.approx(5.0 ** 2 - 4.4 ** 2)
+    assert any("blocchi inseriti su un layer di muri" in w for w in rep.warnings)
+
+
+def test_blocks_on_a_wall_layer_can_be_read_as_walls(tmp_path):
+    path = _square_with_block_on_wall_layer(tmp_path)
+    rep = convert(path, tmp_path / "o.obj", Config(walls_from_blocks=True))
+    assert rep.wall_area_m2 != pytest.approx(5.0 ** 2 - 4.4 ** 2)
+    assert not any("blocchi inseriti" in w for w in rep.warnings)
+
+
+def test_layer_zero_override_does_not_pull_in_furniture_blocks(tmp_path):
+    """Walls drawn on layer 0 together with furniture blocks (the real file's situation)."""
+    doc = ezdxf.new("R2018", setup=True)
+    doc.units = 5
+    msp = doc.modelspace()
+    for pts in ([(0, 0), (500, 0), (500, 500), (0, 500)], [(20, 20), (480, 20), (480, 480), (20, 480)]):
+        for a, b in zip(pts, pts[1:] + pts[:1]):
+            msp.add_line(a, b)  # layer 0
+    blk = doc.blocks.new("Tavolo")
+    blk.add_circle((0, 0), 60)  # closed shape on layer 0 inside the block
+    msp.add_blockref("Tavolo", (250, 250))
+    doc.saveas(tmp_path / "p.dxf")
+    from dwg2c4d.config import LayerRules
+    cfg = Config()
+    cfg.layers = LayerRules({"wall": ["0"]})
+    rep = convert(tmp_path / "p.dxf", tmp_path / "o.obj", cfg)
+    assert rep.wall_area_m2 == pytest.approx(5.0 ** 2 - 4.6 ** 2, rel=0.01)
+    assert rep.wall_pieces == 1
+
+
+def test_block_reference_without_definition_does_not_abort(tmp_path):
+    """Some DWG->DXF converters leave anonymous blocks (*U, *X) undefined."""
+    doc = ezdxf.readfile(make_square_plan(tmp_path / "p.dxf"))
+    doc.layers.add("PORTE")
+    doc.blocks.new("Fantasma")
+    msp = doc.modelspace()
+    msp.add_blockref("Fantasma", (250, 250), dxfattribs={"layer": "PORTE"})
+    msp.add_blockref("Fantasma", (260, 250), dxfattribs={"layer": "0"})
+    doc.blocks.delete_block("Fantasma", safe=False)
+    doc.saveas(tmp_path / "q.dxf")
+    rep = convert(tmp_path / "q.dxf", tmp_path / "o.obj")
+    assert rep.size_m[0] == pytest.approx(5.0, rel=0.01)
+    assert any("non leggibili" in w for w in rep.warnings)
+
+
+def test_implausible_size_from_wrong_units_is_flagged(tmp_path):
+    # a 500-unit building tagged 'mm' becomes 0.5 m wide: almost certainly the tag is wrong
+    rep = convert(make_square_plan(tmp_path / "p.dxf", units=4), tmp_path / "o.obj")
+    assert any("Dimensioni insolite" in w and "--unita" in w for w in rep.warnings)
+    ok = convert(make_square_plan(tmp_path / "q.dxf", units=5), tmp_path / "o2.obj")
+    assert not any("Dimensioni insolite" in w for w in ok.warnings)
+
+
+def test_window_next_to_a_t_junction_has_the_wall_thickness(tmp_path):
+    """A long crossing wall touches the window gap: it must not decide the wall direction
+    nor inflate the measured thickness."""
+    from shapely.geometry import box
+
+    doc = ezdxf.new("R2018", setup=True)
+    doc.units = 5
+    for name in ("MURI", "FINESTRE"):
+        doc.layers.add(name)
+    msp = doc.modelspace()
+    t = 20
+    walls = unary_union([
+        box(0, 0, 1000, t), box(0, 500 - t, 1000, 500),   # bottom, top
+        box(0, 0, t, 500), box(1000 - t, 0, 1000, 500),   # left, right
+        box(280, t, 300, 480),                             # long interior wall, ends on the top wall
+    ])
+    gap = box(300, 500 - t, 520, 500)                      # window gap right next to that junction
+    for ls in getattr(walls.boundary.difference(gap), "geoms", []):
+        c = list(ls.coords)
+        for a, b in zip(c, c[1:]):
+            msp.add_line(a, b, dxfattribs={"layer": "MURI"})
+    for off in (0, t / 2, t):
+        msp.add_line((300, 480 + off), (520, 480 + off), dxfattribs={"layer": "FINESTRE"})
+    for x in (300, 520):  # the symbol's end lines connect the three lines into one window
+        msp.add_line((x, 480), (x, 500), dxfattribs={"layer": "FINESTRE"})
+    doc.saveas(tmp_path / "t.dxf")
+    rep = convert(tmp_path / "t.dxf", tmp_path / "o.obj")
+    assert rep.windows == 1 and not any("non toccano" in w for w in rep.warnings)
+    lo, hi = Obj(rep.output).bbox("Vetri")
+    assert hi[0] - lo[0] == pytest.approx(2.2, abs=0.03)   # window width
+    assert hi[2] - lo[2] == pytest.approx(0.02, abs=1e-3)  # a thin pane...
+    # ...sitting in a 20 cm wall: the underside of the lintel above the window (a horizontal
+    # face at 2.2 m spanning the window width) is as deep as the wall is thick
+    obj = Obj(rep.output)
+    soffits = [ids for ids, _ in obj.groups["Muri"]
+               if all(abs(obj.v[i][1] - 2.2) < 1e-6 for i in ids)
+               and min(obj.v[i][0] for i in ids) == pytest.approx(3.0, abs=0.01)
+               and max(obj.v[i][0] for i in ids) == pytest.approx(5.2, abs=0.01)]
+    assert soffits
+    zs = [obj.v[i][2] for ids in soffits for i in ids]
+    assert max(zs) - min(zs) == pytest.approx(0.2, abs=0.005)

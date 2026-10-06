@@ -48,6 +48,10 @@ class LayerRules:
         "window": ("finestr", "window", "glaz"),
         "column": ("pilast", "colonn", "column", "pillar", "cols"),
     }
+    # A layer holding elevations, furniture, dimensions... is never a plan element even if
+    # its name also says "parete" (e.g. "Prospetto Parete Attrezzata").
+    _VETO = ("prospett", "sezion", "section", "elevat", "arred", "furnit", "quot", "dimens",
+             "text", "testi", "tett", "roof", "verde", "landscap")
     # Checked in this order: "MURI_PORTANTI" must not become a door layer.
     _ORDER = ("door", "window", "column", "wall")
 
@@ -57,6 +61,8 @@ class LayerRules:
 
     def _default_match(self, category: str, name: str) -> bool:
         toks = self.tokens(name)
+        if any(t.startswith(self._VETO) for t in toks):
+            return False
         exact = self._EXACT.get(category, ())
         prefixes = self._PREFIX.get(category, ())
         return any(t in exact or t.startswith(prefixes) for t in toks)
@@ -86,8 +92,13 @@ class LayerRules:
                 return cat
         return None
 
+    def vetoed(self, layer: str) -> bool:
+        """Elevation / furniture / annotation layers: nothing on them is a plan element,
+        not even a block called "Porta Asciugamani" (towel rail) or "Porta TV"."""
+        return any(t.startswith(self._VETO) for t in self.tokens(layer))
+
     def classify(self, layer: str, block_name: str | None = None) -> str | None:
-        if block_name:
+        if block_name and not self.vetoed(layer):
             hint = self.classify_block(block_name)
             if hint:
                 return hint
@@ -120,6 +131,7 @@ class Config:
     out_units: str = "m"
     area: tuple[float, float, float, float] | None = None  # crop, in drawing units
     include_hidden: bool = False
+    walls_from_blocks: bool = False  # read blocks inserted on wall layers as walls
     mirror: bool = False  # mirror the plan (if Cinema 4D shows it flipped)
     arc_tolerance: float = 0.002  # max deviation when flattening curves, metres
     converter: str | None = None  # path of ODAFileConverter / dwg2dxf

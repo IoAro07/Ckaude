@@ -93,14 +93,24 @@ def _entity_prims(e, dist: float) -> list[Prim]:
     return prims
 
 
-def _flatten(entities, depth: int = 0):
-    """Yield leaf entities, expanding nested block references."""
+def _flatten(entities, on_error, depth: int = 0):
+    """Yield leaf entities, expanding nested block references.
+
+    A block reference that cannot be expanded (e.g. its definition is missing, as
+    happens with anonymous blocks in some DWG->DXF conversions) is reported to
+    ``on_error`` and skipped, never fatal."""
     for e in entities:
         t = e.dxftype()
-        if t == "INSERT" and depth < MAX_BLOCK_DEPTH:
-            yield from _flatten(e.virtual_entities(), depth + 1)
-        elif t == "MLINE":
-            yield from e.virtual_entities()
+        if t == "INSERT" and depth < MAX_BLOCK_DEPTH or t == "MLINE":
+            try:
+                expanded = list(e.virtual_entities())
+            except Exception:
+                on_error()
+                continue
+            if t == "MLINE":
+                yield from expanded
+            else:
+                yield from _flatten(expanded, on_error, depth + 1)
         else:
             yield e
 
@@ -110,6 +120,10 @@ class _Reader:
         self.doc, self.cfg, self.dist = doc, cfg, dist
         self.items: list[Item] = []
         self.skipped = 0
+        self.wall_layer_blocks = 0
+
+    def _count_skipped(self) -> None:
+        self.skipped += 1
 
     def visible(self, layer: str) -> bool:
         if self.cfg.include_hidden or not self.doc.layers.has_entry(layer):
@@ -119,20 +133,20 @@ class _Reader:
 
     def prims_of(self, entities) -> list[Prim]:
         out: list[Prim] = []
-        for e in _flatten(entities):
+        for e in _flatten(entities, self._count_skipped):
             try:
                 out.extend(_entity_prims(e, self.dist))
             except Exception:  # damaged/unsupported entity: keep going
                 self.skipped += 1
         return out
 
-    def walk(self, entities, depth: int = 0, parent_layer: str | None = None) -> None:
+    def walk(self, entities, depth: int = 0) -> None:
         rules = self.cfg.layers
         for e in entities:
             t = e.dxftype()
             layer = e.dxf.layer
-            if layer == "0" and parent_layer:
-                layer = parent_layer
+            if depth and layer == "0":
+                continue  # inside a block, layer 0 means "inherit": the insert itself was not a category
             if not self.visible(layer):
                 continue
             if t == "INSERT":
@@ -143,13 +157,19 @@ class _Reader:
                 except Exception:
                     self.skipped += 1
                     continue
-                if cat:
+                if cat == "wall" and not self.cfg.walls_from_blocks:
+                    # Furniture, fixtures and symbols are very often inserted on the wall layer
+                    # (or on layer 0). Their lines are not walls.
+                    self.wall_layer_blocks += 1
+                    cat = None
+                elif cat:
                     prims = self.prims_of(virtual)
                     if prims:
                         self.items.append(Item(layer, block, cat, prims))
-                elif depth < MAX_BLOCK_DEPTH:
+                    continue
+                if depth < MAX_BLOCK_DEPTH:
                     # e.g. a whole plan inserted as one block: classify inner entities
-                    self.walk(virtual, depth + 1, parent_layer=layer if layer != "0" else None)
+                    self.walk(virtual, depth + 1)
                 continue
             cat = rules.classify(layer)
             if not cat:
@@ -193,20 +213,57 @@ def read_items(doc: Drawing, cfg: Config) -> ReadResult:
             p.geom = affinity.scale(p.geom, scale, scale, origin=(0, 0))
         kept.append(it)
 
+    if reader.wall_layer_blocks:
+        warnings.append(
+            f"{reader.wall_layer_blocks} blocchi inseriti su un layer di muri sono stati ignorati "
+            "(di solito sono arredi). Se contengono muri usa --muri-da-blocchi."
+        )
     if reader.skipped:
-        warnings.append(f"{reader.skipped} entita' non leggibili sono state ignorate.")
+        warnings.append(
+            f"{reader.skipped} entita' o blocchi non leggibili sono stati ignorati "
+            "(blocchi senza definizione o entita' danneggiate)."
+        )
     return ReadResult(kept, unit, scale, guessed, reader.skipped, warnings)
+
+
+def _rough_bounds(e) -> list[tuple[float, float]] | None:
+    """Cheap extent points of an entity, in drawing units (no block expansion)."""
+    t = e.dxftype()
+    try:
+        if t == "LINE":
+            return [(e.dxf.start.x, e.dxf.start.y), (e.dxf.end.x, e.dxf.end.y)]
+        if t == "LWPOLYLINE":
+            return [(p[0], p[1]) for p in e.get_points("xy")]
+        if t in ("CIRCLE", "ARC"):
+            c, r = e.dxf.center, e.dxf.radius
+            return [(c.x - r, c.y - r), (c.x + r, c.y + r)]
+        if t == "INSERT":
+            return [(e.dxf.insert.x, e.dxf.insert.y)]
+    except Exception:
+        return None
+    return None
+
+
+def declared_units(doc: Drawing) -> str | None:
+    return INSUNITS_TO_NAME.get(int(doc.header.get("$INSUNITS", 0) or 0))
 
 
 def layer_summary(doc: Drawing, cfg: Config) -> list[dict]:
     """Per-layer overview for ``--elenca-layer``."""
     counts: dict[str, Counter] = defaultdict(Counter)
     blocks: dict[str, set] = defaultdict(set)
+    extent: dict[str, list[float]] = {}
     for e in doc.modelspace():
         layer = e.dxf.layer
         counts[layer][e.dxftype()] += 1
         if e.dxftype() == "INSERT":
             blocks[layer].add(e.dxf.name)
+        pts = _rough_bounds(e)
+        if pts:
+            xs, ys = zip(*pts)
+            box_ = extent.setdefault(layer, [min(xs), min(ys), max(xs), max(ys)])
+            box_[0], box_[1] = min(box_[0], *xs), min(box_[1], *ys)
+            box_[2], box_[3] = max(box_[2], *xs), max(box_[3], *ys)
     rows = []
     for layer in sorted(counts):
         hidden = False
@@ -219,5 +276,6 @@ def layer_summary(doc: Drawing, cfg: Config) -> list[dict]:
             "hidden": hidden,
             "entities": dict(counts[layer]),
             "blocks": sorted(blocks[layer]),
+            "bounds": tuple(extent[layer]) if layer in extent else None,
         })
     return rows

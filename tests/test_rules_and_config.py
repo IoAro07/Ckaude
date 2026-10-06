@@ -14,6 +14,11 @@ from dwg2c4d.config import Config, LayerRules
     ("PILASTRI", "column"), ("A-COLS", "column"), ("COLONNE", "column"),
     ("QUOTE", None), ("TESTI", None), ("Layer1", None), ("0", None), ("PORTANTI", None),
     ("ARREDI", None), ("HATCH", None),
+    # layer names from a real plan: numbered, with elevations and furniture on layers that
+    # mention walls/doors
+    ("1 Porte", "door"), ("2 Finestre", "window"), ("12 Prospetto Parete Attrezzata", None),
+    ("11 Prospetto Frontale", None), ("6 Arredo Camera da Letto", None), ("17 Quote e Testi", None),
+    ("16 Tetto", None), ("15 Verde", None), ("Sezione A-A Muri", None),
 ])
 def test_default_layer_classification(layer, expected):
     assert LayerRules().classify_layer(layer) == expected
@@ -30,7 +35,10 @@ def test_block_name_hints(block, expected):
 def test_block_hint_wins_over_layer():
     rules = LayerRules()
     assert rules.classify("MURI", "PORTA90") == "door"
-    assert rules.classify("ARREDI", "PORTA90") == "door"
+    assert rules.classify("Layer7", "PORTA90") == "door"
+    # a door block on a furniture layer is not a plan door ("Porta Asciugamani" = towel rail)
+    assert rules.classify("6 Arredo Bagno", "Porta Asciugamani") is None
+    assert rules.classify("ARREDI", "PORTA90") is None
     assert rules.classify("MURI", "TAVOLO") == "wall"
 
 
