@@ -2,7 +2,7 @@
 
 Legge una pianta 2D, ne **estrude i muri**, **apre porte e finestre** (con architrave, parapetto e vetri),
 aggiunge il **pavimento** e scrive un file **OBJ + MTL** pronto da importare in Cinema 4D, con un oggetto
-per categoria (`Muri`, `Pilastri`, `Vetri`, `Pavimento`, `Soffitto`) e un materiale per ciascuno.
+per categoria (`Muri`, `Pilastri`, `Vetri`, `Pavimento`, `Soffitto`, `Tetto`) e un materiale per ciascuno.
 
 ```
 pianta.dwg  ──►  dwg2c4d  ──►  pianta.obj + pianta.mtl  ──►  Cinema 4D
@@ -142,6 +142,48 @@ vengono scavalcati).
 (coordinate del disegno) per convertire solo la zona della pianta. Le entità che toccano l'area vengono
 prese per intero, non tagliate.
 
+## Quote delle aperture e tetto dai prospetti (facoltativo)
+
+Di norma altezze di porte e finestre sono i valori predefiniti e il tetto non viene creato. Se nel file ci sono i
+**prospetti** e la **pianta del tetto** puoi usarli.
+
+**Altezze di porte e finestre dal prospetto**: `--prospetto XMIN,YMIN,XMAX,YMAX[,QUOTA_Y]`, uno per facciata
+(ripetibile). Condizioni:
+
+- il prospetto deve essere **in proiezione sulla pianta**: sotto di essa (facciata sud) o sopra (facciata nord), con
+  le **stesse coordinate X**. Se è disposto altrove in tavola non funziona (lo strumento lo segnala);
+- le porte e le finestre del prospetto devono essere riconoscibili (layer `Porte`/`Finestre` o blocchi chiamati
+  `Porta…`/`Finestra…`, anche su un layer `Prospetto…`);
+- la **quota zero** (pavimento finito) è il fondo della porta più bassa del prospetto; se non c'è una porta, o se
+  vuoi forzarla, indica come quinto valore la Y del pavimento finito.
+
+Ogni simbolo del prospetto viene associato all'apertura della pianta con lo stesso intervallo di X (la più esterna);
+un simbolo disegnato con telaio e vetro annidati conta come uno solo. Le aperture senza corrispondenza restano ai
+valori predefiniti, e il riepilogo dice quante sono state lette (`Prospetto sud: 2 di 2 aperture…`).
+
+**Tetto**: `--tetto`. Si costruisce dalle linee del layer `Tetto`/`Roof`/`Copertura` (o `--layer-tetto`):
+contorno, colmi, displuvi e compluvi, disegnati sul piano del tetto.
+
+- le linee formano le falde; ogni falda sale dalla propria gronda con una pendenza;
+- **pendenza**: `--pendenza GRADI`; altrimenti viene **dedotta dal prospetto**, se le linee orizzontali dei colmi
+  (stessa estensione in X dei colmi della pianta del tetto) sono presenti, e ogni falda prende la sua; altrimenti
+  25 gradi. Con più prospetti si usano tutti;
+- la pianta del tetto è **centrata sui muri**; se è disegnata altrove nel file indica `--area-tetto`, e se serve
+  correggerne la posizione `--sposta-tetto DX,DY` (unità del disegno);
+- il tetto è un solido chiuso, spesso `--spessore-tetto` (0,15 m), con la gronda alla quota dei muri.
+
+Nella pianta del tetto vanno solo contorno, colmi e displuvi: altre linee (travi, griglie, quote su quel layer)
+spezzano le falde. Se ci sono due contorni annidati (gronda e linea del muro) il tetto si ferma al contorno interno.
+Con il solo contorno viene una falda unica, con un avviso. Un tetto disegnato solo come campitura usa il suo bordo.
+
+```bash
+dwg2c4d pianta.dwg -o casa.obj --muri "0" --unita cm --area=72400,48300,74600,49350 \
+    --prospetto=72400,46900,75150,47470 --tetto --area-tetto=72400,49700,74100,50750
+```
+
+> Attenzione: se il primo numero di un valore è negativo scrivi `--area=-200,-200,…` con il segno uguale
+> (altrimenti la riga di comando lo scambia per un'opzione).
+
 ## Importare in Cinema 4D
 
 1. **File → Apri** (o *Unisci*) e scegli il `.obj`. Tieni `.mtl` nella stessa cartella: i materiali vengono creati.
@@ -152,7 +194,7 @@ prese per intero, non tagliate.
    *Flip Z* ([documentazione Maxon](https://help.maxon.net/c4d/en-us/Content/html/FOBJIMPORT2-OBJIMPORTOPTIONS_GROUP_GEOMETRY.html))
    decide come viene convertito. Se la pianta ti appare **specchiata**, attiva/disattiva *Flip Z*
    oppure rigenera il file con `--specchia`.
-4. Troverai gli oggetti `Muri`, `Pilastri`, `Vetri`, `Pavimento` (e `Soffitto`) già con un materiale base:
+4. Troverai gli oggetti `Muri`, `Pilastri`, `Vetri`, `Pavimento` (e `Soffitto`, `Tetto`) già con un materiale base:
    sostituiscilo con i tuoi. Le normali sono già nel file.
 
 Il modello ha una sola mesh per categoria, in modo da poter assegnare i materiali e creare le selezioni a mano.
@@ -175,6 +217,9 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--unita` | unità del disegno: `mm`, `cm`, `m`, `in`, `ft` (default: lette dal file) |
 | `--unita-output` | unità dell'OBJ: `m` (default), `cm`, `mm` |
 | `--area` | converti solo questa zona del disegno |
+| `--prospetto` | zona di un prospetto (ripetibile): altezze di porte e finestre; 5° valore opzionale = Y del pavimento finito |
+| `--tetto`, `--layer-tetto`, `--area-tetto` | costruisci il tetto dalla pianta del tetto |
+| `--pendenza`, `--spessore-tetto`, `--sposta-tetto` | pendenza (gradi), spessore (0,15 m), spostamento della pianta del tetto |
 | `--specchia` | specchia la pianta |
 | `--converter` | percorso di `ODAFileConverter` o `dwg2dxf` |
 | `--config` | file JSON con le impostazioni (le opzioni da riga di comando prevalgono) |
@@ -198,8 +243,13 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
   grande di 300 m.
 - **Un piano alla volta.** Più piani sovrapposti o affiancati nello stesso file vanno separati con `--area`
   o su file distinti.
-- Non vengono generati: scale, tetti, arredi, tratteggi, quote, testi. Le porte sono solo aperture (senza anta);
-  le finestre hanno una lastra di vetro, senza telaio.
+- Non vengono generati: scale, arredi, tratteggi, quote, testi, comignoli e abbaini. Le porte sono solo aperture
+  (senza anta); le finestre hanno una lastra di vetro, senza telaio.
+- **Il tetto** nasce dalle linee della pianta del tetto: non c'è nessun calcolo statico né ricostruzione da zero.
+  Gronda sempre alla quota dei muri, senza sporgenza oltre il contorno interno; falde con pendenze diverse sono
+  gestite solo se i colmi nel prospetto le fissano. Se la pianta del tetto è confusa il risultato lo sarà.
+- **I prospetti** servono solo per le facciate nord e sud in proiezione; est e ovest, o prospetti ruotati o
+  disposti altrove in tavola, non sono letti.
 - Gli elementi **non muro** disegnati su un layer che usi per i muri (bordi di piscine, muretti, pavimentazioni)
   diventano muri: scegli bene i layer o ritaglia con `--area`.
 - Un muro a doppia linea con le estremità aperte viene chiuso in modo automatico solo se le due linee finiscono
@@ -219,6 +269,9 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 | Modello 100× troppo grande o piccolo | Unità errate: `--unita`, oppure *Unità* nell'import di Cinema 4D. |
 | Il muro è un blocco pieno senza stanze | I contorni sono assi, non solidi: `--modalita-muri asse`. |
 | Mancano pezzi di muro | Linee non chiuse: prova `--modalita-muri doppia-linea` o `solidi`; `--spessore-max` più alto. |
+| `--area -200,...` dà errore | Con numeri negativi scrivi `--area=-200,...` (con il segno uguale). |
+| Il tetto è piatto o strano | Controlla il layer del tetto (`--layer-tetto`), che contenga solo contorno e colmi, e `--area-tetto`; leggi gli avvisi `Tetto:`. |
+| Le finestre non prendono le quote del prospetto | Il prospetto deve avere le stesse X della pianta e stare sotto/sopra; guarda l'avviso e `Prospetto sud: N di M`. |
 | Una porta/finestra non compare | Il simbolo non tocca il muro (avviso nel riepilogo) o è su un layer non riconosciuto. |
 | Pianta specchiata in Cinema 4D | `--specchia`, oppure *Flip Z* nelle opzioni d'importazione. |
 | `Impossibile leggere il file DWG` | Installa ODA File Converter o LibreDWG, oppure salva il DWG come DXF. |

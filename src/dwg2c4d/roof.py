@@ -34,7 +34,7 @@ GRID = 1e-6  # input snapping (m)
 NODE_GRID = 1e-3  # nodes closer than this are the same node (m)
 MIN_FACE_AREA = 0.05  # m^2
 MIN_FACE_THICKNESS = 0.25  # thinner faces are fascia bands between nested outlines
-CLOSE_GAP = 0.05  # roof lines that stop this short of each other are joined
+CLOSE_GAP = 0.10  # roof lines that stop this short of each other are joined
 RIDGE_MIN_RISE = 0.3  # a silhouette line must be this far above the eaves to count as a ridge
 RIDGE_MATCH = 0.8  # fraction of the longer of {ridge, silhouette line} that must overlap in x
 MIN_RIDGE = 1.0  # shorter horizontal roof lines (connectors, valleys) are not ridges (m)
@@ -69,6 +69,21 @@ def _line_dist(p, a, b) -> float:
     dx, dy = b[0] - a[0], b[1] - a[1]
     n = math.hypot(dx, dy)
     return abs(dx * (p[1] - a[1]) - dy * (p[0] - a[0])) / n if n else 0.0
+
+
+def _drop_bands(faces: list[Polygon]) -> list[Polygon]:
+    """Drop ring-shaped faces: the band between two nested outlines (eave and wall line,
+    or fascia) that no hip/ridge line crosses. A real roof plane has no hole filled by
+    other roof planes."""
+    kept = []
+    for i, f in enumerate(faces):
+        if f.interiors:
+            others = unary_union([g for j, g in enumerate(faces) if j != i])
+            holes = [Polygon(r) for r in f.interiors]
+            if all(h.intersection(others).area >= 0.8 * h.area for h in holes):
+                continue
+        kept.append(f)
+    return kept
 
 
 def _ridge_runs(network, outline_boundary) -> list[tuple[float, float, float]]:
@@ -110,6 +125,10 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
                 lines.append(p.geom)
             elif p.kind == "ring":
                 lines.extend(_boundaries(p.geom))
+    if not lines:  # a roof drawn only as a filled hatch: use its boundary as the outline
+        for it in items:
+            if it.category == "roof":
+                lines.extend(b for p in it.prims if p.kind == "fill" for b in _boundaries(p.geom))
     lines = [g for g in (shapely.set_precision(l, GRID) for l in lines) if not g.is_empty]
     if not lines:
         warnings.append("Tetto: nessuna linea trovata sui layer del tetto (Tetto/Roof/Copertura): "
@@ -121,6 +140,7 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
     network = unary_union(segs + closure_segments(segs, CLOSE_GAP))
     faces = [f for f in polygonize(network)
              if f.area >= MIN_FACE_AREA and thinness(f) > MIN_FACE_THICKNESS]
+    faces = _drop_bands(faces)
     if not faces:
         warnings.append("Tetto: le linee del tetto non formano nessuna falda chiusa.")
         return None

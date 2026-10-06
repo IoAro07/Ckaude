@@ -62,16 +62,18 @@ def nest_polygons(polys: Iterable[Polygon]) -> BaseGeometry:
         return unique[0]
 
     tree = STRtree(unique)
-    solids: list[Polygon] = []
-    holes: list[Polygon] = []
+    levels: dict[int, list[Polygon]] = {}
     for i, p in enumerate(unique):
         # tree geometries that contain p (p.within(tree_geom))
         candidates = tree.query(p, predicate="within")
         depth = sum(1 for j in candidates if j != i and unique[j].area > p.area)
-        (solids if depth % 2 == 0 else holes).append(p)
-    result = union(solids)
-    if holes:
-        result = result.difference(union(holes))
+        levels.setdefault(depth, []).append(p)
+    # Apply the levels outermost first: solid (even depth) is added, hole (odd depth) is cut
+    # out, an island inside a hole is added back, and so on.
+    result: BaseGeometry = Polygon()
+    for depth in sorted(levels):
+        shape = union(levels[depth])
+        result = result.union(shape) if depth % 2 == 0 else result.difference(shape)
     return result
 
 

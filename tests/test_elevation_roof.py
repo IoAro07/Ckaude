@@ -309,3 +309,136 @@ def test_config_json_with_elevations_and_roof(tmp_path):
     assert cfg.roof and cfg.roof_pitch == 22 and cfg.roof_area == (0, 0, 5, 5)
     assert cfg.elevations == [(0.0, -10.0, 5.0, -5.0, -9.0)]
     assert cfg.layers.classify_layer("TT1") == "roof"
+
+
+# --- regressions from the adversarial review -------------------------------------------------
+
+def _rect(msp, x0, y0, x1, y1, layer):
+    msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
+
+
+@pytest.mark.parametrize("inset", [4, 8, 10])
+def test_window_drawn_as_frame_plus_pane_uses_the_outer_rectangle(tmp_path, inset):
+    doc, msp = building()
+    gy = -2000
+    _rect(msp, DOOR[0], gy, DOOR[1], gy + 200, "PORTE")
+    _rect(msp, WIN_S[0], gy + 100, WIN_S[1], gy + 240, "FINESTRE")                      # frame
+    _rect(msp, WIN_S[0] + inset, gy + 100 + inset, WIN_S[1] - inset, gy + 240 - inset, "FINESTRE")  # pane
+    rep = run(tmp_path, doc, Config(elevations=[(-100, gy - 100, W + 100, gy + 900)]))
+    assert rep.elevations[0]["total"] == 2  # one door, one window
+    assert glass_heights(Obj(rep.output), 4.9, 6.3) == (pytest.approx(1.0), pytest.approx(2.4))
+
+
+def test_elevation_window_does_not_attach_to_an_interior_door(tmp_path):
+    """The plan has no window at that x but a vestibule door 65 cm inside the facade."""
+    doc, msp = building()
+    # remove the plan's south window symbol by drawing a fresh plan without it
+    doc2 = ezdxf.new("R2018", setup=True)
+    doc2.units = 5
+    for name in ("MURI", "PORTE", "FINESTRE"):
+        doc2.layers.add(name)
+    m = doc2.modelspace()
+    _rect(m, 0, 0, W, D, "MURI")
+    _rect(m, 30, 30, W - 30, D - 30, "MURI")
+    _rect(m, DOOR[0], 0, DOOR[1], 30, "PORTE")
+    _rect(m, 30, 95, W - 30, 105, "MURI")          # vestibule partition 65 cm inside the facade
+    _rect(m, WIN_S[0], 95, WIN_S[0] + 90, 105, "PORTE")  # door in it, same x as the elevation window
+    gy = -2000
+    _rect(m, DOOR[0], gy, DOOR[1], gy + 200, "PORTE")
+    _rect(m, WIN_S[0], gy + 100, WIN_S[1], gy + 240, "FINESTRE")
+    rep = run(tmp_path, doc2, Config(elevations=[(-100, gy - 100, W + 100, gy + 900)]))
+    obj = Obj(rep.output)
+    # the interior door keeps the default 2.10 m: a lintel soffit at 2.1 in its x range
+    levels = {round(float(obj.v[i][1]), 3) for ids, _ in obj.groups["Muri"] for i in ids
+              if 5.0 <= obj.v[i][0] <= 5.9 and abs(obj.v[i][2] + 1.0) < 0.06}
+    assert 2.1 in levels and 1.4 not in levels
+    assert any("non corrispondono" in w for w in rep.warnings)
+
+
+def test_same_kind_window_still_matches_behind_a_projecting_balcony(tmp_path):
+    doc, msp = building()
+    _rect(msp, 400, -150, 700, 0, "MURI")  # balcony slab/parapet drawn on the wall layer, 1.5 m proud
+    gy = -2000
+    area = south_elevation(msp, ground_y=gy, sill=100, win_h=140)
+    rep = run(tmp_path, doc, Config(elevations=[area]))
+    assert glass_heights(Obj(rep.output), 4.9, 6.3) == (pytest.approx(1.0), pytest.approx(2.4))
+
+
+def test_roof_with_a_wide_nested_outline_is_not_flattened(tmp_path):
+    """Eave outline 1 m out, wall line 50 cm out, hips drawn from the inner one."""
+    doc, msp = building()
+    msp.add_lwpolyline([(-100, -100), (W + 100, -100), (W + 100, D + 100), (-100, D + 100)], close=True,
+                       dxfattribs={"layer": "Tetto"})
+    hip_roof(msp, overhang=50)
+    rep = run(tmp_path, doc, Config(roof=True, roof_pitch=30))
+    half = (D + 100) / 200
+    assert rep.roof["faces"] == 4
+    obj = Obj(rep.output)
+    assert obj.bbox("Tetto")[1][1] == pytest.approx(H + math.tan(math.radians(30)) * half, abs=1e-3)
+    assert obj.open_edges("Tetto") == 0 and obj.volume("Tetto") > 0
+
+
+def test_roof_drawn_only_as_a_hatch_uses_its_outline(tmp_path):
+    doc, msp = building()
+    h = msp.add_hatch(color=1, dxfattribs={"layer": "Tetto"})
+    h.paths.add_polyline_path([(-50, -50), (W + 50, -50), (W + 50, D + 50), (-50, D + 50)], is_closed=True)
+    rep = run(tmp_path, doc, Config(roof=True, roof_pitch=20))
+    assert rep.roof is not None and rep.roof["faces"] == 1
+
+
+def test_roof_outline_corner_open_by_a_few_cm_is_closed(tmp_path):
+    doc, msp = building()
+    pts = [(-50, -50), (W + 50, -50), (W + 50, D + 50), (-50, D + 50)]
+    for a, b in zip(pts, pts[1:] + pts[:1]):
+        msp.add_line(a, b, dxfattribs={"layer": "Tetto"})
+    # open the top-left corner by 6 cm
+    for e in list(msp.query('LINE[layer=="Tetto"]')):
+        if tuple(round(c) for c in e.dxf.end.xy) == (-50, 650):
+            e.dxf.end = (-50, 644)
+    rep = run(tmp_path, doc, Config(roof=True, roof_pitch=20))
+    assert rep.roof is not None
+    lo, hi = Obj(rep.output).bbox("Tetto")
+    assert (hi[0] - lo[0], hi[2] - lo[2]) == (pytest.approx(11.0, abs=0.01), pytest.approx(7.0, abs=0.01))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_non_finite_numbers_are_rejected(bad):
+    for cfg in (Config(roof_pitch=bad), Config(elevations=[(0, -10, 5, -5, bad)]),
+                Config(roof_offset=(bad, 0))):
+        with pytest.raises(ValueError):
+            cfg.validate()
+
+
+@pytest.mark.parametrize("factor,tag", [(10, 4), (0.01, 6)])
+def test_drawing_units_do_not_change_the_result(tmp_path, factor, tag):
+    """The same building drawn in cm, mm and m: elevation, roof and offsets scale correctly."""
+    from ezdxf.math import Matrix44
+
+    def make(f, units):
+        doc, msp = building()
+        area = south_elevation(msp)
+        hip_roof(msp, dx=3000, dy=4000)
+        rx0, rx1, _, _ = (50, 950, 300, 350)
+        msp.add_line((rx0 + 3000 - 50 + 350 - 350 + 50, 0), (0, 0))  # placeholder removed below
+        msp.delete_entity(list(msp)[-1])
+        if f != 1:
+            m = Matrix44.scale(f, f, f)
+            for e in msp:
+                e.transform(m)
+        doc.units = units
+        path = tmp_path / f"u{units}.dxf"
+        doc.saveas(path)
+        sc = lambda v: tuple(c * f for c in v)  # noqa: E731
+        plan = sc(PLAN_AREA)
+        cfg = Config(area=plan, elevations=[sc(area)], roof=True, roof_pitch=30,
+                     roof_offset=sc((-3000.0, -4000.0)))
+        return convert(path, tmp_path / f"u{units}.obj", cfg)
+
+    ref, other = make(1, 5), make(factor, tag)
+    assert not other.unit_guessed
+    a, b = Obj(ref.output), Obj(other.output)
+    for g in ("Muri", "Vetri", "Tetto"):
+        assert b.volume(g) == pytest.approx(a.volume(g), rel=1e-4)
+        assert b.bbox(g)[0] == pytest.approx(a.bbox(g)[0], abs=1e-4)
+        assert b.bbox(g)[1] == pytest.approx(a.bbox(g)[1], abs=1e-4)
+    assert other.elevations == ref.elevations

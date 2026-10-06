@@ -533,3 +533,20 @@ def test_window_next_to_a_t_junction_has_the_wall_thickness(tmp_path):
     assert soffits
     zs = [obj.v[i][2] for ids in soffits for i in ids]
     assert max(zs) - min(zs) == pytest.approx(0.2, abs=0.005)
+
+
+def test_closed_shapes_inside_a_hole_are_kept_as_islands(tmp_path):
+    """Outer + inner perimeter polylines, and partitions / a column drawn as closed
+    polylines inside the inner one on the same layer: the inner perimeter is a hole, the
+    partitions are islands in it and must not be cut away with the hole."""
+    path = make_square_plan(tmp_path / "p.dxf", side=1000, thick=30)
+    doc = ezdxf.readfile(path)
+    msp = doc.modelspace()
+    for pts in ([(30, 300), (700, 300), (700, 310), (30, 310)],      # partition 6.7 x 0.1
+                [(500, 500), (540, 500), (540, 540), (500, 540)]):   # column 0.4 x 0.4
+        msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "MURI"})
+    doc.saveas(path)
+    rep = convert(path, tmp_path / "o.obj")
+    ring = 10.0 ** 2 - 9.4 ** 2
+    assert rep.wall_area_m2 == pytest.approx(ring + 6.7 * 0.1 + 0.4 * 0.4, rel=1e-3)
+    assert rep.wall_pieces == 2  # ring + partition (touching) and the free-standing column

@@ -20,7 +20,7 @@ from .reader import Item
 MIN_LINE = 0.5  # horizontal lines shorter than this are not roof/eave candidates (m)
 HORIZONTAL_TOL = 1e-3  # a line is horizontal if its endpoints differ in y by less than this (m)
 MIN_OVERLAP = 0.6  # fraction of the narrower of {symbol, opening} that must overlap in x
-FACADE_DEPTH = 1.0  # an opening must be within this distance of the building's outer face (m)
+FACADE_DEPTH = 0.5  # an opening of a *different* kind must be this close to the outer face (m)
 
 
 @dataclass
@@ -81,6 +81,15 @@ def read_elevation(items: list[Item], spec: tuple[float, ...], unit_scale: float
                 continue
             x0, y0, x1, y1 = geom.bounds
             symbols.append(Symbol(kind, x0, x1, y0, y1))
+    # A window drawn as a frame plus an inner pane (nested rectangles) is one window: keep
+    # the outermost shape.
+    tol = 0.01
+    symbols = [a for a in symbols
+               if not any(b is not a and b.kind == a.kind
+                          and b.x0 <= a.x0 + tol and b.x1 >= a.x1 - tol
+                          and b.y0 <= a.y0 + tol and b.y1 >= a.y1 - tol
+                          and (b.x1 - b.x0) * (b.y1 - b.y0) > (a.x1 - a.x0) * (a.y1 - a.y0)
+                          for b in symbols)]
     if not symbols:
         warnings.append(f"{label}: nessuna porta o finestra riconosciuta nell'area.")
         return None
@@ -107,7 +116,7 @@ def apply_elevation(elev: Elevation, openings: list[Opening], walls: BaseGeometr
     south = elev.side == "south"
     for sym in elev.symbols:
         width = sym.x1 - sym.x0
-        best: tuple[float, Opening] | None = None
+        best: tuple[tuple[int, float], Opening] | None = None
         for o in openings:
             if abs(o.axis[0]) < 0.85:  # only walls running along x can face a south/north elevation
                 continue
@@ -115,21 +124,22 @@ def apply_elevation(elev: Elevation, openings: list[Opening], walls: BaseGeometr
             overlap = min(sym.x1, ox1) - max(sym.x0, ox0)
             if overlap < MIN_OVERLAP * min(width, ox1 - ox0):
                 continue
-            # the opening on the facade: the outermost one in this x range
-            key = o.center[1] if south else -o.center[1]
+            # same kind first, then the outermost opening in this x range (the facade one)
+            key = (0 if o.kind == sym.kind else 1, o.center[1] if south else -o.center[1])
             if best is None or key < best[0]:
                 best = (key, o)
         if best is None:
             continue
         o = best[1]
-        # it must really be on the outer face of the building at that x
-        strip = walls.intersection(box(max(sym.x0, o.cut.bounds[0]), -1e9,
-                                       min(sym.x1, o.cut.bounds[2]), 1e9))
-        if strip.is_empty:
-            continue
-        outer = strip.bounds[1] if south else strip.bounds[3]
-        if abs(o.center[1] - outer) > FACADE_DEPTH:
-            continue
+        if o.kind != sym.kind:
+            # a door drawn as a window (or vice versa): only if it is on the outer face
+            strip = walls.intersection(box(max(sym.x0, o.cut.bounds[0]), -1e9,
+                                           min(sym.x1, o.cut.bounds[2]), 1e9))
+            if strip.is_empty:
+                continue
+            outer = strip.bounds[1] if south else strip.bounds[3]
+            if abs(o.center[1] - outer) > FACADE_DEPTH:
+                continue
         z0 = max(0.0, sym.y0 - elev.zero)
         z1 = min(cfg.wall_height, sym.y1 - elev.zero)
         if sym.kind == "door" or z0 < 0.05:

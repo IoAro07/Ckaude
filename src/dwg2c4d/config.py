@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import math
 import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -158,6 +159,16 @@ class Config:
     layers: LayerRules = field(default_factory=LayerRules)
 
     def validate(self) -> None:
+        numbers = [getattr(self, n) for n in (
+            "wall_height", "door_height", "window_sill", "window_height", "wall_thickness",
+            "max_wall_thickness", "floor_thickness", "ceiling_thickness", "glass_thickness",
+            "roof_thickness", "roof_default_pitch")]
+        numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset) if box_ for v in box_]
+        numbers += [v for ev in self.elevations for v in ev]
+        if self.roof_pitch is not None:
+            numbers.append(self.roof_pitch)
+        if not all(math.isfinite(v) for v in numbers):
+            raise ValueError("i valori numerici devono essere finiti (niente nan/inf)")
         if self.wall_mode not in WALL_MODES:
             raise ValueError(f"wall_mode deve essere uno di {WALL_MODES}")
         if self.units is not None and self.units not in UNIT_TO_METERS:
