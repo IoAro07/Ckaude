@@ -442,3 +442,92 @@ def test_drawing_units_do_not_change_the_result(tmp_path, factor, tag):
         assert b.bbox(g)[0] == pytest.approx(a.bbox(g)[0], abs=1e-4)
         assert b.bbox(g)[1] == pytest.approx(a.bbox(g)[1], abs=1e-4)
     assert other.elevations == ref.elevations
+
+
+# --- two roof volumes of different heights (the case that came out badly in Cinema 4D) -------
+
+TWO_VOLUMES_OUTER = [(72435.2, 50401.1), (73215.2, 50401.1), (73215.2, 50701.1), (73999.2, 50701.1),
+                     (73999.2, 49821.1), (73520.2, 49821.1), (73520.2, 49771.1), (72435.2, 49771.1)]
+TWO_VOLUMES_INNER = [(72445.2, 50391.1), (73225.2, 50391.1), (73225.2, 50691.1), (73989.2, 50691.1),
+                     (73989.2, 49831.1), (73510.2, 49831.1), (73510.2, 49781.1), (72445.2, 49781.1)]
+TWO_VOLUMES_LINES = [
+    ((73225.2, 50391.1), (73225.2, 50111.1)), ((73480.2, 49831.1), (73510.2, 49831.1)),
+    ((73989.2, 50691.1), (73789.2, 50261.1)), ((73789.2, 50261.1), (73989.2, 49831.1)),
+    ((73789.2, 50261.1), (73225.2, 50261.1)), ((72445.2, 50391.1), (72645.2, 50086.1)),
+    ((72445.2, 49781.1), (72645.2, 50086.1)), ((72645.2, 50086.1), (73480.2, 50086.1)),
+    ((73480.2, 50111.1), (73480.2, 49831.1)), ((73225.2, 50111.1), (73480.2, 50111.1)),
+]
+
+
+def two_volume_roof(tmp_path):
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
+    from dwg2c4d.reader import read_items
+    from dwg2c4d.roof import build_roof
+
+    doc = ezdxf.new("R2018", setup=True)
+    doc.units = 5
+    doc.layers.add("Tetto")
+    msp = doc.modelspace()
+    for ring in (TWO_VOLUMES_OUTER, TWO_VOLUMES_INNER):
+        msp.add_lwpolyline(ring, close=True, dxfattribs={"layer": "Tetto"})
+    for a, b in TWO_VOLUMES_LINES:
+        msp.add_line(a, b, dxfattribs={"layer": "Tetto"})
+    path = tmp_path / "roof.dxf"
+    doc.saveas(path)
+    items = read_items(ezdxf.readfile(path), Config(), area=None, unit="cm").items
+    inner = Polygon([(x / 100, y / 100) for x, y in TWO_VOLUMES_INNER])
+    # ridge heights above the eaves, as the elevation gives them (x extents in metres)
+    hints = [(726.45, 735.10, 1.597), (732.25, 737.89, 2.183)]
+    warnings: list[str] = []
+    roof = build_roof(items, Config(), 0.01, inner.bounds, hints, warnings)
+    return roof, inner, unary_union([inner]), warnings
+
+
+def test_two_volume_roof_keeps_each_volume_to_its_own_ridge(tmp_path):
+    roof, _, _, warnings = two_volume_roof(tmp_path)
+    assert roof.faces == 6 and roof.ridges_from_elevation == 2 and roof.pitch_source == "prospetto"
+    zs = [p[2] for t in roof.triangles for p in t]
+    assert max(zs) == pytest.approx(2.183, abs=1e-3)
+    # nothing on the lower volume (west of the taller one) is above the lower ridge
+    west = [p[2] for t in roof.triangles for p in t if p[0] < 732.2]
+    assert max(west) == pytest.approx(1.597, abs=1e-3)
+    ridge_y = 500.861
+    on_ridge = [p[2] for t in roof.triangles for p in t if abs(p[1] - ridge_y) < 1e-3 and 726.4 < p[0] < 734.9]
+    # the ridge is at its elevation height at both ends (at the east end the taller volume's slope is
+    # 30 cm lower, which shows as a second value there: a step, not a blend)
+    assert max(on_ridge) == pytest.approx(1.597, abs=1e-3) and min(on_ridge) >= 1.29
+    assert sum(1 for z in on_ridge if abs(z - 1.597) < 1e-3) >= 2
+
+
+def test_two_volume_roof_has_a_wall_where_the_gable_stands_over_the_lower_roof(tmp_path):
+    roof, _, _, _ = two_volume_roof(tmp_path)
+    assert len(roof.steps) >= 1
+    # every step wall is vertical: its points pair up on the same (x, y)
+    for wall in roof.steps:
+        xy = {(round(x, 4), round(y, 4)) for x, y, _ in wall}
+        assert len(xy) <= 2 and len(wall) in (3, 4)
+
+
+def test_two_volume_roof_top_covers_the_outline_exactly_once(tmp_path):
+    roof, inner, _, _ = two_volume_roof(tmp_path)
+    area = sum(abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2
+               for a, b, c in roof.triangles)
+    assert area == pytest.approx(inner.area, rel=1e-6)
+
+
+def test_two_volume_roof_solid_is_geometrically_closed(tmp_path):
+    """Topological T-junctions (a vertex in the middle of a neighbour's edge) are allowed where a
+    gable wall meets the outline; what must never happen is a gap: the signed volume is
+    positive and every outward normal agrees with its winding."""
+    doc, msp = building()
+    for ring in (TWO_VOLUMES_OUTER, TWO_VOLUMES_INNER):
+        msp.add_lwpolyline([(x - 72435 - 50, y - 49771 - 50) for x, y in ring], close=True,
+                           dxfattribs={"layer": "Tetto"})
+    for a, b in TWO_VOLUMES_LINES:
+        msp.add_line((a[0] - 72485, a[1] - 49821), (b[0] - 72485, b[1] - 49821), dxfattribs={"layer": "Tetto"})
+    rep = run(tmp_path, doc, Config(roof=True, roof_pitch=25))
+    obj = Obj(rep.output)
+    assert obj.volume("Tetto") > 0 and obj.winding_matches_normals("Tetto")
+    assert obj.non_manifold_edges("Tetto") == 0

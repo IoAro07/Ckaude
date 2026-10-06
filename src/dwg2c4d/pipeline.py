@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from shapely.geometry.base import BaseGeometry
 
-from .config import Config
+from .config import UNIT_TO_METERS, Config
 from .elevation import apply_elevation, read_elevation
 from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
@@ -45,6 +46,21 @@ def _extent(geom: BaseGeometry) -> tuple[float, float]:
     return x1 - x0, y1 - y0
 
 
+def _better_unit(span_m: float, declared: str) -> str | None:
+    """A unit other than the declared one for which a building of ``span_m`` (read with the
+    declared unit) would measure between 3 and 300 m; the one closest to a typical size wins."""
+    best, best_gap = None, math.inf
+    for unit, scale in UNIT_TO_METERS.items():
+        if unit in ("in", "ft") or unit == declared:
+            continue
+        size = span_m * scale / UNIT_TO_METERS[declared]
+        if 3.0 <= size <= 300.0:
+            gap = abs(math.log(size / 15.0))
+            if gap < best_gap:
+                best, best_gap = unit, gap
+    return best
+
+
 def convert(input_path: str | Path, output_path: str | Path | None = None,
             cfg: Config | None = None) -> ConversionReport:
     cfg = cfg or Config()
@@ -70,6 +86,14 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     openings = build_openings(result.items, walls, cfg, warnings)
 
     span = max(_extent(walls))
+    if not (3.0 <= span <= 300.0) and cfg.units is None and not result.unit_guessed:
+        alt = _better_unit(span, result.unit)
+        if alt:
+            fixed = convert(input_path, output_path, replace(cfg, units=alt))
+            fixed.warnings.insert(0, (
+                f"Il file dichiara '{result.unit}' ma cosi' l'edificio misurerebbe {span:.2f} m: "
+                f"le misure sono compatibili con '{alt}', che ho usato. Forza l'unita' con --unita se non va bene."))
+            return fixed
     if not (3.0 <= span <= 300.0):
         warnings.append(
             f"Dimensioni insolite per un edificio: {_extent(walls)[0]:.2f} x {_extent(walls)[1]:.2f} m "

@@ -484,12 +484,23 @@ def test_block_reference_without_definition_does_not_abort(tmp_path):
     assert any("non leggibili" in w for w in rep.warnings)
 
 
-def test_implausible_size_from_wrong_units_is_flagged(tmp_path):
-    # a 500-unit building tagged 'mm' becomes 0.5 m wide: almost certainly the tag is wrong
+def test_wrong_declared_units_are_corrected_when_another_unit_fits(tmp_path):
+    """A 500-unit building tagged 'mm' would be 0.5 m wide: the numbers fit cm, so use cm
+    (both real files of the author declare mm but are in cm)."""
     rep = convert(make_square_plan(tmp_path / "p.dxf", units=4), tmp_path / "o.obj")
-    assert any("Dimensioni insolite" in w and "--unita" in w for w in rep.warnings)
+    assert rep.unit == "cm" and rep.size_m[0] == pytest.approx(5.0, rel=0.01)
+    assert any("dichiara 'mm'" in w and "'cm'" in w for w in rep.warnings)
     ok = convert(make_square_plan(tmp_path / "q.dxf", units=5), tmp_path / "o2.obj")
-    assert not any("Dimensioni insolite" in w for w in ok.warnings)
+    assert not any("dichiara" in w or "Dimensioni insolite" in w for w in ok.warnings)
+
+
+def test_units_are_not_corrected_when_forced_or_when_nothing_fits(tmp_path):
+    forced = convert(make_square_plan(tmp_path / "p.dxf", units=4), tmp_path / "a.obj", Config(units="mm"))
+    assert forced.unit == "mm" and any("Dimensioni insolite" in w for w in forced.warnings)
+    # a 0.5-unit building tagged m: cm and mm only make it smaller, nothing fits, so keep m and warn
+    tiny = convert(make_square_plan(tmp_path / "t.dxf", side=0.5, thick=0.05, units=6),
+                   tmp_path / "b.obj")
+    assert tiny.unit == "m" and any("Dimensioni insolite" in w for w in tiny.warnings)
 
 
 def test_window_next_to_a_t_junction_has_the_wall_thickness(tmp_path):

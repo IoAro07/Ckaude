@@ -39,12 +39,14 @@ RIDGE_MIN_RISE = 0.3  # a silhouette line must be this far above the eaves to co
 RIDGE_MATCH = 0.8  # fraction of the longer of {ridge, silhouette line} that must overlap in x
 MIN_RIDGE = 1.0  # shorter horizontal roof lines (connectors, valleys) are not ridges (m)
 ON_OUTLINE = 1e-4
+STEP_TOL = 0.02  # neighbouring faces closer in height than this meet (no wall between them) (m)
 
 
 @dataclass
 class Roof:
     triangles: list[tuple[Vec3, Vec3, Vec3]]  # top surface; z is height above the eaves
     edges: list[tuple[Vec3, Vec3]]  # outline edges, outward on the right-hand side
+    steps: list[list[Vec3]]  # vertical walls between neighbouring faces that do not meet (gables)
     pitch_deg: float  # typical (median) pitch
     pitch_range: tuple[float, float]  # steepest / shallowest face, degrees
     pitch_source: str  # "indicata" | "prospetto" | "predefinita"
@@ -199,8 +201,7 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
         warnings.append(f"Tetto: {len(lost)} punti senza una gronda di riferimento sono stati messi alla quota di gronda.")
 
     # Ridges whose height an elevation gives (an explicit pitch wins over the elevation).
-    fixed: dict[tuple[int, int], float] = {}
-    run_info: list[tuple[list[tuple[int, int]], float]] = []
+    run_info: list[tuple[list[tuple[int, int]], float, float, float, float]] = []
     if cfg.roof_pitch is None:
         for y, x0, x1 in _ridge_runs(network, outline_boundary):
             if x1 - x0 < MIN_RIDGE:
@@ -215,21 +216,36 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
             ks = [k for k, (nx, ny) in node_pos.items()
                   if abs(ny - y) < NODE_GRID and x0 - NODE_GRID <= nx <= x1 + NODE_GRID]
             if ks:
-                run_info.append((ks, best_h))
-        for ks, h in run_info:
-            for k in ks:
-                fixed[k] = h
+                run_info.append((ks, best_h, y, x0, x1))
 
     # Slope of each face: from the ridge nodes the elevation fixed on it, else the default.
     if cfg.roof_pitch is not None:
         default_k, source = math.tan(math.radians(cfg.roof_pitch)), "indicata"
     else:
         default_k, source = math.tan(math.radians(cfg.roof_default_pitch)), "predefinita"
+    # A ridge's height belongs to the faces that have it as an edge and to the end faces that
+    # rest on its ends (their eave is across the ridge); not to a face that merely touches a
+    # ridge end of another roof volume.
+    def owns(face_i: int, y: float, x0: float, x1: float) -> bool:
+        for a, b in _edges(oriented[face_i]):
+            if abs(a[1] - y) < NODE_GRID and abs(b[1] - y) < NODE_GRID \
+                    and min(max(a[0], b[0]), x1) - max(min(a[0], b[0]), x0) > 0.1:
+                return True
+        ea, eb = eave[face_i]
+        return abs(eb[0] - ea[0]) < 0.3 * math.hypot(eb[0] - ea[0], eb[1] - ea[1])  # eave across the ridge
+
     face_k: dict[int, float] = {}
     measured: list[float] = []
+    fixed: dict[tuple[int, int], float] = {}
     for i in eave:
-        ratios = [fixed[k] / dist[(i, *k)] for k in fixed
-                  if (i, *k) in dist and dist[(i, *k)] > 0.05]
+        ratios = []
+        for ks, h, y, x0, x1 in run_info:
+            if not owns(i, y, x0, x1):
+                continue
+            for k in ks:
+                if (i, *k) in dist and dist[(i, *k)] > 0.05:
+                    ratios.append(h / dist[(i, *k)])
+                    fixed[k] = h
         if ratios:
             face_k[i] = sum(ratios) / len(ratios)
             measured.append(face_k[i])
@@ -242,34 +258,93 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
             warnings.append("Tetto: nessun colmo della pianta del tetto corrisponde alle linee orizzontali "
                             "del prospetto (stesse coordinate X?): pendenza predefinita.")
 
-    z: dict[tuple[int, int], float] = {}
-    for k in node_pos:
-        vals = [face_k.get(i, fallback_k) * dist[(i, *k)] for i in faces_at[k] if (i, *k) in dist]
-        z[k] = sum(vals) / len(vals) if vals else 0.0
-    z.update(fixed)
+    # Every face is its own plane (slope from its ridge nodes, else the typical one). Faces without
+    # an eave of their own take the average of the planes around them.
+    zf: dict[tuple[int, int, int], float] = {}
+    for (i, *k), d in dist.items():
+        zf[(i, *k)] = face_k.get(i, fallback_k) * d
+    node_avg: dict[tuple[int, int], float] = {}
+    for k, fs in faces_at.items():
+        vals = [zf[(i, *k)] for i in fs if (i, *k) in zf]
+        node_avg[k] = sum(vals) / len(vals) if vals else 0.0
+    for i, face in enumerate(oriented):
+        for a, _ in _edges(face):
+            k = _key(*a)
+            zf.setdefault((i, *k), node_avg[k])
+    # Heights that differ by less than a step tolerance are the same height (so the mesh welds).
+    for k, fs in faces_at.items():
+        vals = sorted((zf[(i, *k)], i) for i in fs)
+        group = [vals[0]]
+        for v in vals[1:] + [None]:
+            if v is not None and v[0] - group[-1][0] <= STEP_TOL:
+                group.append(v)
+                continue
+            mean = sum(g[0] for g in group) / len(group)
+            for _, i in group:
+                zf[(i, *k)] = mean
+            group = [v] if v is not None else []
+
+    def zat(i: int, pt) -> float:
+        return zf[(i, *_key(*pt))]
+
     ks_all = [face_k.get(i, fallback_k) for i in eave]
     k_slope = float(np.median(ks_all)) if ks_all else fallback_k
 
-    def at(pt) -> Vec3:
-        return pt[0], pt[1], z.get(_key(*pt), 0.0)
-
     triangles: list[tuple[Vec3, Vec3, Vec3]] = []
-    for face in oriented:
+    for i, face in enumerate(oriented):
         for tri in shapely.constrained_delaunay_triangles(face).geoms:
-            p = [at(c) for c in list(tri.exterior.coords)[:3]]
+            p = [(c[0], c[1], zat(i, c)) for c in list(tri.exterior.coords)[:3]]
             nz = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1])
             if abs(nz) < 1e-12:
                 continue
             triangles.append((p[0], p[1], p[2]) if nz > 0 else (p[0], p[2], p[1]))
-    edges = [(at(a), at(b)) for a, b in outline_edges]
+
+    # Outline sides, and a vertical wall wherever two neighbouring faces differ in height along
+    # their shared edge (a higher gable standing over a lower roof).
+    edges: list[tuple[Vec3, Vec3]] = []
+    by_edge: dict[frozenset, list[tuple[int, tuple[float, float], tuple[float, float]]]] = defaultdict(list)
+    for i, face in enumerate(oriented):
+        for a, b in _edges(face):
+            by_edge[frozenset((_key(*a), _key(*b)))].append((i, a, b))
+    steps: list[list[Vec3]] = []
+    for pair in by_edge.values():
+        if len(pair) == 1:
+            i, a, b = pair[0]
+            mid = Point((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+            if outline_boundary.distance(mid) < ON_OUTLINE:
+                edges.append(((a[0], a[1], zat(i, a)), (b[0], b[1], zat(i, b))))
+            continue
+        (f, a, b), (g, _, _) = pair[0], pair[1]  # f has the edge a->b with f on its left
+        da, db = zat(f, a) - zat(g, a), zat(f, b) - zat(g, b)
+        if abs(da) <= STEP_TOL and abs(db) <= STEP_TOL:
+            continue
+        pa, pb = (a[0], a[1]), (b[0], b[1])
+
+        def piece(p0, p1, d0, d1, fa, fb, ga, gb):
+            lower_is_f = (d0 + d1) < 0
+            lo0, lo1 = (fa, fb) if lower_is_f else (ga, gb)
+            hi0, hi1 = (ga, gb) if lower_is_f else (fa, fb)
+            quad = [(*p0, lo0), (*p1, lo1), (*p1, hi1), (*p0, hi0)]  # normal on the right of p0->p1
+            return quad[::-1] if lower_is_f else quad  # the wall must face the lower face
+
+        fa, fb, ga, gb = zat(f, a), zat(f, b), zat(g, a), zat(g, b)
+        if da * db < 0:  # the two profiles cross: two pieces
+            t = da / (da - db)
+            pm = (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+            zm = fa + t * (fb - fa)
+            steps.append(piece(pa, pm, da, 0.0, fa, zm, ga, zm))
+            steps.append(piece(pm, pb, 0.0, db, zm, fb, zm, gb))
+        else:
+            steps.append(piece(pa, pb, da, db, fa, fb, ga, gb))
     return Roof(
         triangles=triangles,
         edges=edges,
+        steps=steps,
         pitch_deg=math.degrees(math.atan(k_slope)),
         pitch_range=(math.degrees(math.atan(min(ks_all))), math.degrees(math.atan(max(ks_all))))
         if ks_all else (0.0, 0.0),
         pitch_source=source,
-        ridge_height=max(z.values()),
+        ridge_height=max((v for v in zf.values()), default=0.0),
         faces=len(faces),
         offset=(dx, dy),
         ridges_from_elevation=len(run_info),

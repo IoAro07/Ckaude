@@ -170,7 +170,11 @@ contorno, colmi, displuvi e compluvi, disegnati sul piano del tetto.
   25 gradi. Con più prospetti si usano tutti;
 - la pianta del tetto è **centrata sui muri**; se è disegnata altrove nel file indica `--area-tetto`, e se serve
   correggerne la posizione `--sposta-tetto DX,DY` (unità del disegno);
-- il tetto è un solido chiuso, spesso `--spessore-tetto` (0,15 m), con la gronda alla quota dei muri.
+- ogni falda è un **piano proprio** (dalla sua gronda e dalla sua pendenza). Dove una falda confina con un'altra a
+  quota diversa (il timpano di un volume alto che sorge sopra una falda bassa) si aggiunge la **parete verticale**
+  del gradino; il colmo di un volume vale solo per le sue falde, non per chi lo sfiora;
+- il tetto è un **solido pieno**: superficie inclinata, fondo piatto `--spessore-tetto` (0,15 m) sotto la gronda,
+  lati verticali. La gronda è alla quota dei muri.
 
 Nella pianta del tetto vanno solo contorno, colmi e displuvi: altre linee (travi, griglie, quote su quel layer)
 spezzano le falde. Se ci sono due contorni annidati (gronda e linea del muro) il tetto si ferma al contorno interno.
@@ -257,10 +261,10 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 
 ## Cose da sapere (limiti)
 
-- **Le unità**: se il file non le dichiara, vengono dedotte dalle dimensioni (con un avviso). È un'ipotesi:
-  verifica `Ingombro muri` nel riepilogo e, se serve, forza con `--unita cm`. Se le unità dichiarate sono sbagliate
-  (succede: un file in cm che dichiara mm), lo strumento avvisa quando l'edificio risulta più piccolo di 3 m o più
-  grande di 300 m.
+- **Le unità**: se il file non le dichiara, vengono dedotte dalle dimensioni (con un avviso). Se le dichiara ma
+  l'edificio risulterebbe più piccolo di 3 m o più grande di 300 m (succede: un file in cm che dichiara mm) e
+  un'altra unità lo rende plausibile, lo strumento usa quella e lo scrive tra gli avvisi. Sono ipotesi: verifica
+  `Ingombro muri` nel riepilogo e, se serve, forza con `--unita cm` (con `--unita` non corregge nulla).
 - **Un piano alla volta.** Più piani sovrapposti o affiancati nello stesso file vanno separati con `--area`
   o su file distinti.
 - Non vengono generati: scale, arredi, tratteggi, quote, testi, comignoli e abbaini. Le porte sono solo aperture

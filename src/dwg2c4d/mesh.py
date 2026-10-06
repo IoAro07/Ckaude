@@ -101,28 +101,32 @@ class Mesh:
             else:
                 self._cap(group, geom.difference(snapped[k - 1]), slab.z0, up=False)
 
-    def add_surface_solid(self, group: str, triangles, edges, z_base: float, thickness: float) -> None:
-        """A sloped surface given as triangles, closed into a solid by a vertical thickness.
-
-        ``triangles`` are counter-clockwise seen from above; ``edges`` are the outline edges
-        (right-hand side = outside). Heights are offset by ``z_base``."""
-        for tri in triangles:
+    def add_roof_solid(self, group: str, roof, z_base: float, thickness: float) -> None:
+        """A roof as a closed solid: sloped top, flat bottom ``thickness`` under the eaves,
+        vertical sides along the outline and vertical walls where neighbouring faces do not
+        meet (a gable standing over a lower roof). Heights in ``roof`` are above the eaves."""
+        bottom = z_base - thickness
+        for tri in roof.triangles:
             top = [(x, y, z + z_base) for x, y, z in tri]
             n = _normal(top)
             if n is None:
                 continue
             self.add_face(group, top, n)
-            self.add_face(group, [(x, y, z - thickness) for x, y, z in reversed(top)], (-n[0], -n[1], -n[2]))
-        for (ax, ay, az), (bx, by, bz) in edges:
+            self.add_face(group, [(x, y, bottom) for x, y, _ in reversed(tri)], (0.0, 0.0, -1.0))
+        for (ax, ay, az), (bx, by, bz) in roof.edges:
             length = math.hypot(bx - ax, by - ay)
             if length < 1e-9:
                 continue
             self.add_face(
                 group,
-                [(ax, ay, az + z_base - thickness), (bx, by, bz + z_base - thickness),
-                 (bx, by, bz + z_base), (ax, ay, az + z_base)],
+                [(ax, ay, bottom), (bx, by, bottom), (bx, by, bz + z_base), (ax, ay, az + z_base)],
                 ((by - ay) / length, -(bx - ax) / length, 0.0),
             )
+        for wall in roof.steps:
+            pts = [(x, y, z + z_base) for x, y, z in wall]
+            n = _normal(pts)
+            if n is not None:
+                self.add_face(group, pts, n)
 
     def _side(self, group: str, edge: tuple, z0: float, z1: float) -> None:
         (ax, ay), (bx, by) = edge
