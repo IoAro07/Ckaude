@@ -186,6 +186,24 @@ dwg2c4d pianta.dwg -o casa.obj --muri "0" --unita cm --area=72400,48300,74600,49
 
 ## Importare in Cinema 4D
 
+Ci sono due modi. Il secondo è consigliato se usi Corona.
+
+**A. File OBJ** (descritto qui sotto): semplice, ma devi impostare l'importazione (unità, *Flip Z*) e i materiali
+sono quelli base del file `.mtl`.
+
+**B. File `_model.json` + script Python in Cinema 4D** (`--json-c4d`): lo script crea oggetti nativi, raggruppati
+per tipo (`Murature`, `Infissi`, `Pavimenti`, `Tetto`…), con un materiale per tipo (Corona Physical se Corona è
+installato, altrimenti standard), e risolve da solo assi e orientamento delle facce. Il file è in **centimetri**,
+con assi del disegno (X, Y, Z in alto). Il formato è quello letto dallo script `plan2c4d_import.py` (Script
+Manager di Cinema 4D → scegli il `*_model.json`). Lo strumento ha controllato che quello script accetti il file con un
+modulo `c4d` simulato; **non è stato provato dentro Cinema 4D** e gli ID dei parametri Corona dello script dipendono
+dalla tua versione di Corona.
+
+**Origine del modello** (`--origine`): i disegni reali stanno spesso a centinaia di metri dall'origine (il tuo
+a circa 730 m). Di default il modello viene portato al **centro dei muri** (`--origine centro`), con la quota
+del pavimento a zero; `minimo` mette lo zero nell'angolo, `disegno` lascia le coordinate del CAD. Il riepilogo
+indica di quanto è stato spostato.
+
 1. **File → Apri** (o *Unisci*) e scegli il `.obj`. Tieni `.mtl` nella stessa cartella: i materiali vengono creati.
 2. Nella finestra delle opzioni d'importazione OBJ imposta **Unità = Metri** (scala 100%): il file è in metri.
    Se preferisci, genera direttamente in altre unità con `--unita-output cm` (o `mm`).
@@ -220,6 +238,8 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--prospetto` | zona di un prospetto (ripetibile): altezze di porte e finestre; 5° valore opzionale = Y del pavimento finito |
 | `--tetto`, `--layer-tetto`, `--area-tetto` | costruisci il tetto dalla pianta del tetto |
 | `--pendenza`, `--spessore-tetto`, `--sposta-tetto` | pendenza (gradi), spessore (0,15 m), spostamento della pianta del tetto |
+| `--origine` | `centro` (default), `minimo`, `disegno`: dove sta lo zero del modello |
+| `--json-c4d` | scrivi anche `NOME_model.json` per lo script di importazione di Cinema 4D |
 | `--specchia` | specchia la pianta |
 | `--converter` | percorso di `ODAFileConverter` o `dwg2dxf` |
 | `--config` | file JSON con le impostazioni (le opzioni da riga di comando prevalgono) |

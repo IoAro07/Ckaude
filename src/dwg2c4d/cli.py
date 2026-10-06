@@ -118,6 +118,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--unita-output", choices=["m", "cm", "mm"], help="unita' dell'OBJ (default m)")
     g.add_argument("--area", type=_area, metavar="XMIN,YMIN,XMAX,YMAX",
                    help="usa solo questa zona del disegno (coordinate del disegno)")
+    g.add_argument("--origine", choices=["centro", "minimo", "disegno"], default="centro",
+                   help="dove mettere lo zero del modello: al centro dei muri (default), nell'angolo "
+                        "minimo, oppure alle coordinate del disegno (di solito molto lontane dall'origine)")
+    g.add_argument("--json-c4d", action="store_true",
+                   help="scrivi anche NOME_model.json, da importare con uno script in Cinema 4D "
+                        "(oggetti nativi, un materiale per tipo, anche Corona)")
     g.add_argument("--specchia", action="store_true",
                    help="specchia la pianta (se in Cinema 4D risulta capovolta)")
     g.add_argument("--converter", help="percorso di ODAFileConverter o dwg2dxf")
@@ -163,6 +169,9 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.walls_from_blocks = True
     if args.specchia:
         cfg.mirror = True
+    cfg.origin = {"centro": "center", "minimo": "min", "disegno": "drawing"}[args.origine]
+    if args.json_c4d:
+        cfg.c4d_json = True
     return cfg
 
 
@@ -200,8 +209,13 @@ def main(argv: list[str] | None = None) -> int:
 
     w, h = report.size_m
     print(f"Creato {report.output}  (+ {report.output.with_suffix('.mtl').name})")
+    if report.json_path:
+        print(f"Creato {report.json_path}  (per lo script di importazione di Cinema 4D)")
     note = " (dedotte: verifica!)" if report.unit_guessed else ""
     print(f"  Unita' del disegno : {report.unit}{note}")
+    if report.origin_offset != (0.0, 0.0):
+        print(f"  Origine            : modello spostato di ({report.origin_offset[0]:.2f}, "
+              f"{report.origin_offset[1]:.2f}) m rispetto al disegno")
     print(f"  Ingombro muri      : {w:.2f} x {h:.2f} m")
     print(f"  Muri               : {report.wall_pieces} corpi, {report.wall_area_m2:.1f} m2 in pianta")
     print(f"  Porte / finestre   : {report.doors} / {report.windows}")

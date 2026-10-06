@@ -12,6 +12,7 @@ from dwg2c4d.config import Config, LayerRules
     ("PORTE", "door"), ("A-DOOR", "door"), ("porte_interne", "door"), ("PORTONE", "door"),
     ("FINESTRE", "window"), ("A-GLAZ", "window"), ("SERRAMENTI", "window"), ("WINDOWS", "window"),
     ("PILASTRI", "column"), ("A-COLS", "column"), ("COLONNE", "column"),
+    ("FONDELLI", "wall"), ("Fondelli_interni", "wall"), ("DIVISORI", "wall"),  # interior partitions
     ("QUOTE", None), ("TESTI", None), ("Layer1", None), ("0", None), ("PORTANTI", None),
     ("ARREDI", None), ("HATCH", None),
     # layer names from a real plan: numbered, with elevations and furniture on layers that

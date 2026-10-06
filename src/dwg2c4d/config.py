@@ -44,7 +44,7 @@ class LayerRules:
         },
     }
     _PREFIX = {
-        "wall": ("mur", "paret", "wall", "tramezz", "tamponam", "partit"),
+        "wall": ("mur", "paret", "wall", "tramezz", "tamponam", "partit", "fondell", "divisor"),
         "door": ("door",),
         "window": ("finestr", "window", "glaz"),
         "column": ("pilast", "colonn", "column", "pillar", "cols"),
@@ -138,6 +138,8 @@ class Config:
     out_units: str = "m"
     area: tuple[float, float, float, float] | None = None  # crop, in drawing units
     include_hidden: bool = False
+    origin: str = "drawing"  # where the model's zero is: drawing | center | min (of the walls)
+    c4d_json: bool = False  # also write <name>_model.json for a Cinema 4D import script
     walls_from_blocks: bool = False  # read blocks inserted on wall layers as walls
     mirror: bool = False  # mirror the plan (if Cinema 4D shows it flipped)
     arc_tolerance: float = 0.002  # max deviation when flattening curves, metres
@@ -173,6 +175,8 @@ class Config:
             raise ValueError(f"wall_mode deve essere uno di {WALL_MODES}")
         if self.units is not None and self.units not in UNIT_TO_METERS:
             raise ValueError(f"unita' del disegno non valida: {self.units!r}")
+        if self.origin not in ("drawing", "center", "min"):
+            raise ValueError("origin deve essere drawing, center o min")
         if self.out_units not in ("m", "cm", "mm"):
             raise ValueError("unita' di output deve essere m, cm o mm")
         for name in ("wall_height", "door_height", "window_height", "wall_thickness",

@@ -62,6 +62,11 @@ class Mesh:
             return  # collapsed by welding
         self.groups.setdefault(group, []).append((tuple(ids), self.normal(normal)))
 
+    def translate_xy(self, dx: float, dy: float) -> None:
+        """Move the whole model in the plan (heights unchanged)."""
+        self.vertices = [(x + dx, y + dy, z) for x, y, z in self.vertices]
+        self._vkeys = {}  # welding keys are stale; nothing more is added after this
+
     @property
     def face_count(self) -> int:
         return sum(len(f) for f in self.groups.values())

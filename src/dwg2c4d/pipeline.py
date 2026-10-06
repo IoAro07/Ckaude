@@ -9,6 +9,7 @@ from shapely.geometry.base import BaseGeometry
 
 from .config import Config
 from .elevation import apply_elevation, read_elevation
+from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import polygons_of
 from .model import Plan, build_mesh
@@ -33,6 +34,8 @@ class ConversionReport:
     faces: int
     groups: list[str]
     warnings: list[str] = field(default_factory=list)
+    origin_offset: tuple[float, float] = (0.0, 0.0)  # metres added to the drawing coordinates
+    json_path: Path | None = None
     elevations: list[dict] = field(default_factory=list)  # side, matched, total, zero source
     roof: dict | None = None  # pitch_deg, pitch_source, ridge_height, faces
 
@@ -101,7 +104,16 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
                            "ridges_from_elevation": roof.ridges_from_elevation}
 
     mesh = build_mesh(plan, cfg, warnings)
+    offset = (0.0, 0.0)
+    if cfg.origin != "drawing":
+        x0, y0, x1, y1 = solid.bounds
+        offset = (-(x0 + x1) / 2, -(y0 + y1) / 2) if cfg.origin == "center" else (-x0, -y0)
+        mesh.translate_xy(*offset)
     write_obj(mesh, output_path, cfg.out_units, cfg.mirror)
+    json_path = None
+    if cfg.c4d_json:
+        json_path = write_json(to_model_dict(mesh, output_path.stem, offset),
+                               output_path.with_name(output_path.stem + "_model.json"))
 
     return ConversionReport(
         output=output_path,
@@ -118,4 +130,6 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         warnings=warnings,
         elevations=elevation_report,
         roof=roof_report,
+        origin_offset=offset,
+        json_path=json_path,
     )

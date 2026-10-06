@@ -47,7 +47,7 @@ def test_cli_list_layers(capsys, sample_lines):
 def test_cli_options_are_applied(tmp_path, sample_lines):
     out = tmp_path / "o.obj"
     assert cli.main([str(sample_lines), "-o", str(out), "--no-pavimento", "--no-vetri", "--soffitto",
-                     "--unita-output", "cm", "--specchia"]) == 0
+                     "--unita-output", "cm", "--specchia", "--origine", "disegno"]) == 0
     obj = Obj(out)
     assert set(obj.groups) == {"Muri", "Soffitto"}
     assert obj.bbox("Muri")[1][0] == pytest.approx(800)
@@ -125,7 +125,7 @@ def test_dwg_converted_through_dwg2dxf(tmp_path, monkeypatch, sample_lines):
     monkeypatch.setattr(convert_mod, "_oda_candidates", lambda: [])
     monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
     out = tmp_path / "o.obj"
-    assert cli.main([str(dwg), "-o", str(out)]) == 0
+    assert cli.main([str(dwg), "-o", str(out), "--origine", "disegno"]) == 0
     assert Obj(out).bbox("Muri")[1][0] == pytest.approx(8.0)
 
 
