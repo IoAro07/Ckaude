@@ -10,7 +10,7 @@ bottom and top. This handles both ways of drawing a plan:
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from shapely.geometry import LineString, Point, Polygon
@@ -19,46 +19,92 @@ from shapely.strtree import STRtree
 
 from .config import Config
 from .geom import long_axis, oriented_rect, polygons_of, union
-from .reader import Item
+from .reader import Item, Prim
 
 CLUSTER_TOL = 0.03  # loose lines closer than this belong to the same symbol
 REGION = 0.15  # a symbol must lie within this distance of a wall
 ON_WALL = 0.02  # a sample point this close to a wall counts as "on" it
 MIN_OPENING_WIDTH = 0.2
+MIN_DIVIDER = 0.02  # a cut mark across a window symbol is at least this long (m)
 OVERLAP = 0.005  # a gap filler reaches this far into the wall on each side, so the pieces merge
 STATION_OFFSETS = (0.03, 0.10, 0.25)  # where to look for the wall just outside the symbol
 
 
 @dataclass
+class Symbol:
+    """One door/window symbol of the plan: a block reference, or loose entities that touch."""
+
+    geom: BaseGeometry
+    prims: list[Prim]
+    block: str | None = None
+    layer: str = ""
+
+
+@dataclass
 class Opening:
-    kind: str  # "door" | "window"
+    kind: str  # "door" | "window" | "passage"
     cut: Polygon  # footprint removed from the walls between z0 and z1
     fill: Polygon  # same, slightly longer: used to close a gap drawn in the wall lines
     z0: float
     z1: float
-    glass: Polygon | None  # thin pane for windows
+    glass: Polygon | None  # thin pane for windows (simple fixtures)
     axis: tuple[float, float] = (1.0, 0.0)  # unit vector along the wall
-    center: tuple[float, float] = (0.0, 0.0)
+    center: tuple[float, float] = (0.0, 0.0)  # middle of the opening, on the wall's mid-plane
     from_elevation: bool = False  # z0/z1 were read from an elevation drawing
+    # What the fixtures and the openings table need:
+    id: str = ""
+    width: float = 0.0  # along the wall (m)
+    thickness: float = 0.0  # wall thickness at the opening (m)
+    leaves: list[dict] = field(default_factory=list)  # doors: {"hinge": -1|1, "width": m, "swing": -1|1}
+    dividers: list[float] = field(default_factory=list)  # windows: cut lines, along the wall from the centre (m)
+    hinge: int = 0  # leaf without an arc: -1 hinged on the -u side, 1 on +u, 0 = not known
+    src: dict = field(default_factory=dict)  # where width/height/sill/leaves came from
+    notes: list[str] = field(default_factory=list)
+    keep: bool = True  # False: the table asked to drop it (the gap is closed with wall)
+    label: str = ""
+    layer: str = ""
+    block: str = ""
+
+    @property
+    def u(self) -> tuple[float, float]:
+        return self.axis
+
+    @property
+    def v(self) -> tuple[float, float]:
+        return (-self.axis[1], self.axis[0])
+
+    @property
+    def sashes(self) -> int:
+        return len(self.dividers) + 1
+
+    def rebuild(self, cfg: Config) -> None:
+        """Recompute the footprints after width/thickness/centre were changed."""
+        ux, uy = self.axis
+        cx, cy = self.center
+        t2 = self.thickness / 2.0
+        self.cut = oriented_rect(cx, cy, ux, uy, self.width, -t2 - 0.002, t2 + 0.002)
+        self.fill = oriented_rect(cx, cy, ux, uy, self.width + 2 * OVERLAP, -t2, t2)
+        h = cfg.glass_thickness / 2.0
+        self.glass = oriented_rect(cx, cy, ux, uy, self.width, -h, h) if (self.kind == "window" and cfg.glass) else None
 
 
-def _symbols(items: list[Item], kind: str) -> list[BaseGeometry]:
-    """One geometry per symbol: a block reference is one symbol; loose
-    entities are grouped by proximity."""
-    symbols: list[BaseGeometry] = []
-    loose: list[BaseGeometry] = []
+def _symbols(items: list[Item], kind: str) -> list[Symbol]:
+    """One symbol per block reference; loose entities are grouped by proximity."""
+    symbols: list[Symbol] = []
+    loose: list[tuple[BaseGeometry, Prim, str]] = []
     for it in items:
         if it.category != kind:
             continue
-        geoms = [p.geom for p in it.prims]
         if it.block:
-            symbols.append(union(geoms))
+            symbols.append(Symbol(union([p.geom for p in it.prims]), list(it.prims), it.block, it.layer))
         else:
-            loose.extend(geoms)
+            loose.extend((p.geom, p, it.layer) for p in it.prims)
     if loose:
-        grown = union(g.buffer(CLUSTER_TOL) for g in loose)
+        grown = union(g.buffer(CLUSTER_TOL) for g, _, _ in loose)
         for cl in getattr(grown, "geoms", [grown]):
-            symbols.append(union([g for g in loose if cl.intersects(g)]))
+            members = [(g, p, lay) for g, p, lay in loose if cl.intersects(g)]
+            symbols.append(Symbol(union([g for g, _, _ in members]), [p for _, p, _ in members], None,
+                                  members[0][2] if members else ""))
     return symbols
 
 
@@ -159,11 +205,11 @@ def _try_direction(hull: Polygon, walls: BaseGeometry, ux: float, uy: float,
     return ux, uy, a0, a1, s0, s1
 
 
-def _locate_opening(sym: BaseGeometry, walls: BaseGeometry, edges: _WallEdges,
+def _locate_opening(sym: Symbol, walls: BaseGeometry, edges: _WallEdges,
                     max_t: float) -> tuple[float, float, float, float, float, float] | None:
     """(ux, uy, a0, a1, s0, s1): wall direction u, the opening's extent [a0, a1] along u
     and the wall's extent [s0, s1] across it (absolute coordinates), or None."""
-    hull = sym.convex_hull
+    hull = sym.geom.convex_hull
     if not isinstance(hull, Polygon):
         hull = hull.buffer(0.005)
     region = hull.buffer(REGION)
@@ -182,6 +228,55 @@ def _locate_opening(sym: BaseGeometry, walls: BaseGeometry, edges: _WallEdges,
         if found:
             return found
     return None
+
+
+def _door_leaves(sym: Symbol, centre: tuple[float, float], u, v, width: float) -> list[dict]:
+    """Door leaves from the swing arcs of the symbol: the arc's centre is the hinge, its radius the
+    leaf width, which face it sweeps to tells the swing. Small arcs (handles) are ignored."""
+    found: dict[int, dict] = {}
+    for p in sym.prims:
+        arc = p.meta.get("arc")
+        if not arc:
+            continue
+        cx, cy, r, span, (mx, my) = arc
+        if r < 0.3 * width or r > 1.3 * width + 0.1 or not (55.0 <= span <= 125.0):
+            continue
+        hu = (cx - centre[0]) * u[0] + (cy - centre[1]) * u[1]
+        if abs(hu) < 0.25 * width:  # the hinge sits at one end of the opening
+            continue
+        hinge = 1 if hu > 0 else -1
+        swing = 1 if ((mx - cx) * v[0] + (my - cy) * v[1]) > 0 else -1
+        if hinge not in found or r > found[hinge]["width"]:
+            found[hinge] = {"hinge": hinge, "width": r, "swing": swing}
+    return [found[k] for k in sorted(found)]
+
+
+def _dividers(sym: Symbol, centre: tuple[float, float], u, width: float, thickness: float) -> list[float]:
+    """Positions (along the wall, from the centre) of the lines that cut across the symbol: the two
+    outermost sets are the jambs, the others divide the opening into sashes. Lines closer than 10 cm
+    are one mark (a double line)."""
+    pos: list[float] = []
+    for p in sym.prims:
+        if p.meta.get("arc"):
+            continue
+        g = p.geom
+        coords = list(g.exterior.coords) if g.geom_type == "Polygon" else list(g.coords)
+        for (ax, ay), (bx, by) in zip(coords, coords[1:]):
+            dx, dy = bx - ax, by - ay
+            length = math.hypot(dx, dy)
+            # any mark across the wall counts, even a 3 cm connector between two sliding panels
+            if length < MIN_DIVIDER or abs(dx * u[0] + dy * u[1]) > 0.1 * length:
+                continue
+            pos.append(((ax + bx) / 2 - centre[0]) * u[0] + ((ay + by) / 2 - centre[1]) * u[1])
+    pos.sort()
+    marks: list[list[float]] = []
+    for x in pos:
+        if marks and x - marks[-1][-1] <= 0.10:
+            marks[-1].append(x)
+        else:
+            marks.append([x])
+    centres = [sum(m) / len(m) for m in marks]
+    return [c for c in centres if abs(c) < width / 2 - 0.12]
 
 
 def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
@@ -203,18 +298,42 @@ def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
                 skipped += 1
                 continue
             ux, uy, a0, a1, s0, s1 = found
+            vx, vy = -uy, ux
             # centre c has u = (a0+a1)/2 and v = 0, so v offsets are absolute
             mid = (a0 + a1) / 2.0
-            cx, cy = mid * ux, mid * uy
-            margin = 0.002
-            cut = oriented_rect(cx, cy, ux, uy, a1 - a0, s0 - margin, s1 + margin)
-            fill = oriented_rect(cx, cy, ux, uy, a1 - a0 + 2 * OVERLAP, s0, s1)
-            glass = None
-            if kind == "window" and cfg.glass:
-                m, h = (s0 + s1) / 2.0, cfg.glass_thickness / 2.0
-                glass = oriented_rect(cx, cy, ux, uy, a1 - a0, m - h, m + h)
-            openings.append(Opening(kind, cut, fill, z0, z1, glass, axis=(ux, uy),
-                                    center=(cut.centroid.x, cut.centroid.y)))
+            width, thick = a1 - a0, s1 - s0
+            centre = (mid * ux + (s0 + s1) / 2.0 * vx, mid * uy + (s0 + s1) / 2.0 * vy)
+            op = Opening(kind, Polygon(), Polygon(), z0, z1, None, axis=(ux, uy), center=centre,
+                         width=width, thickness=thick, layer=sym.layer, block=sym.block or "")
+            op.rebuild(cfg)
+            op.src = {"width": "geometria", "height": "default", "sill": "default"}
+            if kind == "door":
+                op.leaves = _door_leaves(sym, centre, (ux, uy), (vx, vy), width)
+                if op.leaves:
+                    op.src["leaves"] = "arco"
+                else:
+                    op.leaves = [{"hinge": -1, "width": width, "swing": 1}]
+                    op.hinge = -1
+                    op.src["leaves"] = "default"
+                    op.notes.append("cerniera non deducibile (nessun arco di apertura nel simbolo): "
+                                    "assunta a sinistra; correggi con la tabella")
+            else:
+                op.dividers = _dividers(sym, centre, (ux, uy), width, thick)
+                op.src["sashes"] = "linee di taglio" if op.dividers else "nessuna linea di taglio: un'anta"
+                if width > 1.6 and not op.dividers:
+                    op.notes.append(f"anta unica larga {width:.2f} m (nessuna linea di taglio nel disegno): "
+                                    "se sono piu' ante indicalo nella tabella")
+            openings.append(op)
     if skipped:
         warnings.append(f"{skipped} porte/finestre non toccano nessun muro e sono state ignorate.")
+    assign_ids(openings)
     return openings
+
+
+def assign_ids(openings: list[Opening]) -> None:
+    """F01, F02 (windows), P01 (doors), V01 (passages): reading order, top to bottom then left to right."""
+    prefix = {"window": "F", "door": "P", "passage": "V"}
+    count = {"window": 0, "door": 0, "passage": 0}
+    for o in sorted(openings, key=lambda o: (-round(o.center[1], 1), o.center[0])):
+        count[o.kind] += 1
+        o.id = f"{prefix[o.kind]}{count[o.kind]:02d}"

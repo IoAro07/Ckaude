@@ -37,6 +37,8 @@ class ConversionReport:
     warnings: list[str] = field(default_factory=list)
     origin_offset: tuple[float, float] = (0.0, 0.0)  # metres added to the drawing coordinates
     json_path: Path | None = None
+    openings: list = field(default_factory=list)  # the Opening objects, with ids
+    mesh: object | None = None  # the final Mesh (for previews); not part of the printed summary
     elevations: list[dict] = field(default_factory=list)  # side, matched, total, zero source
     roof: dict | None = None  # pitch_deg, pitch_source, ridge_height, faces
 
@@ -156,4 +158,6 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         roof=roof_report,
         origin_offset=offset,
         json_path=json_path,
+        mesh=mesh,
+        openings=openings,
     )

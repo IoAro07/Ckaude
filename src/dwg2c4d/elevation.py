@@ -76,10 +76,10 @@ def read_elevation(items: list[Item], spec: tuple[float, ...], unit_scale: float
 
     symbols: list[Symbol] = []
     for kind in ("door", "window"):
-        for geom in _symbols(items, kind):
-            if geom.is_empty:
+        for sym in _symbols(items, kind):
+            if sym.geom.is_empty:
                 continue
-            x0, y0, x1, y1 = geom.bounds
+            x0, y0, x1, y1 = sym.geom.bounds
             symbols.append(Symbol(kind, x0, x1, y0, y1))
     # A window drawn as a frame plus an inner pane (nested rectangles) is one window: keep
     # the outermost shape.

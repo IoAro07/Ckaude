@@ -132,6 +132,7 @@ class Config:
     ceiling_thickness: float = 0.20
     glass: bool = True
     glass_thickness: float = 0.02
+    fixtures: str = "simple"  # simple: a thin pane per window | detailed: frames, sashes, leaves, handles
 
     # Input / output.
     units: str | None = None  # force drawing units: mm, cm, m, in, ft
@@ -175,6 +176,8 @@ class Config:
             raise ValueError(f"wall_mode deve essere uno di {WALL_MODES}")
         if self.units is not None and self.units not in UNIT_TO_METERS:
             raise ValueError(f"unita' del disegno non valida: {self.units!r}")
+        if self.fixtures not in ("simple", "detailed"):
+            raise ValueError("fixtures deve essere simple o detailed")
         if self.origin not in ("drawing", "center", "min"):
             raise ValueError("origin deve essere drawing, center o min")
         if self.out_units not in ("m", "cm", "mm"):

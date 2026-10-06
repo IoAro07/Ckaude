@@ -16,6 +16,9 @@ MATERIALS = {
     "Soffitto": ((0.95, 0.95, 0.95), 1.0),
     "Vetri": ((0.70, 0.85, 0.95), 0.3),
     "Tetto": ((0.62, 0.32, 0.24), 1.0),
+    "Telai": ((0.92, 0.92, 0.90), 1.0),
+    "Ante": ((0.55, 0.38, 0.22), 1.0),
+    "Maniglie": ((0.78, 0.78, 0.80), 1.0),
 }
 
 
@@ -63,7 +66,7 @@ def write_obj(mesh: Mesh, obj_path: str | Path, out_units: str = "m", mirror: bo
             f"newmtl {name}",
             f"Kd {r} {g} {b}",
             "Ka 0 0 0",
-            "Ks 0.05 0.05 0.05" if name != "Vetri" else "Ks 0.6 0.6 0.6",
+            "Ks 0.05 0.05 0.05" if name not in ("Vetri", "Maniglie") else "Ks 0.6 0.6 0.6",
             f"d {alpha}",
             "illum 2",
             "",

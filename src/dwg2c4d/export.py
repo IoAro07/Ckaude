@@ -18,6 +18,9 @@ GROUPS = {
     "Muri": ("Murature", "wall"),
     "Pilastri": ("Pilastri", "column"),
     "Vetri": ("Infissi", "glass"),
+    "Telai": ("Infissi", "frame"),
+    "Ante": ("Infissi", "door_leaf"),
+    "Maniglie": ("Infissi", "metal"),
     "Pavimento": ("Pavimenti", "floor"),
     "Soffitto": ("Soffitti", "ceiling"),
     "Tetto": ("Tetto", "roof"),
@@ -29,6 +32,9 @@ MATERIALS = {
     "floor": {"name": "Pavimento", "color": [0.60, 0.56, 0.52], "rough": 0.5},
     "ceiling": {"name": "Soffitto", "color": [0.95, 0.95, 0.95], "rough": 0.9},
     "roof": {"name": "Tetto", "color": [0.62, 0.32, 0.24], "rough": 0.7},
+    "frame": {"name": "Telaio", "color": [0.92, 0.92, 0.90], "rough": 0.45},
+    "door_leaf": {"name": "Anta porta", "color": [0.55, 0.38, 0.22], "rough": 0.5},
+    "metal": {"name": "Metallo", "color": [0.78, 0.78, 0.80], "rough": 0.25},
 }
 
 

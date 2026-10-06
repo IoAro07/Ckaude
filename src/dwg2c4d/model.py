@@ -10,6 +10,7 @@ from shapely.geometry.base import BaseGeometry
 
 from .config import Config
 from .geom import polygons_of, union
+from .fixtures import add_fixtures
 from .mesh import Mesh, Slab
 from .openings import Opening
 from .roof import Roof
@@ -68,14 +69,18 @@ def wall_slabs(walls: BaseGeometry, openings: list[Opening], height: float) -> l
 def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
     mesh = Mesh()
     walls = plan.solid_walls
-    mesh.add_extrusion("Muri", wall_slabs(walls, plan.openings, cfg.wall_height), bottom=False)
+    cutting = [o for o in plan.openings if o.keep]  # a dropped opening is closed with wall
+    mesh.add_extrusion("Muri", wall_slabs(walls, cutting, cfg.wall_height), bottom=False)
 
     if not plan.columns.is_empty:
         mesh.add_extrusion("Pilastri", [Slab(0.0, cfg.wall_height, plan.columns)], bottom=False)
 
-    glass = [o for o in plan.openings if o.glass is not None]
-    for o in glass:
-        mesh.add_extrusion("Vetri", [Slab(o.z0, o.z1, o.glass)], bottom=True)
+    if cfg.fixtures == "detailed":
+        add_fixtures(mesh, cutting, cfg)
+    else:
+        for o in cutting:
+            if o.glass is not None:
+                mesh.add_extrusion("Vetri", [Slab(o.z0, o.z1, o.glass)], bottom=True)
 
     if plan.roof is not None:
         mesh.add_roof_solid("Tetto", plan.roof, z_base=cfg.wall_height, thickness=cfg.roof_thickness)

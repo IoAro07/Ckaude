@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
@@ -24,6 +25,7 @@ class Prim:
 
     geom: BaseGeometry
     kind: str
+    meta: dict = field(default_factory=dict)  # e.g. {"arc": (cx, cy, r, span_deg, (mid_x, mid_y))}
 
 
 @dataclass
@@ -55,6 +57,23 @@ def guess_unit(span: float) -> str:
     return "mm"
 
 
+def _arc_info(pts) -> tuple | None:
+    """(cx, cy, r, span in degrees, mid point) of a flattened circular arc, from three of its points."""
+    if len(pts) < 3:
+        return None
+    (x1, y1), (x2, y2), (x3, y3) = pts[0], pts[len(pts) // 2], pts[-1]
+    d = 2 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
+    if abs(d) < 1e-12:
+        return None
+    ux = ((x1 ** 2 + y1 ** 2) * (y2 - y3) + (x2 ** 2 + y2 ** 2) * (y3 - y1) + (x3 ** 2 + y3 ** 2) * (y1 - y2)) / d
+    uy = ((x1 ** 2 + y1 ** 2) * (x3 - x2) + (x2 ** 2 + y2 ** 2) * (x1 - x3) + (x3 ** 2 + y3 ** 2) * (x2 - x1)) / d
+    r = math.hypot(x1 - ux, y1 - uy)
+    a1, a2, a3 = (math.atan2(y - uy, x - ux) for y, x in ((y1, x1), (y2, x2), (y3, x3)))
+    wrap = lambda a: (a + math.pi) % (2 * math.pi) - math.pi  # noqa: E731
+    span = abs(wrap(a2 - a1) + wrap(a3 - a2))
+    return ux, uy, r, math.degrees(span), (x2, y2)
+
+
 def _close_enough(a, b, tol=1e-9) -> bool:
     return abs(a[0] - b[0]) <= tol and abs(a[1] - b[1]) <= tol
 
@@ -74,7 +93,12 @@ def _entity_prims(e, dist: float) -> list[Prim]:
                 if poly.area > 0 or not poly.is_valid:
                     prims.append(Prim(fix(poly), "ring"))
                     continue
-            prims.append(Prim(LineString(pts), "line"))
+            meta = {}
+            if kind == "ARC":
+                arc = _arc_info(pts)
+                if arc:
+                    meta["arc"] = arc
+            prims.append(Prim(LineString(pts), "line", meta))
     elif kind == "HATCH":
         loops = []
         for sub in ezpath.from_hatch(e):
@@ -229,6 +253,10 @@ def read_items(doc: Drawing, cfg: Config, area=_ALL, ignore_veto: bool = False,
             continue
         for p in it.prims:
             p.geom = affinity.scale(p.geom, scale, scale, origin=(0, 0))
+            arc = p.meta.get("arc")
+            if arc:
+                cx, cy, r, span, (mx, my) = arc
+                p.meta["arc"] = (cx * scale, cy * scale, r * scale, span, (mx * scale, my * scale))
         kept.append(it)
 
     if reader.wall_layer_blocks:

@@ -111,6 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--spessore-pavimento", type=float)
     g.add_argument("--soffitto", action="store_true", help="aggiunge un solaio sopra i muri")
     g.add_argument("--no-vetri", action="store_true", help="non crea i vetri delle finestre")
+    g.add_argument("--infissi", choices=["dettagliati", "semplici"], default="dettagliati",
+                   help="dettagliati (default): imbotto, cornice, telai, ante, maniglie, toppe; "
+                        "semplici: solo una lastra di vetro per finestra")
 
     g = p.add_argument_group("disegno e output")
     g.add_argument("--unita", choices=sorted(UNIT_TO_METERS),
@@ -163,6 +166,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.ceiling = True
     if args.no_vetri:
         cfg.glass = False
+    cfg.fixtures = "detailed" if args.infissi == "dettagliati" else "simple"
     if args.includi_nascosti:
         cfg.include_hidden = True
     if args.muri_da_blocchi:
