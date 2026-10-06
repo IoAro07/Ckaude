@@ -112,10 +112,14 @@ class LayerRules:
         return self.classify_layer(layer, ignore_veto)
 
 
+DEFAULT_WALL_HEIGHT = 2.70
+
+
 @dataclass
 class Config:
-    # Heights, in metres.
-    wall_height: float = 2.70
+    # Heights, in metres. ``wall_height_auto``: take the wall height from the "h 300" texts written
+    # in the rooms, unless a wall height was given (it turns itself off then).
+    wall_height: float = DEFAULT_WALL_HEIGHT
     door_height: float = 2.10
     window_sill: float = 0.90
     window_height: float = 1.30
@@ -132,6 +136,9 @@ class Config:
     ceiling_thickness: float = 0.20
     glass: bool = True
     glass_thickness: float = 0.02
+    texts: bool = True  # read sizes, sills, room names and heights from the written texts
+    label_radius: float = 1.2  # metres: how far from an opening its written size may be
+    wall_height_auto: bool = True
     fixtures: str = "simple"  # simple: a thin pane per window | detailed: frames, sashes, leaves, handles
 
     # Input / output.
@@ -163,11 +170,15 @@ class Config:
 
     layers: LayerRules = field(default_factory=LayerRules)
 
+    def __post_init__(self) -> None:
+        if self.wall_height != DEFAULT_WALL_HEIGHT:
+            self.wall_height_auto = False  # an explicit height beats the written ones
+
     def validate(self) -> None:
         numbers = [getattr(self, n) for n in (
             "wall_height", "door_height", "window_sill", "window_height", "wall_thickness",
             "max_wall_thickness", "floor_thickness", "ceiling_thickness", "glass_thickness",
-            "roof_thickness", "roof_default_pitch")]
+            "roof_thickness", "roof_default_pitch", "label_radius")]
         numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset) if box_ for v in box_]
         numbers += [v for ev in self.elevations for v in ev]
         if self.roof_pitch is not None:
@@ -188,6 +199,8 @@ class Config:
                      "max_wall_thickness", "glass_thickness"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} deve essere positivo")
+        if self.label_radius <= 0:
+            raise ValueError("label_radius deve essere positivo")
         if self.window_sill < 0 or self.floor_thickness < 0:
             raise ValueError("davanzale e spessore pavimento non possono essere negativi")
         for name, box_ in (("area", self.area), ("roof_area", self.roof_area)):

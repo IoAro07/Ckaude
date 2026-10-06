@@ -127,6 +127,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--json-c4d", action="store_true",
                    help="scrivi anche NOME_model.json, da importare con uno script in Cinema 4D "
                         "(oggetti nativi, un materiale per tipo, anche Corona)")
+    g.add_argument("--no-scritte", action="store_true",
+                   help="non leggere i testi del disegno (quote delle aperture, nomi e altezze dei locali)")
+    g.add_argument("--raggio-scritte", type=float, metavar="M",
+                   help="distanza massima tra un'apertura e la sua quota scritta, in metri (default 1,2)")
     g.add_argument("--tabella", metavar="FILE.csv",
                    help="applica la tabella delle aperture corretta a mano (colonne MODIFICA_*), "
                         "scritta da una conversione precedente come NOME_aperture.csv")
@@ -181,6 +185,12 @@ def config_from_args(args: argparse.Namespace) -> Config:
     cfg.origin = {"centro": "center", "minimo": "min", "disegno": "drawing"}[args.origine]
     if args.json_c4d:
         cfg.c4d_json = True
+    if args.no_scritte:
+        cfg.texts = False
+    if args.raggio_scritte is not None:
+        cfg.label_radius = args.raggio_scritte
+    if args.altezza_muri is not None:
+        cfg.wall_height_auto = False
     if args.tabella:
         cfg.table_in = args.tabella
     if args.no_tabella:
@@ -235,6 +245,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Ingombro muri      : {w:.2f} x {h:.2f} m")
     print(f"  Muri               : {report.wall_pieces} corpi, {report.wall_area_m2:.1f} m2 in pianta")
     print(f"  Porte / finestre   : {report.doors} / {report.windows}")
+    src = {"scritta": "dalla scritta 'h' nei locali", "indicata": "indicata", "predefinita": "predefinita"}
+    print(f"  Altezza muri       : {report.wall_height:g} m ({src[report.wall_height_source]})")
+    if report.labels:
+        print(f"  Scritte            : quote lette per {report.labels} aperture su {report.doors + report.windows}")
+    for room in report.rooms:
+        h = f", h {room['height']:g} m" if room["height"] else ""
+        mark = "" if room["named"] else "  (senza nome)"
+        print(f"  Locale             : {room['name']}  {room['area_m2']:.1f} m2{h}{mark}")
     for ev in report.elevations:
         side = {"south": "sud", "north": "nord"}[ev["side"]]
         src = "dal fondo della porta" if ev["zero_source"] == "porta" else "indicata"

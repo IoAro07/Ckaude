@@ -20,6 +20,8 @@ from .reader import read_items
 from .roof import build_roof, ridge_hints_from
 from .walls import build_columns, build_walls
 from .table import apply_table, read_table, write_table
+from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
+from .texts import read_words
 
 
 @dataclass
@@ -39,6 +41,10 @@ class ConversionReport:
     origin_offset: tuple[float, float] = (0.0, 0.0)  # metres added to the drawing coordinates
     json_path: Path | None = None
     table_path: Path | None = None  # the openings table written next to the model
+    rooms: list[dict] = field(default_factory=list)  # name, area_m2, height (m or None)
+    labels: int = 0  # openings whose size/sill was read from a written text
+    wall_height: float = 0.0
+    wall_height_source: str = "predefinita"  # predefinita | indicata | scritta
     openings: list = field(default_factory=list)  # the Opening objects, with ids
     mesh: object | None = None  # the final Mesh (for previews); not part of the printed summary
     elevations: list[dict] = field(default_factory=list)  # side, matched, total, zero source
@@ -107,6 +113,20 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     plan = Plan(walls=walls, columns=columns, openings=openings, merge_tolerance=cfg.merge_tolerance)
     solid = plan.solid_walls
 
+    words, rooms = [], []
+    text_unit = 0.01
+    wall_height_source = "indicata" if not cfg.wall_height_auto else "predefinita"
+    if cfg.texts:
+        words = read_words(doc, cfg, result.unit_scale)
+        text_unit = text_scale(words)
+        rooms = find_rooms(solid, words, text_unit, warnings)
+        written = wall_height_from_rooms(rooms, warnings)
+        if written is not None and cfg.wall_height_auto:
+            cfg = replace(cfg, wall_height=written, wall_height_auto=False)
+            wall_height_source = "scritta"
+            for o in openings:
+                o.z1 = min(o.z1, cfg.wall_height)
+
     elevations = []
     elevation_report: list[dict] = []
     for i, spec in enumerate(cfg.elevations):
@@ -119,6 +139,8 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         matched, total = apply_elevation(ev, openings, solid, cfg, warnings)
         elevation_report.append({"side": ev.side, "matched": matched, "total": total,
                                  "zero_source": ev.zero_source})
+
+    labels = apply_labels(openings, words, cfg, text_unit, solid.bounds, warnings) if words else 0
 
     if cfg.table_in:
         rows = read_table(cfg.table_in)
@@ -175,6 +197,10 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         origin_offset=offset,
         json_path=json_path,
         table_path=table_path,
+        rooms=[{"name": r.name, "area_m2": r.area, "height": r.height, "named": r.named} for r in rooms],
+        labels=labels,
+        wall_height=cfg.wall_height,
+        wall_height_source=wall_height_source,
         mesh=mesh,
         openings=openings,
     )

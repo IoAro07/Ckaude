@@ -225,7 +225,30 @@ dwg2c4d pianta.dwg --tabella pianta_aperture.csv
 Le sigle seguono l'ordine di lettura: se cambi le opzioni (area, layer) possono cambiare. Una riga con sigla
 inesistente o con un valore non valido viene segnalata e ignorata; il file in ingresso non viene mai
 sovrascritto (la nuova tabella si chiama `NOME_aperture_nuova.csv` se il nome coincide). `--no-tabella` non la scrive.
-Ordine di priorità per le misure: **tabella > prospetto > simbolo > valori predefiniti**.
+Ordine di priorità per le quote: **tabella > scritta > prospetto > valori predefiniti** (la posizione e la
+larghezza restano quelle del simbolo disegnato).
+
+## Scritte del disegno: quote, nomi dei locali, altezze
+
+I testi (TEXT, MTEXT, attributi dei blocchi, multileader) vengono letti e collegati alla pianta; `--no-scritte` li ignora.
+
+| Scritta | Cosa ne ricavo |
+|---|---|
+| `120x150`, `120 x 150`, `L120 H150`, oppure due righe `120` sopra `150` | **larghezza x altezza** dell'apertura più vicina |
+| `120x150x90` | come sopra, il terzo numero è il **davanzale** |
+| `ht 100`, `h 100`, `dav 100` accanto all'apertura | **davanzale** (altezza da terra) |
+| nome vicino a "h 300" dentro un locale (`SOGGIORNO` / `h 300`) | **altezza dei muri** 3,00 m (con altezze diverse vale la maggiore, con avviso) |
+| `SOGGIORNO`, `CAMERA DA LETTO`, `BAGNO`... dentro uno spazio chiuso dai muri | **nome del locale** (ortografia corretta se somiglia a un locale noto) |
+
+* I numeri sono **centimetri**, a meno che siano chiaramente millimetri (migliaia) o metri (< 12).
+* Una scritta è collegata all'apertura più vicina entro `--raggio-scritte` (default 1,2 m); se il numero della
+  larghezza non coincide con quella del simbolo vale solo se la scritta è proprio accanto (< 0,6 m), e nelle
+  note dell'apertura compare l'avviso. La larghezza e la posizione restano quelle del disegno.
+* Una finestra alta 2 m o più senza davanzale scritto parte da terra (porta-finestra).
+* Una quota scritta che non trova nessuna apertura (porta senza simbolo? troppo lontana?) viene segnalata.
+* `--altezza-muri` esplicito batte la scritta `h`. Le scritte lette sono anche nella colonna `scritta` della tabella.
+* Ogni locale chiuso dai muri è elencato nel riepilogo, con area, nome e altezza. Se i tramezzi non si chiudono
+  (un varco senza porta) i locali si fondono in uno solo con tutti i nomi.
 
 ## Importare in Cinema 4D
 
@@ -276,6 +299,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--altezza-muri`, `--altezza-porte`, `--davanzale`, `--altezza-finestre` | quote in metri |
 | `--no-pavimento`, `--spessore-pavimento`, `--soffitto`, `--no-vetri` | elementi aggiuntivi |
 | `--infissi` | `dettagliati` (default: telai, ante, maniglie, toppe) o `semplici` (solo vetro) |
+| `--no-scritte`, `--raggio-scritte` | non leggere i testi / distanza massima tra apertura e quota scritta (m) |
 | `--tabella`, `--no-tabella` | applica la tabella delle aperture corretta a mano / non scrivere `NOME_aperture.csv` |
 | `--unita` | unità del disegno: `mm`, `cm`, `m`, `in`, `ft` (default: lette dal file) |
 | `--unita-output` | unità dell'OBJ: `m` (default), `cm`, `mm` |

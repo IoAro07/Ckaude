@@ -17,7 +17,7 @@ from .openings import Opening
 
 COLUMNS = [
     "id", "tipo", "x", "y", "larghezza", "spessore_muro", "davanzale", "altezza", "ante", "cerniera",
-    "origine_misure", "origine_ante", "note",
+    "origine_misure", "origine_ante", "scritta", "note",
     "MODIFICA_tipo", "MODIFICA_larghezza", "MODIFICA_davanzale", "MODIFICA_altezza", "MODIFICA_ante",
     "MODIFICA_cerniera", "MODIFICA_tieni",
 ]
@@ -87,7 +87,7 @@ def write_table(path: str | Path, openings: list[Opening], unit_scale: float) ->
                 o.id, KIND_NAME[o.kind], _num(o.center[0] / unit_scale), _num(o.center[1] / unit_scale),
                 _num(o.width * 100), _num(o.thickness * 100), _num(o.z0 * 100), _num((o.z1 - o.z0) * 100),
                 ante, _hinge_cell(o), origin, src.get("leaves") or src.get("sashes") or "",
-                " | ".join(o.notes), "", "", "", "", "", "", "",
+                o.label, " | ".join(o.notes), "", "", "", "", "", "", "",
             ])
     return path
 
