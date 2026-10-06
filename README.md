@@ -240,6 +240,10 @@ I testi (TEXT, MTEXT, attributi dei blocchi, multileader) vengono letti e colleg
 | nome vicino a "h 300" dentro un locale (`SOGGIORNO` / `h 300`) | **altezza dei muri** 3,00 m (con altezze diverse vale la maggiore, con avviso) |
 | `SOGGIORNO`, `CAMERA DA LETTO`, `BAGNO`... dentro uno spazio chiuso dai muri | **nome del locale** (ortografia corretta se somiglia a un locale noto) |
 
+* **Testi esplosi**: se nel disegno le scritte sono state trasformate in linee (EXPLODE), le lettere vengono
+  riconosciute dalla loro forma (confronto con i caratteri di alcuni font senza grazie, solo numpy). Si cercano sul
+  layer `0` e su quelli chiamati quote/testi/scritte/note/...; altri layer con `--layer-testi "NOME*"`,
+  `--no-testi-esplosi` lo spegne. La lettura è buona su cifre e nomi comuni; i testi dubbi si correggono nella tabella.
 * I numeri sono **centimetri**, a meno che siano chiaramente millimetri (migliaia) o metri (< 12).
 * Una scritta è collegata all'apertura più vicina entro `--raggio-scritte` (default 1,2 m); se il numero della
   larghezza non coincide con quella del simbolo vale solo se la scritta è proprio accanto (< 0,6 m), e nelle
@@ -299,6 +303,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--altezza-muri`, `--altezza-porte`, `--davanzale`, `--altezza-finestre` | quote in metri |
 | `--no-pavimento`, `--spessore-pavimento`, `--soffitto`, `--no-vetri` | elementi aggiuntivi |
 | `--infissi` | `dettagliati` (default: telai, ante, maniglie, toppe) o `semplici` (solo vetro) |
+| `--no-testi-esplosi`, `--layer-testi` | non cercare / dove cercare le lettere disegnate con le linee |
 | `--no-scritte`, `--raggio-scritte` | non leggere i testi / distanza massima tra apertura e quota scritta (m) |
 | `--tabella`, `--no-tabella` | applica la tabella delle aperture corretta a mano / non scrivere `NOME_aperture.csv` |
 | `--unita` | unità del disegno: `mm`, `cm`, `m`, `in`, `ft` (default: lette dal file) |

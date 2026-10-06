@@ -129,6 +129,11 @@ def build_parser() -> argparse.ArgumentParser:
                         "(oggetti nativi, un materiale per tipo, anche Corona)")
     g.add_argument("--no-scritte", action="store_true",
                    help="non leggere i testi del disegno (quote delle aperture, nomi e altezze dei locali)")
+    g.add_argument("--no-testi-esplosi", action="store_true",
+                   help="non cercare testi trasformati in linee (lettere disegnate con le linee)")
+    g.add_argument("--layer-testi", metavar="LAYER", type=_globs,
+                   help="layer in cui cercare testi esplosi, oltre allo 0 e a quelli chiamati quote/testi/... "
+                        "(virgole, * jolly)")
     g.add_argument("--raggio-scritte", type=float, metavar="M",
                    help="distanza massima tra un'apertura e la sua quota scritta, in metri (default 1,2)")
     g.add_argument("--tabella", metavar="FILE.csv",
@@ -187,6 +192,10 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.c4d_json = True
     if args.no_scritte:
         cfg.texts = False
+    if args.no_testi_esplosi:
+        cfg.vector_text = False
+    if args.layer_testi:
+        cfg.text_layers = list(args.layer_testi)
     if args.raggio_scritte is not None:
         cfg.label_radius = args.raggio_scritte
     if args.altezza_muri is not None:

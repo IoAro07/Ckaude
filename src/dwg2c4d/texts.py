@@ -56,6 +56,7 @@ class RawText:
     height: float
     layer: str
     source: str = "text"
+    width: float = 0.0  # measured length along the text, when known (exploded texts); else estimated
 
     @property
     def text(self) -> str:
@@ -75,10 +76,11 @@ class Word:
     layer: str = ""
     used: bool = False
     members: list = field(default_factory=list)
+    width: float = 0.0
 
     @property
     def length(self) -> float:
-        return CHAR_WIDTH * self.height * max(len(self.text), 1)
+        return self.width or CHAR_WIDTH * self.height * max(len(self.text), 1)
 
     def dist(self, px: float, py: float) -> float:
         """Distance from a point to the written text, along its own direction (not just its centre)."""
@@ -236,7 +238,8 @@ def classify_texts(texts: list[RawText]) -> list[Word]:
             continue
         m = TAGNUM_RE.match(s)
         if m:
-            words.append(Word(s, rt.x, rt.y, rt.angle, h, "sill", _num(m.group(2)), m.group(1).lower(), rt.layer))
+            words.append(Word(s, rt.x, rt.y, rt.angle, h, "sill", _num(m.group(2)), m.group(1).lower(), rt.layer,
+                              width=rt.width))
             continue
         m = SIZE_RE.match(s) or LH_RE.match(s)
         if m:
@@ -244,18 +247,19 @@ def classify_texts(texts: list[RawText]) -> list[Word]:
                               layer=rt.layer))
             continue
         if TAGONLY_RE.match(s):
-            w = Word(s, rt.x, rt.y, rt.angle, h, "tag", None, s.lower(), rt.layer)
+            w = Word(s, rt.x, rt.y, rt.angle, h, "tag", None, s.lower(), rt.layer, width=rt.width)
             tags.append(w)
             words.append(w)
             continue
         if NUM_RE.match(s):
-            w = Word(s, rt.x, rt.y, rt.angle, h, "num", _num(s), layer=rt.layer)
+            w = Word(s, rt.x, rt.y, rt.angle, h, "num", _num(s), layer=rt.layer, width=rt.width)
             nums.append(w)
             words.append(w)
             continue
         kind = "name" if sum(c.isalpha() for c in s) >= 2 else "other"
-        words.append(Word(s, rt.x, rt.y, rt.angle, h, kind, layer=rt.layer))
+        words.append(Word(s, rt.x, rt.y, rt.angle, h, kind, layer=rt.layer, width=rt.width))
     _join_tags(tags, nums)
+    words += _stack_numbers(nums)
     return [w for w in words if not (w.kind == "num" and w.used)]
 
 
@@ -279,6 +283,35 @@ def _join_tags(tags: list[Word], nums: list[Word]) -> None:
             tg.text = f"{tg.text} {best.text}"
             tg.x, tg.y = (tg.x + best.x) / 2, (tg.y + best.y) / 2
             tg.members, best.used = [best], True
+
+
+def _stack_numbers(nums: list[Word]) -> list[Word]:
+    """Two numbers one above the other, as written beside an opening ("120" over "150"), are a size:
+    width over height, in the text's own reading direction."""
+    pairs = []
+    for i, a in enumerate(nums):
+        for b in nums[i + 1:]:
+            if a.used or b.used or abs(((a.angle - b.angle + 180) % 360) - 180) > 8:
+                continue
+            ang = math.radians(a.angle)
+            dx, dy = math.cos(ang), math.sin(ang)
+            vx, vy = b.x - a.x, b.y - a.y
+            along, down = vx * dx + vy * dy, -(vx * -dy + vy * dx)  # down: against the text's "up" (-sin, cos)
+            h = max(a.height, b.height)
+            if abs(a.height - b.height) > 0.4 * h or abs(along) > 0.6 * max(a.length, b.length):
+                continue
+            if 0.9 * h <= abs(down) <= 3.0 * h:
+                pairs.append((abs(down) + abs(along), a, b, down))
+    out = []
+    for _, a, b, down in sorted(pairs, key=lambda t: t[0]):
+        if a.used or b.used:
+            continue
+        top, bottom = (a, b) if down > 0 else (b, a)  # down > 0: b is below a
+        top.used = bottom.used = True
+        out.append(Word(f"{top.text} {bottom.text}", (a.x + b.x) / 2, (a.y + b.y) / 2, a.angle,
+                        max(a.height, b.height), "size", (top.value, bottom.value), layer=a.layer,
+                        width=max(a.length, b.length)))
+    return out
 
 
 def merge_name_words(words: list[Word]) -> list[Word]:
@@ -308,9 +341,11 @@ def merge_name_words(words: list[Word]) -> list[Word]:
             used.add(nxt[1])
             group.append(nxt[2])
             cur = nxt[2]
+        span = max(abs((g.x - group[0].x) * dx + (g.y - group[0].y) * dy) + g.length / 2 for g in group) \
+            + group[0].length / 2
         merged.append(Word(" ".join(g.text for g in group), sum(g.x for g in group) / len(group),
                            sum(g.y for g in group) / len(group), w.angle, w.height, "name",
-                           layer=w.layer, members=group))
+                           layer=w.layer, members=group, width=span if len(group) > 1 else group[0].width))
     return others + merged
 
 
@@ -324,7 +359,12 @@ def fix_room_name(text: str) -> tuple[str, bool]:
 
 
 def read_words(doc: Drawing, cfg: Config, scale: float) -> list[Word]:
-    words = merge_name_words(classify_texts(read_texts(doc, cfg, scale, cfg.area)))
+    texts = read_texts(doc, cfg, scale, cfg.area)
+    if cfg.vector_text:
+        from .vtext import read_exploded_texts  # numpy only, but not needed unless the drawing has them
+
+        texts += read_exploded_texts(doc, cfg, scale)
+    words = merge_name_words(classify_texts(texts))
     for w in words:
         if w.kind == "name":
             w.text, w.value = fix_room_name(w.text)

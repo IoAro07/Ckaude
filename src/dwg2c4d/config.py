@@ -137,6 +137,8 @@ class Config:
     glass: bool = True
     glass_thickness: float = 0.02
     texts: bool = True  # read sizes, sills, room names and heights from the written texts
+    vector_text: bool = True  # also read texts that were exploded into lines (letters drawn as lines)
+    text_layers: list[str] = field(default_factory=list)  # extra layers (globs) that may hold exploded texts
     label_radius: float = 1.2  # metres: how far from an opening its written size may be
     wall_height_auto: bool = True
     fixtures: str = "simple"  # simple: a thin pane per window | detailed: frames, sashes, leaves, handles
