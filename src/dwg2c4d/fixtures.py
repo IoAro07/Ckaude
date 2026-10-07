@@ -161,14 +161,17 @@ def _window(op: Opening, cfg: Config, parts: Parts) -> None:
 
 
 def build_fixtures(openings: list[Opening], cfg: Config) -> Parts:
+    """Parts by mesh group. With ``cfg.fixtures_per_opening`` the group is ``Telai_F01``: one object per
+    opening and part; otherwise ``Telai`` for all of them."""
     parts: Parts = {}
     for op in openings:
         if not op.keep or op.width < 0.2 or op.thickness < 0.02:
             continue
-        if op.kind == "window":
-            _window(op, cfg, parts)
-        else:
-            _door(op, cfg, parts)
+        mine: Parts = {}
+        (_window if op.kind == "window" else _door)(op, cfg, mine)
+        for group, boxes in mine.items():
+            key = f"{group}_{op.id}" if cfg.fixtures_per_opening and op.id else group
+            parts.setdefault(key, []).extend(boxes)
     return parts
 
 

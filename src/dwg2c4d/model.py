@@ -88,7 +88,8 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
     else:
         for o in cutting:
             if o.glass is not None:
-                mesh.add_extrusion("Vetri", [Slab(o.z0, o.z1, o.glass)], bottom=True)
+                group = f"Vetri_{o.id}" if cfg.fixtures_per_opening and o.id else "Vetri"
+                mesh.add_extrusion(group, [Slab(o.z0, o.z1, o.glass)], bottom=True)
 
     if plan.roof is not None:
         mesh.add_roof_solid("Tetto", plan.roof, z_base=cfg.wall_height, thickness=cfg.roof_thickness)

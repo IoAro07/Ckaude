@@ -215,6 +215,10 @@ Di default (`--infissi dettagliati`) ogni apertura diventa un oggetto riconoscib
   di traverso al muro (una linea = 2 ante, due = 3...; le doppie linee vicine contano una volta), un vetro e una
   maniglia per ogni anta, davanzale e cornice. Una porta-finestra (davanzale 0) è la stessa cosa senza soglia.
 * `--infissi semplici` dà solo la lastra di vetro (modello più leggero).
+* Da riga di comando ogni apertura è un gruppo a sé (`Infissi` > `F01` > `Telai_F01`, `Vetri_F01`, `Maniglie_F01`;
+  `Infissi` > `P01` > `Telai_P01`, `Ante_P01`...): puoi spostarla o cambiarne il materiale da sola. I materiali
+  restano uno per tipo (Telai, Ante, Vetri, Maniglie). `--infissi-uniti` riunisce le parti di tutte le aperture
+  in pochi oggetti.
 
 Ogni conversione scrive anche **`NOME_aperture.csv`** (separatore `;`, centimetri, virgola decimale: si apre
 con Excel): una riga per apertura, con sigla (`F01`, `P01`... in ordine di lettura, dall'alto a sinistra), tipo,
@@ -316,6 +320,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--spessore-max` | spessore massimo di un muro a doppia linea (0,60) |
 | `--altezza-muri`, `--altezza-porte`, `--davanzale`, `--altezza-finestre` | quote in metri |
 | `--no-pavimento`, `--spessore-pavimento`, `--soffitto`, `--no-vetri` | elementi aggiuntivi |
+| `--infissi-uniti` | un solo oggetto per tipo di parte (Telai, Ante...) invece di uno per apertura |
 | `--infissi` | `dettagliati` (default: telai, ante, maniglie, toppe) o `semplici` (solo vetro) |
 | `--no-testi-esplosi`, `--layer-testi` | non cercare / dove cercare le lettere disegnate con le linee |
 | `--pavimenti`, `--battiscopa` | layer dei pavimenti / dei battiscopa (virgole, `*` jolly) |

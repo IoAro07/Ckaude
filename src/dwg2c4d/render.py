@@ -122,17 +122,29 @@ def render(tris: np.ndarray, cols: np.ndarray, azimuth: float, elevation: float,
     return img
 
 
+def write_png(path: str | Path, rgb: np.ndarray) -> Path:
+    """Write an H x W x 3 float (0..1) or uint8 array as a PNG (numpy and zlib only)."""
+    import struct
+    import zlib
+
+    img = (np.clip(rgb, 0, 1) * 255 + 0.5).astype(np.uint8) if rgb.dtype != np.uint8 else rgb
+    h, w, _ = img.shape
+    raw = b"".join(b"\x00" + img[y].tobytes() for y in range(h))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+    path = Path(path)
+    path.write_bytes(png)
+    return path
+
+
 def save_views(mesh: Mesh, path: str | Path, views=((-60, 30), (-120, 30), (-90, 80)), size=(700, 520),
-               hide: tuple[str, ...] = (), clip=None, titles: bool = False) -> Path:
-    """Render several views side by side into one PNG (needs matplotlib)."""
-    import matplotlib
-
-    matplotlib.use("Agg")
-    from matplotlib import image as mpimg
-
+               hide: tuple[str, ...] = (), clip=None) -> Path:
+    """Render several views side by side into one PNG."""
     tris, cols = mesh_triangles(mesh, hide, clip)
     panels = [render(tris, cols, az, el, size) for az, el in views]
-    sheet = np.concatenate(panels, axis=1)
-    path = Path(path)
-    mpimg.imsave(str(path), sheet)
-    return path
+    return write_png(path, np.concatenate(panels, axis=1))

@@ -24,6 +24,16 @@ MATERIALS = {
 }
 
 
+SHARED = ("Telai", "Ante", "Vetri", "Maniglie")  # parts of every opening share one material
+
+
+def material_of(group: str) -> str:
+    """Material of a mesh group: the parts of each opening (Telai_F01...) share the base one; a floor
+    per room (Pavimento_Sala) keeps its own so each room can get another finish."""
+    base = group.split("_", 1)[0]
+    return base if base in SHARED else group
+
+
 def _fmt(v: float) -> str:
     s = f"{v:.6f}".rstrip("0").rstrip(".")
     return "0" if s in ("-0", "") else s
@@ -55,14 +65,14 @@ def write_obj(mesh: Mesh, obj_path: str | Path, out_units: str = "m", mirror: bo
     lines += ["v " + " ".join(_fmt(c) for c in pos(v)) for v in mesh.vertices]
     lines += ["vn " + " ".join(_fmt(c) for c in nrm(n)) for n in mesh.normals]
     for name, faces in mesh.groups.items():
-        lines += [f"o {name}", f"usemtl {name}", "s off"]
+        lines += [f"o {name}", f"usemtl {material_of(name)}", "s off"]
         for ids, ni in faces:
             order = ids[::-1] if mirror else ids
             lines.append("f " + " ".join(f"{i + 1}//{ni + 1}" for i in order))
     obj_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     mtl = ["# Generato da dwg2c4d"]
-    for name in mesh.groups:
+    for name in dict.fromkeys(material_of(g) for g in mesh.groups):
         (r, g, b), alpha = MATERIALS.get(name) or MATERIALS.get(name.split("_", 1)[0], ((0.8, 0.8, 0.8), 1.0))
         mtl += [
             f"newmtl {name}",

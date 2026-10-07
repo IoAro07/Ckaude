@@ -24,6 +24,7 @@ from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from
 from .texts import read_words
 from .passages import find_passages
 from .floors import layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
+from .qa import plan_overlay, preview_3d, write_report
 
 
 @dataclass
@@ -48,6 +49,12 @@ class ConversionReport:
     labels: int = 0  # openings whose size/sill was read from a written text
     wall_height: float = 0.0
     wall_height_source: str = "predefinita"  # predefinita | indicata | scritta
+    plan: object | None = None  # the Plan (walls, partitions, floors...): for the check picture
+    room_objects: list = field(default_factory=list)  # the Room objects (polygons)
+    preview_path: Path | None = None
+    overlay_path: Path | None = None
+    report_path: Path | None = None
+    images_note: str = ""  # why a picture was not made
     openings: list = field(default_factory=list)  # the Opening objects, with ids
     mesh: object | None = None  # the final Mesh (for previews); not part of the printed summary
     elevations: list[dict] = field(default_factory=list)  # side, matched, total, zero source
@@ -201,7 +208,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             table_path = output_path.with_name(output_path.stem + "_aperture_nuova.csv")  # never overwrite the input
         write_table(table_path, openings, result.unit_scale)
 
-    return ConversionReport(
+    report = ConversionReport(
         output=output_path,
         unit=result.unit,
         unit_guessed=result.unit_guessed,
@@ -226,4 +233,21 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         wall_height_source=wall_height_source,
         mesh=mesh,
         openings=openings,
+        plan=plan,
+        room_objects=rooms,
     )
+    created = [output_path.name, output_path.with_suffix(".mtl").name]
+    created += [p.name for p in (json_path, table_path) if p]
+    if cfg.images:
+        report.preview_path = preview_3d(mesh, output_path.with_name(output_path.stem + "_anteprima_3d.png"))
+        created.append(report.preview_path.name)
+        try:
+            report.overlay_path = plan_overlay(report, output_path.with_name(output_path.stem + "_controllo_pianta.png"))
+            created.append(report.overlay_path.name)
+        except ImportError:
+            report.images_note = "pianta di controllo non creata: serve matplotlib (pip install matplotlib)"
+        except Exception as exc:  # a picture must never stop the conversion
+            report.images_note = f"pianta di controllo non creata: {exc}"
+    report.report_path = write_report(report, output_path.with_name(output_path.stem + "_report.txt"),
+                                      created + [output_path.stem + "_report.txt"])
+    return report

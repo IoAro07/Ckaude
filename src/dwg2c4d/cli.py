@@ -8,6 +8,7 @@ import sys
 from . import __version__
 from .config import UNIT_TO_METERS, Config, LayerRules
 from .dwgfile import ConversionError, open_drawing
+from .qa import summary_lines
 from .pipeline import convert
 from .reader import declared_units, layer_summary
 
@@ -114,6 +115,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--spessore-pavimento", type=float)
     g.add_argument("--soffitto", action="store_true", help="aggiunge un solaio sopra i muri")
     g.add_argument("--no-vetri", action="store_true", help="non crea i vetri delle finestre")
+    g.add_argument("--infissi-uniti", action="store_true",
+                   help="le parti di tutti gli infissi in pochi oggetti (Telai, Ante, Vetri, Maniglie) invece di "
+                        "un oggetto per ogni F01, P01...")
     g.add_argument("--infissi", choices=["dettagliati", "semplici"], default="dettagliati",
                    help="dettagliati (default): imbotto, cornice, telai, ante, maniglie, toppe; "
                         "semplici: solo una lastra di vetro per finestra")
@@ -150,6 +154,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--tabella", metavar="FILE.csv",
                    help="applica la tabella delle aperture corretta a mano (colonne MODIFICA_*), "
                         "scritta da una conversione precedente come NOME_aperture.csv")
+    g.add_argument("--no-immagini", action="store_true",
+                   help="non scrive NOME_controllo_pianta.png e NOME_anteprima_3d.png")
     g.add_argument("--no-tabella", action="store_true",
                    help="non scrive NOME_aperture.csv")
     g.add_argument("--specchia", action="store_true",
@@ -222,6 +228,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.wall_height_auto = False
     if args.tabella:
         cfg.table_in = args.tabella
+    cfg.images = not args.no_immagini
+    cfg.fixtures_per_opening = not args.infissi_uniti
     if args.no_tabella:
         cfg.write_table = False
     return cfg
@@ -259,49 +267,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Errore: {exc}", file=sys.stderr)
         return 1
 
-    w, h = report.size_m
     print(f"Creato {report.output}  (+ {report.output.with_suffix('.mtl').name})")
     if report.json_path:
         print(f"Creato {report.json_path}  (per lo script di importazione di Cinema 4D)")
     if report.table_path:
         print(f"Creato {report.table_path}  (tabella delle aperture: correggi le colonne MODIFICA_* "
               f"e rilancia con --tabella)")
-    note = " (dedotte: verifica!)" if report.unit_guessed else ""
-    print(f"  Unita' del disegno : {report.unit}{note}")
-    if report.origin_offset != (0.0, 0.0):
-        print(f"  Origine            : modello spostato di ({report.origin_offset[0]:.2f}, "
-              f"{report.origin_offset[1]:.2f}) m rispetto al disegno")
-    print(f"  Ingombro muri      : {w:.2f} x {h:.2f} m")
-    print(f"  Muri               : {report.wall_pieces} corpi, {report.wall_area_m2:.1f} m2 in pianta")
-    print(f"  Porte / finestre   : {report.doors} / {report.windows}")
-    if report.passages:
-        print(f"  Vani senza simbolo : {report.passages} (dedotti dai muri: verifica nella tabella)")
-    src = {"scritta": "dalla scritta 'h' nei locali", "indicata": "indicata", "predefinita": "predefinita"}
-    print(f"  Altezza muri       : {report.wall_height:g} m ({src[report.wall_height_source]})")
-    if report.labels:
-        print(f"  Scritte            : quote lette per {report.labels} aperture su {report.doors + report.windows}")
-    for room in report.rooms:
-        h = f", h {room['height']:g} m" if room["height"] else ""
-        mark = "" if room["named"] else "  (senza nome)"
-        print(f"  Locale             : {room['name']}  {room['area_m2']:.1f} m2{h}{mark}")
-    for ev in report.elevations:
-        side = {"south": "sud", "north": "nord"}[ev["side"]]
-        src = "dal fondo della porta" if ev["zero_source"] == "porta" else "indicata"
-        print(f"  Prospetto {side:<5}    : {ev['matched']} di {ev['total']} aperture con le quote del prospetto "
-              f"(quota zero {src})")
-    if report.roof:
-        r = report.roof
-        src = {"indicata": "indicata", "prospetto": "dedotta dal prospetto",
-               "predefinita": "predefinita"}[r["pitch_source"]]
-        lo, hi = r["pitch_range"]
-        slope = f"{r['pitch_deg']:.0f}" if hi - lo < 1.0 else f"{lo:.0f}-{hi:.0f}"
-        print(f"  Tetto              : {r['faces']} falde, pendenza {slope} gradi ({src}), "
-              f"colmo a {r['ridge_height']:.2f} m")
-    if report.columns:
-        print(f"  Pilastri           : {report.columns}")
-    print(f"  Facce / oggetti    : {report.faces} / {', '.join(report.groups)}")
-    for msg in report.warnings:
-        print(f"  ATTENZIONE: {msg}")
+    for path, what in ((report.overlay_path, "pianta con le aperture riconosciute: controllala"),
+                       (report.preview_path, "anteprima 3D"), (report.report_path, "riepilogo e note")):
+        if path:
+            print(f"Creato {path}  ({what})")
+    if report.images_note:
+        print(f"  ({report.images_note})")
+    for line in summary_lines(report):
+        print(line)
     return 0
 
 

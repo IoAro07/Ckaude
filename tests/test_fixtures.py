@@ -235,3 +235,63 @@ def test_rotated_plan_keeps_handles_on_the_same_side(tmp_path):
     b = convert(tmp_path / "rot.dxf", tmp_path / "r.obj", Config(area=(-2000, -2000, 2000, 2000), fixtures="detailed"))
     assert b.openings[0].leaves[0]["hinge"] == a.openings[0].leaves[0]["hinge"] == -1
     assert Obj(b.output).volume("Maniglie") == pytest.approx(Obj(a.output).volume("Maniglie"), rel=1e-3)
+
+
+# --- one object per opening ------------------------------------------------------------------
+
+def per_opening(tmp_path, **kw):
+    return run(door_plan(tmp_path, "left"), tmp_path, fixtures_per_opening=True, c4d_json=True, **kw)
+
+
+def test_parts_can_be_one_object_per_opening(tmp_path):
+    rep = per_opening(tmp_path)
+    obj = Obj(rep.output)
+    ids = [o.id for o in rep.openings]
+    assert "P01" in ids and {f"{part}_P01" for part in ("Telai", "Ante", "Maniglie")} <= set(obj.groups)
+    assert not {"Telai", "Ante", "Maniglie"} & set(obj.groups)
+
+
+def test_per_opening_objects_hold_the_same_geometry_as_the_merged_ones(tmp_path):
+    merged = Obj(run(door_plan(tmp_path, "left"), tmp_path).output)
+    split = Obj(per_opening(tmp_path).output)
+    for part in ("Telai", "Ante", "Maniglie"):
+        total = sum(split.volume(g) for g in split.groups if g.startswith(part + "_"))
+        assert total == pytest.approx(merged.volume(part), rel=1e-6)
+
+
+def test_parts_of_all_openings_share_one_material(tmp_path):
+    rep = per_opening(tmp_path)
+    text = rep.output.read_text()
+    mtl = rep.output.with_suffix(".mtl").read_text()
+    assert mtl.count("newmtl Telai") == 1 and "newmtl Telai_P01" not in mtl
+    assert "o Telai_P01\nusemtl Telai\n" in text
+
+
+def test_json_has_a_null_per_opening_inside_infissi(tmp_path):
+    import json
+
+    model = json.loads(per_opening(tmp_path).json_path.read_text())
+    nulls = {g["name"]: g["parent"] for g in model["groups"]}
+    assert nulls["Infissi"] == "o" and nulls["P01"] == "Infissi"  # the null of the model is named "o"
+    by_name = {o["name"]: o for o in model["objects"]}
+    assert by_name["Ante_P01"]["group"] == "P01" and by_name["Ante_P01"]["material"] == "door_leaf"
+    assert by_name["Telai_P01"]["material"] == "frame"
+    order = [g["name"] for g in model["groups"]]
+    assert order.index("Infissi") < order.index("P01")  # a parent comes before its children
+
+
+def test_simple_fixtures_name_the_glass_per_opening_too(tmp_path):
+    cfg = Config(area=PLAN_AREA, fixtures="simple", fixtures_per_opening=True)
+    rep = convert(window_plan(tmp_path, ()), tmp_path / "s.obj", cfg)
+    assert any(g.startswith("Vetri_F") for g in Obj(rep.output).groups)
+
+
+def test_the_command_line_defaults_to_per_opening_and_can_merge(tmp_path, capsys):
+    from dwg2c4d.cli import main
+
+    path = door_plan(tmp_path, "left")
+    area = "--area=" + ",".join(str(v) for v in PLAN_AREA)
+    assert main([str(path), "-o", str(tmp_path / "a.obj"), area, "--no-immagini"]) == 0
+    assert "Ante_P01" in Obj(tmp_path / "a.obj").groups
+    assert main([str(path), "-o", str(tmp_path / "b.obj"), area, "--no-immagini", "--infissi-uniti"]) == 0
+    assert "Ante" in Obj(tmp_path / "b.obj").groups and "Ante_P01" not in Obj(tmp_path / "b.obj").groups

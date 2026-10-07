@@ -27,6 +27,7 @@ GROUPS = {
     "Soffitto": ("Soffitti", "ceiling"),
     "Tetto": ("Tetto", "roof"),
 }
+FIXTURE_PARTS = ("Telai", "Ante", "Vetri", "Maniglie")
 MATERIALS = {
     "wall": {"name": "Muro", "color": [0.90, 0.89, 0.86], "rough": 0.85},
     "column": {"name": "Pilastro", "color": [0.78, 0.78, 0.78], "rough": 0.8},
@@ -47,10 +48,16 @@ def to_model_dict(mesh: Mesh, name: str, origin_offset: tuple[float, float] = (0
     recorded so the CAD position can be recovered."""
     groups, objects, used = [], [], set()
     for gname, faces in mesh.groups.items():
-        null, mat = GROUPS.get(gname) or GROUPS.get(gname.split("_", 1)[0], (gname, "wall"))
+        base, _, opening = gname.partition("_")
+        null, mat = GROUPS.get(gname) or GROUPS.get(base, (gname, "wall"))
         if null not in used:
             used.add(null)
             groups.append({"name": null, "label": null, "parent": name})
+        if opening and base in FIXTURE_PARTS:  # Telai_F01: under a null F01 inside Infissi
+            if opening not in used:
+                used.add(opening)
+                groups.append({"name": opening, "label": opening, "parent": null})
+            null = opening
         index: dict[int, int] = {}
         points: list[float] = []
         polys: list[int] = []

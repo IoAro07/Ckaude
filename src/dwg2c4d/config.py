@@ -154,6 +154,7 @@ class Config:
     text_layers: list[str] = field(default_factory=list)  # extra layers (globs) that may hold exploded texts
     label_radius: float = 1.2  # metres: how far from an opening its written size may be
     wall_height_auto: bool = True
+    fixtures_per_opening: bool = False  # parts of each door/window as objects of their own (Telai_F01...)
     fixtures: str = "simple"  # simple: a thin pane per window | detailed: frames, sashes, leaves, handles
 
     # Input / output.
@@ -163,6 +164,7 @@ class Config:
     include_hidden: bool = False
     origin: str = "drawing"  # where the model's zero is: drawing | center | min (of the walls)
     c4d_json: bool = False  # also write <name>_model.json for a Cinema 4D import script
+    images: bool = False  # write NAME_controllo_pianta.png and NAME_anteprima_3d.png (the command line turns it on)
     write_table: bool = True  # write <name>_aperture.csv: every door/window, editable by hand
     table_in: str | None = None  # an edited openings table to apply (MODIFICA_* columns)
     walls_from_blocks: bool = False  # read blocks inserted on wall layers as walls
