@@ -1,0 +1,243 @@
+# Come preparare il disegno (DWG/DXF) per ottenere il modello migliore
+
+Lo strumento funziona con quasi qualsiasi disegno, ma ogni scelta che fai in AutoCAD toglie un'ipotesi al programma.
+Questa guida dice **cosa disegnare, come chiamare i layer e dove mettere i prospetti**. Tutto ciò che qui è descritto
+è quello che il codice legge davvero; le cose che non legge sono elencate in fondo.
+
+Il principio: **un layer = una cosa**, nominato con le parole che il programma riconosce, disegnato **in scala 1:1**
+nelle unità giuste. Il resto (quote, nomi dei locali, altezze) lo puoi scrivere come testo vicino all'elemento.
+
+---
+
+## 1. Le dieci regole che contano di più
+
+1. **Un layer per ogni categoria**: muri, tramezzi, porte, finestre (o un solo layer `Infissi`), pilastri, tetto,
+   prospetti, testi. Mai un muro e un arredo sullo stesso layer.
+2. **Sul layer dei muri solo muri.** Muretti, bordi di piscina, pavimentazioni, siepi e cordoli diventano muri.
+3. **Disegna in scala 1:1** e imposta le unità del file (`UNITS` → centimetri o metri). Se le unità sono dichiarate
+   male il programma prova a correggerle e lo scrive, ma è un'ipotesi.
+4. **I muri devono chiudere i locali.** Se un muro ha un varco senza porta, i due locali si fondono in uno solo
+   (pavimenti, nomi e muri a metà spessore ne risentono). Un varco largo 0,5–2 m tra due testate di muro viene
+   riconosciuto come passaggio; più largo, o con un muro che lo incrocia, no: chiudilo o mettici un simbolo.
+5. **Porte con l'arco di rotazione** (il quarto di cerchio), finestre senza arco. L'arco dà il verso di apertura,
+   la cerniera e il numero di ante.
+6. **Il simbolo di porta/finestra deve toccare il muro** che apre. Se è staccato, l'apertura non viene creata.
+7. **Scrivi i nomi dei locali dentro i locali** (`SOGGIORNO`, `CAMERA`, `BAGNO`...) e l'altezza accanto: `h 300`.
+8. **Testi veri (TEXT/MTEXT), non esplosi.** I testi esplosi in linee si leggono per confronto di forma e possono
+   sbagliare (`1` per `l`). Se li hai già esplosi funziona lo stesso, ma controlla.
+9. **Prospetti nello stesso file, in proiezione sulla pianta** (vedi §5): sud sotto la pianta, nord sopra, con le
+   **stesse coordinate X**, e nella stessa scala.
+10. **Salva in DXF** (versione 2013 o successiva) se puoi: evita la conversione del DWG e qualunque dubbio sul
+    formato. Incorpora gli **xref** nel disegno: i riferimenti esterni non vengono letti.
+
+---
+
+## 2. Layer consigliati
+
+Il programma divide il nome del layer in parole (separatori: tutto ciò che non è una lettera) e cerca queste:
+
+| Layer consigliato | Contiene | Parole riconosciute (prefisso) |
+|---|---|---|
+| `P1_MURI` | muri perimetrali e portanti | `mur`, `paret`, `wall`, `tamponam` |
+| `P1_FONDELLI` | tramezzi sottili: diventano l'oggetto `Tramezzi`, con materiale a parte | `fondell`, `tramezz`, `partit`, `divisor` |
+| `P1_INFISSI` | porte **e** finestre insieme (le distingue dalla forma: arco = porta) | `infiss`, `serrament` |
+| `P1_PORTE` / `P1_FINESTRE` | porte e finestre separate (più sicuro: nessuna deduzione) | `porta`/`porte`/`door`, `finestr`/`window`/`glaz` |
+| `P1_PILASTRI` | pilastri e colonne (polilinee chiuse, campiture, cerchi) | `pilast`, `colonn`, `column` |
+| `P1_PAVIMENTI` | facoltativo: un poligono chiuso per ogni locale | `pavim`, `floor`, `solai` |
+| `P1_BATTISCOPA` | facoltativo: linee lungo le pareti | `battiscop`, `skirt`, `zoccol` |
+| `TETTO` | pianta del tetto: solo contorno, colmi, displuvi, compluvi | `tett`, `roof`, `copertur` |
+| `PROSPETTO_SUD`, `PROSPETTO_NORD` | prospetti (vedi §5) | `prospett`, `elevat`, `facciat` |
+| `QUOTE`, `TESTI`, `ARREDI`, `VERDE`, `SEZIONI` | tutto il resto: **ignorato** | — |
+
+Cose da sapere sui nomi:
+
+* Maiuscole e minuscole non contano; `MURI_PORTANTI` è un layer di muri (non di porte).
+* I layer chiamati `Prospetto…`, `Sezione…`, `Arredo…`, `Quote…`, `Testi`, `Tetto`, `Verde` **non vengono mai presi
+  per muri, porte o finestre**, nemmeno se dentro c'è la parola "parete" o un blocco `Porta Asciugamani`.
+* I layer **spenti o congelati vengono saltati**: è il modo più rapido per escludere dal modello ciò che non serve.
+* Se i tuoi nomi sono diversi (`A-MURI-ESTERNI`, `SERR_P`...) non è un problema: `elenca_layer.bat` mostra come li ha
+  letti e propone il resto; oppure li indichi con `--muri "A-MURI*" --porte "SERR_P" --finestre "SERR_F"`.
+* Se porte e finestre sono sullo stesso layer funziona, ma è l'unico caso in cui il programma **deduce** il tipo:
+  tienili separati se vuoi zero sorprese. Un blocco chiamato `PORTA90` o `FINESTRA120` viene riconosciuto su
+  qualunque layer.
+
+### Più piani
+
+Metti il numero del piano **all'inizio del nome, separato da `_`, `-`, `.` o spazio**: `P1_MURI`, `P2_MURI`,
+`PIANTA1_INFISSI`, `Piano 3 muri`. Si legge **un piano alla volta**: di default il più basso, con `--piano 2` un altro;
+ogni piano diventa un OBJ a sé, non vengono impilati. I layer senza numero (tetto, prospetti, testi) valgono per
+tutti. Attenzione: `pianta1muri` (senza separatore) non porta il numero del piano; scrivi `pianta1_muri`.
+
+---
+
+## 3. Come disegnare ogni elemento
+
+### Muri
+
+Tre modi, tutti accettati (`--modalita-muri auto` li riconosce da solo):
+
+* **Polilinee chiuse o campiture (HATCH/SOLID)**: il modo più affidabile. Il contorno esterno e quello interno di un
+  muro ad anello formano lo spessore.
+* **Due linee parallele** (LINE, polilinee aperte, archi): le testate aperte vengono chiuse da sole, i distacchi di
+  qualche millimetro ricuciti. Spessore massimo letto: 60 cm (`--spessore-max` per muri più spessi).
+* **Una linea sull'asse**: riceve uno spessore fisso (`--spessore-muro`, 30 cm). Va bene solo per prove veloci.
+
+Per avere **muri perimetrali divisi in metà esterna e metà interna** (due materiali) i muri devono racchiudere almeno
+un locale: serve un "dentro" da cui misurare. Senza locali chiusi resta un solo oggetto `Muri`.
+
+Pulizia consigliata prima di salvare: `OVERKILL` (linee duplicate/sovrapposte), `AUDIT`, `PURGE`. Linee doppie
+sovrapposte non danno errore ma sporcano i contorni.
+
+### Porte
+
+* **Simbolo con arco di rotazione**: il centro dell'arco è la cerniera, la maniglia va sul lato opposto, due archi =
+  porta a due ante. Senza arco la cerniera non si deduce: anta incernierata a sinistra, con una nota nella tabella.
+* **Blocco o linee sciolte** vanno bene entrambi. Un blocco chiamato `PORTA…` è riconosciuto sempre.
+* Il muro può essere **interrotto** nel punto della porta oppure **continuo** con il simbolo sopra: il programma gestisce
+  tutti e due (ricostruisce l'architrave e taglia solo la quota giusta).
+* Il **passaggio senza porta** (vano) si può anche non disegnare: vedi regola 4. Compare nella tabella come `V01`
+  e, se non c'è davvero, lo escludi con `MODIFICA_tieni = no`.
+
+### Finestre
+
+* Simbolo di finestra: rettangolo/linee sul muro. Le **linee che tagliano il simbolo di traverso al muro** sono le
+  divisioni tra le ante: una linea = 2 ante, due linee = 3 ante. Disegna quelle linee se vuoi il numero giusto di ante
+  (altrimenti l'anta è una).
+* Una finestra alta 2 m o più senza davanzale scritto parte da terra (portafinestra).
+* **Finestre sul loro layer**, mai sul layer dei muri: se le linee del serramento sono sul layer dei muri, il muro
+  viene spezzato lì e l'apertura non si riconosce.
+
+### Pavimenti, battiscopa
+
+Se non fai niente, ogni locale chiuso dai muri riceve il suo pavimento (esteso sotto le porte e fino alla faccia
+esterna dei muri perimetrali). Se vuoi il controllo, disegna sul layer `PAVIMENTI` **un poligono chiuso per
+locale**, con il nome del locale scritto dentro; un poligono dentro un altro lo scava (altra finitura, es. il piatto
+doccia). Per il battiscopa: una linea lungo il muro sul layer `BATTISCOPA` (alto 8 cm, si ferma alle porte).
+
+---
+
+## 4. Scritte: quote, nomi, altezze
+
+I testi sono letti da TEXT, MTEXT, attributi di blocco e multileader. Scrivili **vicino all'elemento** (entro 1,2 m)
+e in **centimetri**:
+
+| Scrittura | Significato |
+|---|---|
+| `120x150` o `120 x 150` o `L120 H150` | larghezza × altezza dell'apertura più vicina |
+| `120x150x90` | come sopra, il terzo numero è il davanzale |
+| due righe: `120` sopra `150` | larghezza e altezza |
+| `ht 100`, `h 100`, `dav 100` accanto a una finestra | davanzale (altezza da terra) |
+| `SOGGIORNO` dentro il locale + `h 300` accanto | nome del locale e **altezza dei muri** 3,00 m |
+
+* L'ordine di priorità delle quote è **tabella CSV > scritta > prospetto > valori predefiniti**.
+* La larghezza e la posizione di un'apertura restano sempre quelle del **simbolo disegnato**: la scritta non le sposta
+  (se non coincide lo dice nelle note).
+* Se scrivi `h 300` in locali diversi con valori diversi, tutti i muri prendono il maggiore (con avviso).
+* Numeri in centimetri; le migliaia sono lette come millimetri, i valori sotto 12 come metri.
+* Una scritta senza porta/finestra vicina viene segnalata (`Scritta ... non associata`): significa che manca
+  il simbolo o è oltre 1,2 m (`--raggio-scritte`).
+
+---
+
+## 5. Prospetti: dove metterli e come disegnarli
+
+Servono per le **altezze di porte e finestre** (davanzale, architrave) e per la **pendenza del tetto**. Se mancano, si
+usano i valori predefiniti o le scritte.
+
+**Posizione (regola fondamentale).** Il prospetto è letto solo se è disegnato **in proiezione sulla pianta**, come
+nelle tavole classiche:
+
+* **prospetto sud** (facciata in basso nella pianta) → **sotto** la pianta;
+* **prospetto nord** (facciata in alto nella pianta) → **sopra** la pianta;
+* in entrambi i casi con le **stesse coordinate X** della pianta e nella **stessa scala**: la finestra che nel prospetto
+  sta a x = 350 deve stare a x = 350 anche in pianta. Il programma abbina ogni simbolo del prospetto all'apertura della
+  pianta con lo stesso intervallo di X (la più esterna).
+* Non ruotarli e non specchiarli; non metterli di lato o in un'altra zona della tavola.
+
+**Come riconoscerli.** Metti tutto il prospetto su layer che iniziano con `Prospetto` (`PROSPETTO_SUD`, `prospetto1`…):
+li trova da soli. Devono contenere **porte e/o finestre riconoscibili** (blocchi `Porta…`/`Finestra…` o layer
+`Porte`/`Finestre`, anche dentro un layer `Prospetto…`): un prospetto interno (parete di cucina) senza aperture viene
+scartato di proposito. Se preferisci, indichi tu la zona con `--prospetto XMIN,YMIN,XMAX,YMAX[,QUOTA_Y]`.
+
+**Quota zero.** Il pavimento finito è il **fondo della porta più bassa** del prospetto: disegna almeno una porta (o
+indica la quota Y con il quinto valore di `--prospetto`). Se il prospetto non ha porte, la quota zero non si deduce.
+
+**Cosa disegnare dentro.** I simboli di porte e finestre come nella pianta (blocchi `Porta…`/`Finestra…` o linee sui
+layer `Porte`/`Finestre`; telaio e vetro annidati contano come uno solo) e, per il tetto, i **colmi come linee
+orizzontali** con la stessa estensione X dei colmi della pianta del tetto.
+
+**Quello che oggi non c'è.** I prospetti **est e ovest** (disposti a sinistra e a destra della pianta, con le stesse
+coordinate Y) **non vengono letti**: solo nord e sud. Se il tuo disegno li ha, il programma li ignora senza errore.
+Per una casa con aperture sulle quattro facciate, le finestre dei lati est/ovest prendono le scritte, la tabella o i
+valori predefiniti.
+
+---
+
+## 6. Il tetto
+
+Il tetto è **ricostruito dalla pianta del tetto**, non inventato: se la pianta è confusa, il tetto lo sarà.
+
+* Layer `TETTO` (o `COPERTURA`, `ROOF`). Dentro **solo**:
+  1. il **contorno di gronda** (polilinea chiusa o linee che chiudono),
+  2. i **colmi**,
+  3. i **displuvi e i compluvi** (linee diagonali).
+  Travi, quote, griglie o campiture su quel layer spezzano le falde.
+* **Posizione**: la pianta del tetto è centrata sul centro dei muri. Disegnala dove vuoi nel file (meglio staccata dalla
+  pianta, sul layer `TETTO`); se la gronda non è simmetrica rispetto ai muri, serve `--sposta-tetto DX,DY`. Se è
+  disegnata lontano indica `--area-tetto`.
+* **Pendenza**: viene dedotta dai **colmi orizzontali del prospetto** (stessa estensione X dei colmi in pianta): ogni
+  falda prende la sua. Senza prospetto vale `--pendenza GRADI` oppure 25°. Se le falde hanno pendenze diverse,
+  il prospetto è l'unico modo di dirlo.
+* **Gronda**: alla quota dei muri, senza sporgenza oltre il contorno interno; il tetto è un solido pieno (spessore
+  15 cm).
+* Non vengono generati abbaini, comignoli, lucernari.
+
+---
+
+## 7. Cosa non viene letto
+
+* Arredi, sanitari, scale, quote, tratteggi decorativi, verde: ignorati (e se sono blocchi sul layer dei muri,
+  scartati con un avviso).
+* Riferimenti esterni (xref).
+* Più piani nello stesso modello: un OBJ per piano.
+* Prospetti est/ovest, prospetti ruotati o disposti altrove.
+* Sezioni (vengono ignorate).
+* Blocchi dinamici o anonimi (`*U123`) come indizio per il tipo: usa layer o nomi di blocco chiari.
+
+---
+
+## 8. Come controllare il risultato (e correggerlo senza toccare il disegno)
+
+1. **`elenca_layer.bat`** (o `dwg2c4d file.dwg --elenca-layer`): mostra le unità dichiarate, come ogni layer è letto, i
+   piani trovati e le **proposte** per i layer che non conosce. Se un layer è letto male, lo correggi qui.
+2. **`converti.bat`**: scrive accanto al disegno:
+   * `*_controllo_pianta.png`: la pianta con i muri, le aperture (sigle F01, P01…), le scritte lette e i locali.
+     **Guardala prima di aprire Cinema 4D**: se un'apertura è nel posto sbagliato o manca, si vede qui;
+   * `*_anteprima_3d.png`: l'anteprima del modello;
+   * `*_report.txt`: riepilogo e **avvisi** (unità, aperture non abbinate, prospetti trovati, tetto, gruppi esclusi);
+   * `*_aperture.csv`: una riga per apertura con **l'origine di ogni misura** (simbolo, scritta, prospetto, predefinita);
+   * `*.obj/.mtl` e `*_model.json` (per lo script di Cinema 4D).
+3. **Correggere**: apri `*_aperture.csv` in Excel, compila le colonne `MODIFICA_*` (tipo, larghezza, davanzale,
+   altezza, ante, cerniera, `tieni = no`) e rilancia con `--tabella file_aperture.csv`.
+4. Domande da farsi leggendo il report:
+   * "Ingombro muri" è plausibile (metri)? Altrimenti unità sbagliate.
+   * Quanti locali ha trovato? Se sono meno del previsto, un muro ha un varco.
+   * Quante aperture e di che tipo? Una finestra scambiata per porta dice che il layer misto è stato dedotto male.
+   * "Prospetto sud: N di M aperture"? Se M ≠ N, le X di prospetto e pianta non coincidono.
+
+---
+
+## 9. Lista di controllo prima di salvare
+
+- [ ] Layer separati (muri, tramezzi, infissi o porte+finestre, pilastri, tetto, prospetti, testi)
+- [ ] Layer con parole riconoscibili e numero del piano a inizio nome (`P1_`)
+- [ ] Solo muri sul layer dei muri; arredi su layer propri o spenti
+- [ ] Disegno 1:1, unità impostate (`UNITS`)
+- [ ] Muri che chiudono i locali; passaggi larghi 0,5–2 m o con simbolo
+- [ ] Porte con l'arco; finestre con le linee di divisione ante; simboli a contatto con il muro
+- [ ] Nome del locale e `h 300` scritti dentro ogni locale
+- [ ] Quote delle aperture scritte vicino (`120x150`, `ht 100`) — facoltative se c'è il prospetto
+- [ ] Prospetto sud sotto e nord sopra la pianta, stesse X, stessa scala, con almeno una porta
+- [ ] Pianta del tetto sul layer `TETTO`: solo contorno, colmi, displuvi, compluvi
+- [ ] Testi non esplosi; xref incorporati; `OVERKILL`/`PURGE` fatti
+- [ ] Salvato come DXF (2013 o successivo) oppure DWG con ODA File Converter / LibreDWG installato

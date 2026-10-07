@@ -122,6 +122,9 @@ dwg2c4d pianta.dwg -o casa.obj --muri "0" --unita cm --area 72400,48300,74600,49
 
 ## Prima di convertire: i layer
 
+> Per avere il miglior risultato possibile (layer, simboli, scritte, posizione dei prospetti, tetto, lista di
+> controllo) leggi **[GUIDA_DISEGNO.md](GUIDA_DISEGNO.md)**.
+
 Lo strumento capisce cosa è un muro dal **nome del layer**. Per vedere come vengono letti i tuoi:
 
 ```bash
