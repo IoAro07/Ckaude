@@ -39,8 +39,9 @@ def summary_lines(report) -> list[str]:
     for ev in report.elevations:
         side = {"south": "sud", "north": "nord"}[ev["side"]]
         zero = "dal fondo della porta" if ev["zero_source"] == "porta" else "indicata"
+        found = f", trovato da solo sul layer {ev['found_on']}" if ev.get("found_on") else ""
         out.append(f"  Prospetto {side:<5}    : {ev['matched']} di {ev['total']} aperture con le quote del "
-                   f"prospetto (quota zero {zero})")
+                   f"prospetto (quota zero {zero}{found})")
     if report.roof:
         r = report.roof
         how = {"indicata": "indicata", "prospetto": "dedotta dal prospetto", "predefinita": "predefinita"}

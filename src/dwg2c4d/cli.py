@@ -96,6 +96,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "di porte e finestre. Va disegnato sotto (facciata sud) o sopra (nord) la pianta, "
                         "con le stesse coordinate X. La quota zero e' il fondo della porta; per forzarla "
                         "indica come quinto valore la Y del pavimento finito")
+    g.add_argument("--no-prospetti-auto", action="store_true",
+                   help="non cercare da solo i prospetti dai layer chiamati 'Prospetto...' "
+                        "(vale solo se non indichi --prospetto)")
     g.add_argument("--tetto", action="store_true",
                    help="costruisci il tetto dalla pianta del tetto (layer Tetto/Roof/Copertura): "
                         "contorno + colmi/displuvi")
@@ -229,6 +232,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
     if args.tabella:
         cfg.table_in = args.tabella
     cfg.images = not args.no_immagini
+    if args.no_prospetti_auto:
+        cfg.elevations_auto = False
     cfg.fixtures_per_opening = not args.infissi_uniti
     if args.no_tabella:
         cfg.write_table = False

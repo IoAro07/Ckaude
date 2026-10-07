@@ -168,8 +168,12 @@ prese per intero, non tagliate.
 Di norma altezze di porte e finestre sono i valori predefiniti e il tetto non viene creato. Se nel file ci sono i
 **prospetti** e la **pianta del tetto** puoi usarli.
 
-**Altezze di porte e finestre dal prospetto**: `--prospetto XMIN,YMIN,XMAX,YMAX[,QUOTA_Y]`, uno per facciata
-(ripetibile). Condizioni:
+**Altezze di porte e finestre dal prospetto**: se nel file c'è un layer chiamato `Prospetto…` (`Prospetto Frontale`,
+`prospetto1`…) il prospetto viene **trovato da solo**: vale se sta tutto sotto o sopra la pianta, nella sua stessa
+fascia di X, e contiene porte o finestre (un prospetto interno, di una parete di cucina, non ne ha e viene lasciato).
+Il riepilogo dice dove l'ha trovato (`trovato da solo sul layer…`); `--no-prospetti-auto` lo spegne.
+Per indicare tu la zona: `--prospetto XMIN,YMIN,XMAX,YMAX[,QUOTA_Y]`, uno per facciata (ripetibile); così la ricerca
+automatica non parte. Condizioni:
 
 - il prospetto deve essere **in proiezione sulla pianta**: sotto di essa (facciata sud) o sopra (facciata nord), con
   le **stesse coordinate X**. Se è disposto altrove in tavola non funziona (lo strumento lo segnala);
@@ -338,6 +342,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--unita` | unità del disegno: `mm`, `cm`, `m`, `in`, `ft` (default: lette dal file) |
 | `--unita-output` | unità dell'OBJ: `m` (default), `cm`, `mm` |
 | `--area` | converti solo questa zona del disegno |
+| `--no-prospetti-auto` | non cercare i prospetti dai layer `Prospetto…` |
 | `--prospetto` | zona di un prospetto (ripetibile): altezze di porte e finestre; 5° valore opzionale = Y del pavimento finito |
 | `--tetto`, `--layer-tetto`, `--area-tetto` | costruisci il tetto dalla pianta del tetto |
 | `--pendenza`, `--spessore-tetto`, `--sposta-tetto` | pendenza (gradi), spessore (0,15 m), spostamento della pianta del tetto |

@@ -531,3 +531,69 @@ def test_two_volume_roof_solid_is_geometrically_closed(tmp_path):
     obj = Obj(rep.output)
     assert obj.volume("Tetto") > 0 and obj.winding_matches_normals("Tetto")
     assert obj.non_manifold_edges("Tetto") == 0
+
+
+# --- facade elevations found by their layer name ---------------------------------------------
+
+def outline(msp, area, layer):
+    """The facade outline on its own layer: what the program can find without being told where."""
+    x0, y0, x1, y1 = area[:4]
+    msp.add_lwpolyline([(x0 + 100, y0 + 100), (x1 - 100, y0 + 100), (x1 - 100, y1 - 100), (x0 + 100, y1 - 100)],
+                       close=True, dxfattribs={"layer": layer})
+
+
+def test_a_prospetto_layer_below_the_plan_is_found_without_coordinates(tmp_path):
+    doc, msp = building()
+    area = south_elevation(msp, ground_y=-2000, door_h=200, sill=100, win_h=140)
+    outline(msp, area, "Prospetto Sud")
+    rep = run(tmp_path, doc)  # no Config(elevations=...)
+    assert rep.elevations == [{"side": "south", "matched": 2, "total": 2, "zero_source": "porta",
+                               "found_on": "Prospetto Sud"}]
+    assert glass_heights(Obj(rep.output), 4.9, 6.3) == (pytest.approx(1.0), pytest.approx(2.4))
+
+
+def test_north_elevation_above_the_plan_too(tmp_path):
+    doc, msp = building()
+    ground = 2500
+    msp.add_lwpolyline([(300, ground + 110), (420, ground + 110), (420, ground + 240), (300, ground + 240)],
+                       close=True, dxfattribs={"layer": "FINESTRE"})
+    msp.add_lwpolyline([(0, ground), (W_ELEV, ground), (W_ELEV, ground + 800), (0, ground + 800)], close=True,
+                       dxfattribs={"layer": "Prospetto Nord"})
+    msp.add_lwpolyline([(100, ground), (200, ground), (200, ground + 210), (100, ground + 210)], close=True,
+                       dxfattribs={"layer": "PORTE"})
+    rep = run(tmp_path, doc)
+    assert [e["side"] for e in rep.elevations] == ["north"] and rep.elevations[0]["found_on"] == "Prospetto Nord"
+
+
+W_ELEV = 1000
+
+
+def test_an_interior_elevation_without_openings_is_not_a_facade(tmp_path):
+    doc, msp = building()
+    msp.add_lwpolyline([(300, -900), (700, -900), (700, -600), (300, -600)], close=True,
+                       dxfattribs={"layer": "Prospetto Cucina"})  # a kitchen wall: no doors or windows
+    rep = run(tmp_path, doc)
+    assert rep.elevations == []
+
+
+def test_a_zone_beside_the_plan_is_not_a_facade(tmp_path):
+    doc, msp = building()
+    msp.add_lwpolyline([(1500, 100), (2500, 100), (2500, 500), (1500, 500)], close=True,
+                       dxfattribs={"layer": "Prospetto Est"})
+    msp.add_lwpolyline([(1600, 100), (1700, 100), (1700, 300), (1600, 300)], close=True, dxfattribs={"layer": "PORTE"})
+    assert run(tmp_path, doc).elevations == []
+
+
+def test_explicit_elevations_win_over_the_search(tmp_path):
+    doc, msp = building()
+    area = south_elevation(msp, ground_y=-2000, door_h=200, sill=100, win_h=140)
+    outline(msp, area, "Prospetto Sud")
+    rep = run(tmp_path, doc, Config(elevations=[area]))
+    assert "found_on" not in rep.elevations[0]
+
+
+def test_the_search_can_be_switched_off(tmp_path):
+    doc, msp = building()
+    area = south_elevation(msp, ground_y=-2000, door_h=200, sill=100, win_h=140)
+    outline(msp, area, "Prospetto Sud")
+    assert run(tmp_path, doc, Config(elevations_auto=False)).elevations == []

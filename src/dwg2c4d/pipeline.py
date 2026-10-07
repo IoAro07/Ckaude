@@ -9,7 +9,7 @@ from pathlib import Path
 from shapely.geometry.base import BaseGeometry
 
 from .config import UNIT_TO_METERS, Config
-from .elevation import apply_elevation, read_elevation
+from .elevation import apply_elevation, find_elevation_zones, read_elevation
 from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
@@ -144,7 +144,12 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
 
     elevations = []
     elevation_report: list[dict] = []
-    for i, spec in enumerate(cfg.elevations):
+    specs = [(spec, "") for spec in cfg.elevations]
+    if not specs and cfg.elevations_auto:
+        everything = read_items(doc, cfg, area=None, ignore_veto=True, keep_other=True, unit=result.unit)
+        specs = [(zone, layers) for layers, zone in find_elevation_zones(everything.items, solid.bounds,
+                                                                      result.unit_scale)]
+    for i, (spec, found_on) in enumerate(specs):
         er = read_items(doc, cfg, area=tuple(spec[:4]), ignore_veto=True, keep_other=True,
                         unit=result.unit)
         ev = read_elevation(er.items, spec, result.unit_scale, solid.bounds, warnings, i)
@@ -153,7 +158,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         elevations.append(ev)
         matched, total = apply_elevation(ev, openings, solid, cfg, warnings)
         elevation_report.append({"side": ev.side, "matched": matched, "total": total,
-                                 "zero_source": ev.zero_source})
+                                 "zero_source": ev.zero_source, **({"found_on": found_on} if found_on else {})})
 
     labels = apply_labels(openings, words, cfg, text_unit, solid.bounds, warnings) if words else 0
 

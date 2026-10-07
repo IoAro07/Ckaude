@@ -183,6 +183,8 @@ class Config:
     # floor) defaults to the bottom of the lowest door in that elevation.
     elevations: list[tuple[float, ...]] = field(default_factory=list)
 
+    elevations_auto: bool = True  # find the facade elevations by their layer name when none is given
+
     # Roof built from the roof plan (layers named Tetto/Roof/Copertura, or --layer-tetto).
     roof: bool = False
     roof_area: tuple[float, float, float, float] | None = None  # where the roof plan is drawn

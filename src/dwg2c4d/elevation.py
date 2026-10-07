@@ -13,7 +13,7 @@ from shapely.geometry import LineString, box
 from shapely.geometry.base import BaseGeometry
 
 from .config import Config
-from .geom import polygons_of
+from .geom import polygons_of, union
 from .openings import Opening, _symbols
 from .reader import Item
 
@@ -155,3 +155,61 @@ def apply_elevation(elev: Elevation, openings: list[Opening], walls: BaseGeometr
             "non corrispondono a nessuna apertura della pianta (stesse coordinate X?)."
         )
     return matched, len(elev.symbols)
+
+
+ELEVATION_LAYER_TOKENS = ("prospett", "elevat", "facciat")
+ZONE_MARGIN = 1.0  # m around the drawn lines of an elevation layer: roof lines, ground line... may lie beyond them
+ROOF_RISE = 4.0  # m: how far past the layer's lines (towards the plan) roof lines are looked for
+PLAN_CLEARANCE = 0.5  # the zone never comes closer than this to the plan
+MIN_X_OVERLAP = 0.5  # of the narrower of {zone, plan}
+
+
+def _is_elevation_layer(name: str) -> bool:
+    import re
+
+    return any(t.startswith(ELEVATION_LAYER_TOKENS) for t in re.split(r"[^a-z]+", name.lower()) if t)
+
+
+def find_elevation_zones(items: list[Item], plan_bounds: tuple[float, float, float, float],
+                         unit_scale: float) -> list[tuple[str, tuple[float, float, float, float]]]:
+    """Facade elevations found by their layer name ("Prospetto ..."): [(layer names, zone)] with the zone in
+    drawing units. A zone counts when it lies wholly below or above the plan, shares the plan's x range
+    (elevations are projected straight from the plan) and holds door/window symbols: an interior
+    elevation (a kitchen wall, a wardrobe) has none and is left out."""
+    px0, py0, px1, py1 = plan_bounds
+    boxes: list[tuple[str, tuple[float, float, float, float]]] = []
+    for it in items:
+        if not _is_elevation_layer(it.layer):
+            continue
+        geoms = [p.geom for p in it.prims if not p.geom.is_empty]
+        if geoms:
+            x0, y0, x1, y1 = union(geoms).bounds
+            boxes.append((it.layer, (x0, y0, x1, y1)))
+    # layers whose boxes overlap are the same drawing
+    zones: list[list] = []
+    for layer, b in boxes:
+        for z in zones:
+            zb = z[1]
+            if b[0] <= zb[2] and b[2] >= zb[0] and b[1] <= zb[3] and b[3] >= zb[1]:
+                z[0].add(layer)
+                z[1] = (min(zb[0], b[0]), min(zb[1], b[1]), max(zb[2], b[2]), max(zb[3], b[3]))
+                break
+        else:
+            zones.append([{layer}, b])
+    symbols = [x.geom.bounds for kind in ("door", "window") for x in _symbols(items, kind) if not x.geom.is_empty]
+    out = []
+    for layers, (x0, y0, x1, y1) in zones:
+        if not (y1 < py0 or y0 > py1):
+            continue  # beside or over the plan: not an elevation projected from it
+        x0, x1 = x0 - ZONE_MARGIN, x1 + ZONE_MARGIN
+        # the roof of a facade rises above the drawn layer, towards the plan: look further that way
+        y0, y1 = (y0 - ZONE_MARGIN, min(y1 + ROOF_RISE, py0 - PLAN_CLEARANCE)) if y1 < py0 else \
+            (max(y0 - ROOF_RISE, py1 + PLAN_CLEARANCE), y1 + ZONE_MARGIN)
+        overlap = min(x1, px1) - max(x0, px0)
+        if overlap < MIN_X_OVERLAP * min(x1 - x0, px1 - px0):
+            continue
+        inside = [b for b in symbols if x0 <= b[0] and b[2] <= x1 and y0 <= b[1] and b[3] <= y1]
+        if not inside:
+            continue
+        out.append((", ".join(sorted(layers)), (x0 / unit_scale, y0 / unit_scale, x1 / unit_scale, y1 / unit_scale)))
+    return sorted(out, key=lambda z: z[1][1])
