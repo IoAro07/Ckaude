@@ -12,6 +12,7 @@ dependencies = [
     "ezdxf>=1.1",
     "shapely>=2.1",
     "numpy>=1.23",
+    "matplotlib>=3.5",  # only for the plan check picture; the rest works without it
 ]
 
 [project.optional-dependencies]

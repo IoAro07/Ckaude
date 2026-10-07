@@ -81,6 +81,37 @@ def _better_unit(span_m: float, declared: str) -> str | None:
     return best
 
 
+GROUP_GAP = 3.0  # m: wall pieces closer than this are one building
+MIN_GROUP_AREA = 1.0  # m2 of wall: smaller pieces are not worth a remark
+
+
+def _separate_groups(solid: BaseGeometry, unit_scale: float, cropped: bool) -> list[str]:
+    """When the walls form groups far apart (a roof plan, a section or a second building drawn on the same
+    layer) say so, and give the ``--area`` of each group to copy."""
+    pieces = polygons_of(solid)
+    if len(pieces) < 2:
+        return []
+    clusters = polygons_of(union(p.buffer(GROUP_GAP / 2.0) for p in pieces))
+    groups = []
+    for cluster in clusters:
+        mine = [p for p in pieces if cluster.intersects(p)]
+        area = sum(p.area for p in mine)
+        if area >= MIN_GROUP_AREA:
+            groups.append((area, union(mine).bounds))
+    if len(groups) < 2:
+        return []
+    groups.sort(key=lambda g: -g[0])
+    lines = []
+    for n, (area, (x0, y0, x1, y1)) in enumerate(groups, 1):
+        margin = 0.5
+        box = ",".join(f"{v / unit_scale:.0f}" for v in (x0 - margin, y0 - margin, x1 + margin, y1 + margin))
+        lines.append(f"{n}) {x1 - x0:.1f} x {y1 - y0:.1f} m, {area:.1f} m2 di muri: --area={box}")
+    note = " (c'e' gia' --area, ma include piu' di una zona)" if cropped else ""
+    return [f"I muri formano {len(groups)} gruppi distanti{note}. Se solo uno e' la pianta (gli altri sono tetto, "
+            "sezioni, un altro edificio disegnati sullo stesso layer) convertilo da solo con la sua area: "
+            + "; ".join(lines)]
+
+
 def convert(input_path: str | Path, output_path: str | Path | None = None,
             cfg: Config | None = None) -> ConversionReport:
     cfg = cfg or Config()
@@ -130,6 +161,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         )
     plan = Plan(walls=walls, columns=columns, openings=openings, merge_tolerance=cfg.merge_tolerance)
     solid = plan.solid_walls
+    warnings.extend(_separate_groups(solid, result.unit_scale, cfg.area is not None))
     if cfg.passages:
         passages = find_passages(solid, cfg, openings)
         if passages:

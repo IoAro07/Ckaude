@@ -13,12 +13,31 @@ pianta.dwg  ──►  dwg2c4d  ──►  pianta.obj + .mtl  (+ _model.json)  �
 
 ## Installazione
 
-Serve Python 3.10 o superiore.
+### 1. Avere il progetto in locale
+
+Il codice sta nel repository GitHub `IoAro07/Ckaude`, sul ramo `claude/dwg-to-3d-cinema4d-0c0if5` (finché non lo
+unisci a `main`). Due modi:
+
+- **Scaricarlo come ZIP**: apri il repository su GitHub, scegli quel ramo, *Code → Download ZIP*, decomprimi.
+- **Con git**: `git clone --branch claude/dwg-to-3d-cinema4d-0c0if5 https://github.com/IoAro07/Ckaude.git`
+
+(Se il repository è privato GitHub ti chiede di accedere con il tuo account.) In alternativa puoi usare il file
+`dwg2c4d-0.1.0-py3-none-any.whl` che ti è stato consegnato: `pip install dwg2c4d-0.1.0-py3-none-any.whl` installa
+tutto senza scaricare il progetto (non include gli script `.bat` e lo script di Cinema 4D: stanno nella cartella).
+
+### 2. Python e le librerie (una volta sola)
+
+1. Serve **Python 3.10 o superiore**: da [python.org](https://www.python.org/downloads/) (Windows: spunta
+   *Add Python to PATH*; macOS/Linux di solito c'è già, controlla con `python3 --version`).
+2. **Windows**: doppio clic su `installa.bat` nella cartella del progetto. **Altrove** (o se preferisci il terminale),
+   dalla cartella del progetto:
 
 ```bash
-pip install .            # dalla cartella del progetto
-dwg2c4d --help
+pip install .
+dwg2c4d --help           # se il comando non si trova: python -m dwg2c4d --help
 ```
+
+Installa da solo `ezdxf`, `shapely`, `numpy` e `matplotlib` (quest'ultimo serve solo alla pianta di controllo).
 
 ### Leggere i file `.dwg`
 
@@ -38,13 +57,21 @@ e passa il `.dxf`: tutto il resto funziona uguale.
 
 ## Uso rapido
 
+**Windows, senza terminale**: trascina il `.dwg` (o `.dxf`) su `converti.bat`; `elenca_layer.bat` mostra come
+vengono letti i layer. **Da terminale** (ovunque):
+
 ```bash
-dwg2c4d pianta.dwg                       # crea pianta.obj accanto al file
+dwg2c4d pianta.dwg                       # crea pianta.obj accanto al file, più tabella, immagini e report
+dwg2c4d pianta.dwg --json-c4d            # in più pianta_model.json per lo script di Cinema 4D
 dwg2c4d pianta.dwg -o 3d/casa.obj --altezza-muri 2.70
 ```
 
-Alla fine stampa un riepilogo: **controllalo**. Le dimensioni (`Ingombro muri`) devono corrispondere a quelle
+Alla fine stampa un riepilogo: **controllalo**, e guarda `pianta_controllo_pianta.png` (muri, locali e ogni
+apertura con sigla e misure) e `pianta_report.txt`. Le dimensioni (`Ingombro muri`) devono corrispondere a quelle
 reali dell'edificio, e il numero di porte/finestre a quelle della pianta.
+
+Se il disegno ha più cose sullo stesso layer (il tetto o una sezione disegnati accanto alla pianta) il riepilogo lo
+dice (`I muri formano 2 gruppi distanti`) e ti dà l'`--area` di ciascun gruppo da copiare.
 
 ### Prova subito senza un tuo DWG
 
@@ -304,12 +331,13 @@ Ci sono due modi. Il secondo è consigliato se usi Corona.
 sono quelli base del file `.mtl`.
 
 **B. File `_model.json` + script Python in Cinema 4D** (`--json-c4d`): lo script crea oggetti nativi, raggruppati
-per tipo (`Murature`, `Infissi`, `Pavimenti`, `Tetto`…), con un materiale per tipo (Corona Physical se Corona è
-installato, altrimenti standard), e risolve da solo assi e orientamento delle facce. Il file è in **centimetri**,
-con assi del disegno (X, Y, Z in alto). Il formato è quello letto dallo script `plan2c4d_import.py` (Script
-Manager di Cinema 4D → scegli il `*_model.json`). Lo strumento ha controllato che quello script accetti il file con un
-modulo `c4d` simulato; **non è stato provato dentro Cinema 4D** e gli ID dei parametri Corona dello script dipendono
-dalla tua versione di Corona.
+per tipo (`Murature`, `Infissi` con un gruppo per ogni F01/P01…, `Pavimenti`, `Battiscopa`, `Tetto`…), con un
+materiale per tipo (Corona Physical se Corona è installato, altrimenti standard), e risolve da solo assi e
+orientamento delle facce. Il file è in **centimetri**, con assi del disegno (X, Y, Z in alto). Lo script è
+`c4d/plan2c4d_import.py` (nel progetto): in Cinema 4D *Estensioni → Script Manager → File → Carica* quel file,
+*Esegui*, scegli il `*_model.json`; il documento deve essere in centimetri. Lo strumento ha controllato che lo script
+accetti il file con un modulo `c4d` simulato; **non è stato provato dentro Cinema 4D** e gli ID dei parametri Corona
+dello script dipendono dalla tua versione di Corona.
 
 **Origine del modello** (`--origine`): i disegni reali stanno spesso a centinaia di metri dall'origine (il tuo
 a circa 730 m). Di default il modello viene portato al **centro dei muri** (`--origine centro`), con la quota
@@ -324,10 +352,10 @@ indica di quanto è stato spostato.
    *Flip Z* ([documentazione Maxon](https://help.maxon.net/c4d/en-us/Content/html/FOBJIMPORT2-OBJIMPORTOPTIONS_GROUP_GEOMETRY.html))
    decide come viene convertito. Se la pianta ti appare **specchiata**, attiva/disattiva *Flip Z*
    oppure rigenera il file con `--specchia`.
-4. Troverai gli oggetti `Muri`, `Pilastri`, `Vetri`, `Pavimento` (e `Soffitto`, `Tetto`) già con un materiale base:
-   sostituiscilo con i tuoi. Le normali sono già nel file.
+4. Troverai gli oggetti con un materiale base ciascuno (`Muri`, `Tramezzi`, `Pavimento_<locale>`, `Battiscopa`, `Telai_F01`,
+   `Ante_P01`, `Vetri_F01`, `Maniglie_P01`, `Tetto`…): sostituisci i materiali con i tuoi. Le normali sono già nel file.
+   I materiali sono uno per tipo (tutti i telai usano `Telai`), tranne i pavimenti: uno per locale, per poterli cambiare.
 
-Il modello ha una sola mesh per categoria, in modo da poter assegnare i materiali e creare le selezioni a mano.
 La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 
 ## Opzioni
