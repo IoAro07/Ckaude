@@ -32,7 +32,7 @@ class Obj:
                     ids.append(int(parts[0]) - 1)
                     nid = int(parts[2]) - 1
                 self.groups[cur].append((ids, nid))
-        # With the wall finishes the walls are Muri_esterno / Muri_interno / Muri_spessori: "Muri" is all three
+        # With the wall finishes the walls are Muri_esterno / Muri_interno: "Muri" is both
         parts = [g for g in self.groups if g.startswith("Muri_")]
         if parts and "Muri" not in self.groups:
             self.groups["Muri"] = [f for g in parts for f in self.groups[g]]

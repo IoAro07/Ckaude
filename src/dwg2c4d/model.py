@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import math
+import statistics
 from dataclasses import dataclass, field
 from functools import cached_property
 
-import shapely
 from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
@@ -71,9 +71,6 @@ def wall_slabs(walls: BaseGeometry, openings: list[Opening], height: float) -> l
     return slabs
 
 
-FACE_PROBE = 0.03  # m: how far in front of a wall face we look to see what it faces
-
-
 def building_footprint(solid: BaseGeometry) -> BaseGeometry:
     """Everything the walls enclose, walls included: the outline of the building with no holes."""
     return union(Polygon(p.exterior) for p in polygons_of(solid))
@@ -97,24 +94,49 @@ def facing_sign(op: Opening, footprint: BaseGeometry) -> int:
     return 1
 
 
-def wall_face_groups(solid: BaseGeometry):
-    """``edge -> group`` for the vertical faces of the walls: what a face looks at decides its material.
-    The outside of the building: Muri_esterno; a room: Muri_interno; the jamb of a door or window cut
-    (it looks into the opening, which belongs to the wall's footprint): Muri_spessori."""
+SAMPLE = 0.1  # m: spacing of the points at which the thickness of the perimeter wall is measured
+OUTER_BAND = 1.5  # the outer half is looked for within this many wall thicknesses of the outside
+
+
+def outer_half_of_perimeter_walls(solid: BaseGeometry, max_thickness: float) -> BaseGeometry | None:
+    """The outer half of the walls that have the outside on one face: the part of each perimeter wall that lies
+    between its middle surface and the outside. ``None`` when the walls enclose no space (no inner face to halve
+    from) or no wall touches the outside.
+
+    The thickness is measured at points along each enclosed space's outline (its distance to the building's
+    outline, the median of them: corners and openings do not count), and the inner half is the space grown
+    by half of it (square corners). Everything within reach of the outside and not in the inner half is the
+    outer half. Walls between two rooms are never in it."""
     footprint = building_footprint(solid)
-    shapely.prepare(solid)
-    shapely.prepare(footprint)
-
-    def group(edge) -> str:
-        (ax, ay), (bx, by) = edge
-        length = math.hypot(bx - ax, by - ay) or 1.0
-        qx = (ax + bx) / 2 + (by - ay) / length * FACE_PROBE  # right-hand normal: out of the wall
-        qy = (ay + by) / 2 - (bx - ax) / length * FACE_PROBE
-        if shapely.contains_xy(solid, qx, qy):
-            return "Muri_spessori"
-        return "Muri_interno" if shapely.contains_xy(footprint, qx, qy) else "Muri_esterno"
-
-    return group
+    free = footprint.difference(solid)
+    if footprint.is_empty or free.is_empty:
+        return None
+    outline = footprint.boundary
+    inner_half: list[BaseGeometry] = []
+    thick = 0.0
+    for cell in polygons_of(free):
+        distances = []
+        for ring in (cell.exterior, *cell.interiors):
+            pts = list(ring.coords)
+            for (ax, ay), (bx, by) in zip(pts, pts[1:]):
+                n = max(int(math.hypot(bx - ax, by - ay) / SAMPLE), 1)
+                for k in range(n):
+                    d = outline.distance(Point(ax + (bx - ax) * k / n, ay + (by - ay) * k / n))
+                    if 1e-6 < d <= max_thickness:
+                        distances.append(d)
+        if len(distances) < 3:
+            continue  # this space has no perimeter wall of its own
+        t = statistics.median(distances)
+        thick = max(thick, t)
+        inner_half.append(cell.buffer(t / 2.0, join_style="mitre"))
+    if not inner_half:
+        return None
+    inner = union(inner_half)
+    shrunk = footprint.buffer(-thick * OUTER_BAND, join_style="mitre")
+    band = (footprint.difference(shrunk) if not shrunk.is_empty else footprint).intersection(solid)
+    outer = band.difference(inner)
+    outer = union(p for p in polygons_of(outer) if p.area > 1e-4)
+    return None if outer.is_empty else outer
 
 
 def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
@@ -122,8 +144,16 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
     walls = plan.solid_walls
     cutting = [o for o in plan.openings if o.keep]  # a dropped opening is closed with wall
     main = walls if plan.partitions.is_empty else walls.difference(plan.partitions)
-    wall_group, faces = ("Muri_spessori", wall_face_groups(walls)) if cfg.wall_finishes else ("Muri", None)
-    mesh.add_extrusion(wall_group, wall_slabs(main, cutting, cfg.wall_height), bottom=True, side_group=faces)
+    outer = outer_half_of_perimeter_walls(walls, cfg.max_wall_thickness) if cfg.wall_finishes else None
+    if outer is not None:
+        # Two solids: the half of the perimeter walls that faces the outside, and everything else (the half
+        # that faces the rooms and the walls between rooms). Each is closed, with its own top and bottom.
+        outer_main = outer.intersection(main)
+        mesh.add_extrusion("Muri_esterno", wall_slabs(outer_main, cutting, cfg.wall_height), bottom=True)
+        mesh.add_extrusion("Muri_interno", wall_slabs(main.difference(outer_main), cutting, cfg.wall_height),
+                           bottom=True)
+    else:
+        mesh.add_extrusion("Muri", wall_slabs(main, cutting, cfg.wall_height), bottom=True)
     if not plan.partitions.is_empty:
         mesh.add_extrusion("Tramezzi", wall_slabs(plan.partitions, cutting, cfg.wall_height), bottom=True)
 

@@ -157,8 +157,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-pavimento-per-locale", action="store_true",
                    help="una sola lastra di pavimento sotto tutto l'edificio invece di un oggetto per locale")
     g.add_argument("--muri-uniti", action="store_true",
-                   help="i muri in un solo oggetto/materiale invece di Muri_esterno, Muri_interno e Muri_spessori "
-                        "(cime, spalle di porte e finestre, fondo)")
+                   help="i muri in un solo oggetto/materiale invece delle due meta' (Muri_esterno e Muri_interno)")
     g.add_argument("--no-tramezzi", action="store_true",
                    help="i muri dei layer fondelli/tramezzi restano nell'oggetto Muri invece di avere il loro (Tramezzi)")
     g.add_argument("--no-vani", action="store_true",

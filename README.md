@@ -22,14 +22,14 @@ Il codice sta nel repository pubblico <https://github.com/IoAro07/Ckaude> (il ra
   qualsiasi (per esempio `C:\dwg2c4d`).
 - **Con git**: `git clone https://github.com/IoAro07/Ckaude.git`
 
-In alternativa il file `dwg2c4d-0.3.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
-dwg2c4d-0.3.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+In alternativa il file `dwg2c4d-0.3.1-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.3.1-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
 script di Cinema 4D, che stanno nella cartella del progetto.
 
 **Per aggiornare** a una versione nuova: scarica di nuovo il progetto in una **cartella nuova** (o `git pull`) e rifai
 `installa.bat`. I file `converti.bat` ed `elenca_layer.bat` usano comunque sempre il codice della cartella in cui stanno
 (`src`), anche se in Python è rimasta installata una copia vecchia. Quando parte, `converti.bat` stampa la riga
-`dwg2c4d 0.3.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
+`dwg2c4d 0.3.1  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
 usando una cartella vecchia. `python -m dwg2c4d --version` fa lo stesso da terminale.
 
 *Perché la cartella nuova*: pip lascia dentro il progetto una cartella `build`; uno ZIP non porta il fuso orario, quindi
@@ -202,11 +202,13 @@ viene ricostruito sopra la porta (architrave) e sopra/sotto la finestra, poi tag
 del muro. Diventa un'apertura `vano` (`V01`...): architrave sopra i 2,10 m (o l'altezza scritta), imbotto e cornice,
 nessuna anta. Compare nella tabella: `MODIFICA_tieni = no` lo richiude con il muro; `--no-vani` non li cerca.
 
-**Muri con due materiali.** I muri escono in tre oggetti sotto `Murature`: `Muri_esterno` (le facce rivolte
-all'esterno dell'edificio), `Muri_interno` (le facce rivolte verso i locali) e `Muri_spessori` (le cime dei muri, le spalle
-di porte e finestre, il fondo). Così all'esterno puoi avere intonaco o rivestimento e all'interno la finitura dei locali;
-se non ti serve la terza, dagli lo stesso materiale dell'interno. Il **fondo dei muri è chiuso**. `--muri-uniti` torna a
-un solo oggetto `Muri`. (Per la libreria: `Config(wall_finishes=True)`.)
+**Muri con due materiali.** I muri perimetrali sono **tagliati a metà spessore**: la metà verso l'esterno è l'oggetto
+`Muri_esterno`, la metà verso i locali è `Muri_interno` (con anche i muri tra un locale e l'altro e i tramezzi non separati).
+Sono due **solidi chiusi** ciascuno con il suo materiale: con facce esterne, cima e spalle di porte e finestre della propria
+metà, e la superficie di contatto al centro del muro. Lo spessore si misura sul disegno (mezzo spessore del muro
+perimetrale di ogni locale: 10 cm per un muro da 20), quindi ogni muro è diviso davvero a metà. Il **fondo dei muri è
+chiuso**. Se i muri non racchiudono nessuno spazio (non c'è un "dentro" da cui misurare) restano un solo oggetto `Muri`.
+`--muri-uniti` rinuncia alla divisione. (Per la libreria: `Config(wall_finishes=True)`.)
 
 **Pavimenti, battiscopa, tramezzi** (convenzione dei nomi dei layer, anche in inglese: floor, skirting):
 
@@ -413,7 +415,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--infissi` | `dettagliati` (default: telai, ante, maniglie, toppe) o `semplici` (solo vetro) |
 | `--no-testi-esplosi`, `--layer-testi` | non cercare / dove cercare le lettere disegnate con le linee |
 | `--pavimenti`, `--battiscopa` | layer dei pavimenti / dei battiscopa (virgole, `*` jolly) |
-| `--muri-uniti` | i muri in un solo oggetto invece di esterno / interno / spessori |
+| `--muri-uniti` | i muri in un solo oggetto invece delle due metà (esterno / interno) |
 | `--no-tramezzi`, `--no-pavimento-per-locale` | tramezzi dentro `Muri` / una sola lastra di pavimento |
 | `--no-vani`, `--vano-max` | non dedurre i vani senza simbolo / larghezza massima (m) |
 | `--no-scritte`, `--raggio-scritte` | non leggere i testi / distanza massima tra apertura e quota scritta (m) |

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dwg2c4d"
-version = "0.3.0"
+version = "0.3.1"
 description = "Trasforma una planimetria 2D (DWG/DXF) in un modello 3D OBJ pronto per Cinema 4D"
 readme = "README.md"
 requires-python = ">=3.10"
