@@ -14,6 +14,8 @@ from .pipeline import convert
 from .reader import declared_units, layer_summary, storeys
 
 MODE_NAMES = {"auto": "auto", "solidi": "solid", "doppia-linea": "faces", "asse": "centerline"}
+GARDEN_IT = {"water": "giardino", "lawn": "giardino", "paving": "giardino", "plants": "giardino",
+             "furniture": "giardino", "garden": "giardino"}
 CATEGORY_IT = {"wall": "muri", "door": "porte", "window": "finestre", "column": "pilastri",
                "floor": "pavimenti", "skirting": "battiscopa", "roof": "tetto"}
 
@@ -142,6 +144,22 @@ def build_parser() -> argparse.ArgumentParser:
                    help="dettagliati (default): imbotto, cornice, telai, ante, maniglie, toppe; "
                         "semplici: solo una lastra di vetro per finestra")
 
+    g = p.add_argument_group("giardino (superfici e oggetti fuori dalla casa)")
+    g.add_argument("--no-giardino", action="store_true",
+                   help="non costruire il giardino (pavimentazione, prato, acqua, piscina, siepi, alberi...)")
+    g.add_argument("--area-giardino", type=_area, metavar="XMIN,YMIN,XMAX,YMAX",
+                   help="dove e' il giardino, in coordinate del disegno (default: lo cerca da solo attorno alla casa)")
+    g.add_argument("--tabella-giardino", metavar="FILE.csv",
+                   help="applica la tabella del giardino corretta a mano (colonne MODIFICA_*), scritta da una "
+                        "conversione precedente come NOME_giardino.csv")
+    g.add_argument("--profondita-piscina", type=float, metavar="M", help="profondita' della piscina (default 1,5)")
+    g.add_argument("--altezza-alberi", type=float, metavar="M",
+                   help="altezza degli alberi se il prospetto non la da' (default 4,5)")
+    g.add_argument("--altezza-siepi", type=float, metavar="M",
+                   help="altezza delle siepi se il prospetto non la da' (default 1,2)")
+    g.add_argument("--altezza-cespugli", type=float, metavar="M",
+                   help="altezza dei cespugli se il prospetto non la da' (default 0,9)")
+
     g = p.add_argument_group("disegno e output")
     g.add_argument("--unita", choices=sorted(UNIT_TO_METERS),
                    help="unita' del disegno (default: lette dal file)")
@@ -204,6 +222,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         "out_units": args.unita_output, "area": args.area, "converter": args.converter,
         "roof_area": args.area_tetto, "roof_pitch": args.pendenza,
         "roof_thickness": args.spessore_tetto, "roof_offset": args.sposta_tetto,
+        "garden_area": args.area_giardino, "pool_depth": args.profondita_piscina,
+        "tree_height": args.altezza_alberi, "hedge_height": args.altezza_siepi, "shrub_height": args.altezza_cespugli,
     }
     for name, value in simple.items():
         if value is not None:
@@ -260,6 +280,10 @@ def config_from_args(args: argparse.Namespace) -> Config:
     cfg.fixtures_per_opening = not args.infissi_uniti
     if args.no_tabella:
         cfg.write_table = False
+        cfg.write_garden_table = False
+    cfg.garden = not args.no_giardino
+    if args.tabella_giardino:
+        cfg.garden_table_in = args.tabella_giardino
     return cfg
 
 
@@ -286,7 +310,7 @@ def _print_layers(rows: list[dict], units: str | None, floors: list[int] | None 
     width = max([len(r["layer"]) for r in rows] + [5])
     print(f"{'LAYER'.ljust(width)}  USO COME   CONTENUTO")
     for r in rows:
-        cat = CATEGORY_IT.get(r["category"], "-")
+        cat = CATEGORY_IT.get(r["category"]) or GARDEN_IT.get(r.get("garden"), "-")
         what = ", ".join(f"{n} {k}" for k, n in sorted(r["entities"].items()))
         if r["blocks"]:
             what += f"  [blocchi: {', '.join(r['blocks'][:4])}{'...' if len(r['blocks']) > 4 else ''}]"
@@ -333,6 +357,9 @@ def main(argv: list[str] | None = None) -> int:
     if report.table_path:
         print(f"Creato {report.table_path}  (tabella delle aperture: correggi le colonne MODIFICA_* "
               f"e rilancia con --tabella)")
+    if report.garden_table_path:
+        print(f"Creato {report.garden_table_path}  (tabella del giardino: correggi le colonne MODIFICA_* "
+              f"e rilancia con --tabella-giardino)")
     for path, what in ((report.overlay_path, "pianta con le aperture riconosciute: controllala"),
                        (report.preview_path, "anteprima 3D"), (report.report_path, "riepilogo e note")):
         if path:

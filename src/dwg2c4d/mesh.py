@@ -130,6 +130,36 @@ class Mesh:
             if n is not None:
                 self.add_face(group, pts, n)
 
+    def add_ellipsoid(self, group: str, centre: Vec3, radii: Vec3, angle: float = 0.0,
+                      lon: int = 12, lat: int = 6) -> None:
+        """A closed ellipsoid (a low-poly sphere when the radii are equal): ``radii`` along the object's own x, y
+        and z, turned about the vertical by ``angle`` (radians). ``lat`` bands from pole to pole."""
+        cx, cy, cz = centre
+        rx, ry, rz = radii
+        ca, sa = math.cos(angle), math.sin(angle)
+
+        def at(theta: float, phi: float) -> Vec3:
+            x, y = rx * math.cos(phi) * math.cos(theta), ry * math.cos(phi) * math.sin(theta)
+            return cx + x * ca - y * sa, cy + x * sa + y * ca, cz + rz * math.sin(phi)
+
+        rings = []
+        for i in range(1, lat):
+            phi = -math.pi / 2 + math.pi * i / lat
+            rings.append([at(2 * math.pi * j / lon, phi) for j in range(lon)])
+        south, north = (cx, cy, cz - rz), (cx, cy, cz + rz)
+
+        def face(pts: list[Vec3]) -> None:
+            n = _normal(pts)
+            if n is not None:
+                self.add_face(group, pts, n)
+
+        for j in range(lon):
+            k = (j + 1) % lon
+            face([south, rings[0][k], rings[0][j]])
+            for i in range(len(rings) - 1):
+                face([rings[i][j], rings[i][k], rings[i + 1][k], rings[i + 1][j]])
+            face([north, rings[-1][j], rings[-1][k]])
+
     def _side(self, group: str, edge: tuple, z0: float, z1: float) -> None:
         (ax, ay), (bx, by) = edge
         length = math.hypot(bx - ax, by - ay)

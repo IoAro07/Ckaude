@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import OrderedDict
 from pathlib import Path
 
@@ -51,6 +52,18 @@ def summary_lines(report) -> list[str]:
                    f"({how[r['pitch_source']]}), colmo a {r['ridge_height']:.2f} m")
     if report.columns:
         out.append(f"  Pilastri           : {report.columns}")
+    if report.garden is not None:
+        from .garden import summary
+
+        out.append(f"  Giardino           : {summary(report.garden)}")
+        heights = {}
+        for o in report.garden.objects:
+            heights.setdefault(o.kind, set()).add((o.height_src, round(o.height, 2)))
+        for kind, label in (("tree", "alberi"), ("hedge", "siepi"), ("shrub", "cespugli"), ("furniture", "arredi")):
+            if kind in heights:
+                srcs = sorted(heights[kind])
+                text = ", ".join(f"{h:g} m ({how})" for how, h in srcs[:3])
+                out.append(f"    altezza {label:<9}: {text}")
     out.append(f"  Facce / oggetti    : {report.faces} / {', '.join(report.groups)}")
     for msg in report.warnings:
         out.append(f"  ATTENZIONE: {msg}")
@@ -117,6 +130,27 @@ def plan_overlay(report, path: str | Path) -> Path:
             path = MplPath.make_compound_path(*(MplPath(list(r.coords), closed=True) for r in rings))
             ax.add_patch(PathPatch(path, **style))
 
+    garden = report.garden
+    if garden is not None:  # the ground and the plants under the building: the garden as it was understood
+        ground = {"paving": "#c9c9cc", "edge": "#7c7c82", "lawn": "#b5d3a4", "soil": "#c8b79b"}
+        for kind, geom in garden.surfaces.items():
+            draw(geom, fc=ground[kind], ec="#999", lw=0.3, zorder=0.2)
+        for pool in garden.pools:
+            draw(pool, fc="#9cc9e8", ec="#3b7fb0", lw=0.6, zorder=0.4)
+        for g in garden.objects:
+            colour = {"tree": "#2f7a3a", "shrub": "#4c9a45", "hedge": "#1f5f1f", "furniture": "#d08a2a"}[g.kind]
+            ux, uy = g.axis
+            if g.kind in ("tree", "shrub"):
+                from matplotlib.patches import Ellipse
+
+                ax.add_patch(Ellipse((g.cx, g.cy), g.length, g.width, angle=math.degrees(g.angle), fc=colour,
+                                     ec=colour, alpha=0.55 if g.keep else 0.15, zorder=0.6))
+            else:
+                from .geom import oriented_rect
+
+                draw(oriented_rect(g.cx, g.cy, ux, uy, g.length, -g.width / 2, g.width / 2), fc=colour, ec=colour,
+                     alpha=0.7 if g.keep else 0.15, zorder=0.6)
+            ax.text(g.cx, g.cy, g.id, ha="center", va="center", fontsize=5.5, color="#10300f", zorder=0.8)
     for room in report.room_objects:
         draw(room.polygon, fc="#f4efe3", ec="#d8cdb0", lw=0.5, zorder=1)
         c = room.polygon.representative_point()
@@ -148,7 +182,9 @@ def plan_overlay(report, path: str | Path) -> Path:
     ax.margins(0.06)
     ax.grid(alpha=0.15)
     ax.set_title("Controllo: muri (grigio), tramezzi (grigio chiaro), locali, aperture con sigla, larghezza×altezza "
-                 "e quota da terra in cm (blu finestre, rosso porte, arancio vani; * = vedi note)", fontsize=9)
+                 "e quota da terra in cm (blu finestre, rosso porte, arancio vani; * = vedi note)"
+                 + ("; giardino: pavimentazione, prato, acqua, siepi/alberi/cespugli/arredi con sigla"
+                    if garden is not None else ""), fontsize=9)
     path = Path(path)
     fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)

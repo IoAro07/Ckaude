@@ -340,6 +340,7 @@ def layer_summary(doc: Drawing, cfg: Config) -> list[dict]:
         rows.append({
             "layer": layer,
             "category": cfg.layers.classify(layer),
+            "garden": cfg.layers.garden_kind(layer) if cfg.layers.classify_layer(layer) is None else None,
             "hidden": hidden,
             "entities": dict(counts[layer]),
             "blocks": sorted(blocks[layer]),

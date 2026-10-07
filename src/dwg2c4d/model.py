@@ -13,6 +13,7 @@ from shapely.geometry.base import BaseGeometry
 from .config import Config
 from .geom import polygons_of, union
 from .fixtures import add_fixtures
+from .garden import add_garden
 from .mesh import Mesh, Slab
 from .openings import Opening
 from .roof import Roof
@@ -32,6 +33,7 @@ class Plan:
     floors: list[tuple[str, BaseGeometry]] = field(default_factory=list)  # (name, shape): one object each
     skirting: BaseGeometry = field(default_factory=Polygon)
     partitions: BaseGeometry = field(default_factory=Polygon)  # the thin walls, apart from the main walls
+    garden: object | None = None  # the ground, pools, plants and furniture outside (garden.Garden)
 
     @cached_property
     def solid_walls(self) -> BaseGeometry:
@@ -173,6 +175,9 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
 
     if not plan.skirting.is_empty:
         mesh.add_extrusion("Battiscopa", [Slab(0.0, cfg.skirting_height, plan.skirting)], bottom=False)
+
+    if plan.garden is not None:
+        add_garden(mesh, plan.garden, cfg)
 
     by_room = cfg.floor_thickness > 0 and bool(plan.floors)
     for name, shape in plan.floors if by_room else []:

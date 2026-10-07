@@ -47,13 +47,16 @@ Il programma divide il nome del layer in parole (separatori: tutto ciò che non 
 | `P1_BATTISCOPA` | facoltativo: linee lungo le pareti | `battiscop`, `skirt`, `zoccol` |
 | `TETTO` | pianta del tetto: solo contorno, colmi, displuvi, compluvi | `tett`, `roof`, `copertur` |
 | `PROSPETTO_SUD`, `PROSPETTO_NORD` | prospetti (vedi §5) | `prospett`, `elevat`, `facciat` |
-| `QUOTE`, `TESTI`, `ARREDI`, `VERDE`, `SEZIONI` | tutto il resto: **ignorato** | — |
+| `GIARDINO_PRATO`, `GIARDINO_PAVIMENTAZIONE`, `PISCINA`, `VERDE`, `ARREDO_ESTERNO` | il giardino (vedi §6bis) | `prato`, `pavimentazion`, `piscin`, `verde`, `estern` |
+| `QUOTE`, `TESTI`, `ARREDI`, `SEZIONI` | tutto il resto: **ignorato** | — |
 
 Cose da sapere sui nomi:
 
 * Maiuscole e minuscole non contano; `MURI_PORTANTI` è un layer di muri (non di porte).
 * I layer chiamati `Prospetto…`, `Sezione…`, `Arredo…`, `Quote…`, `Testi`, `Tetto`, `Verde` **non vengono mai presi
-  per muri, porte o finestre**, nemmeno se dentro c'è la parola "parete" o un blocco `Porta Asciugamani`.
+  per muri, porte o finestre**, nemmeno se dentro c'è la parola "parete" o un blocco `Porta Asciugamani`. I layer del
+  giardino (`Verde`, `Prato`, `Piscina`, `Pavimentazione`, `Esterno`…) servono al giardino (§6bis); `Pavimentazione` e
+  `Pavimenti esterni` **non** sono i pavimenti dei locali.
 * I layer **spenti o congelati vengono saltati**: è il modo più rapido per escludere dal modello ciò che non serve.
 * Se i tuoi nomi sono diversi (`A-MURI-ESTERNI`, `SERR_P`...) non è un problema: `elenca_layer.bat` mostra come li ha
   letti e propone il resto; oppure li indichi con `--muri "A-MURI*" --porte "SERR_P" --finestre "SERR_F"`.
@@ -194,10 +197,37 @@ Il tetto è **ricostruito dalla pianta del tetto**, non inventato: se la pianta 
 
 ---
 
+## 6bis. Giardino e aree esterne
+
+Quello che sta **fuori dai muri** diventa terreno, piscina, siepi, alberi e arredi (`--no-giardino` lo esclude).
+
+* **Terreno: campiture (HATCH) fuori dai muri.** Una per tipo di superficie. Cosa sono lo decide, nell'ordine, il
+  **nome del layer** (`Prato`, `Pavimentazione`, `Terrazza`, `Piscina`…), il **nome del retino** (`GRASS`…) e il **colore**:
+  **verde = prato, azzurro = acqua, qualunque altro colore = pavimentazione**, bianco = ignorato. Se i colori dei tuoi
+  retini sono diversi, metti i pezzi su layer con il nome giusto.
+* **Disegna le campiture nell'ordine in cui si coprono**: quello disegnato dopo sta sopra. Un retino con un buco (un
+  tavolo, un cespuglio) va bene: il buco prende ciò che lo circonda.
+* **La piscina**: una campitura azzurra per l'acqua. Se la pavimentazione attorno ha un buco **un po' più grande
+  dell'acqua** (fino a 80 cm), quello è il bordo vasca; altrimenti la vasca ha le pareti di 15 cm. Profondità 1,5 m
+  (`--profondita-piscina`).
+* **Strisce sottili** (meno di 35 cm: cordoli, muretti disegnati a campitura) diventano `Bordi`, piatti. Muretti e
+  recinzioni disegnati solo a linee **non** vengono costruiti.
+* **Alberi, siepi, cespugli, arredi: blocchi**, con un nome che dica cosa sono (`Albero`, `Siepe`, `Cespuglio 1`,
+  `Sdraio`, `Tavolo`…) o su un layer `Verde`/`Giardino`/`Arredo esterno`. Il contorno del blocco dà la dimensione del
+  segnaposto, **l'inserimento la posizione e la rotazione**. Fuori dai muri: un blocco dentro casa è un arredo e si ignora.
+  Un blocco il cui nome contiene `Prospetto` è un disegno per il prospetto, non una pianta della pianta.
+* **Altezze: dal prospetto.** Nel prospetto sud/nord (§5) disegna gli stessi alberi e le stesse siepi: un blocco
+  `Albero Prospetto` dà l'altezza degli alberi, la siepe in prospetto (blocchi `Siepe` o campiture larghe quanto quella
+  in pianta, anche in due righe sovrapposte) dà quella delle siepi. Senza prospetto: 4,5 m alberi, 1,2 m siepi, 0,9 m
+  cespugli, o `--altezza-alberi`/`--altezza-siepi`/`--altezza-cespugli`, o la tabella `NOME_giardino.csv`.
+* **Tieni il giardino vicino alla casa.** Le campiture a più di 3 m dall'edificio e dal resto del giardino (la pianta del
+  tetto, un altro disegno) si ignorano; per un giardino staccato indica `--area-giardino`.
+* **Un solo livello**: il terreno è piano; il disegno 2D non dice dove sale o scende.
+
 ## 7. Cosa non viene letto
 
-* Arredi, sanitari, scale, quote, tratteggi decorativi, verde: ignorati (e se sono blocchi sul layer dei muri,
-  scartati con un avviso).
+* Arredi interni, sanitari, scale, quote, tratteggi decorativi: ignorati (e se sono blocchi sul layer dei muri,
+  scartati con un avviso). Il giardino (campiture e blocchi fuori dai muri) si legge: §6bis.
 * Riferimenti esterni (xref).
 * Più piani nello stesso modello: un OBJ per piano.
 * Prospetti est/ovest, prospetti ruotati o disposti altrove.
@@ -216,6 +246,8 @@ Il tetto è **ricostruito dalla pianta del tetto**, non inventato: se la pianta 
    * `*_anteprima_3d.png`: l'anteprima del modello;
    * `*_report.txt`: riepilogo e **avvisi** (unità, aperture non abbinate, prospetti trovati, tetto, gruppi esclusi);
    * `*_aperture.csv`: una riga per apertura con **l'origine di ogni misura** (simbolo, scritta, prospetto, predefinita);
+   * `*_giardino.csv`: una riga per albero, siepe, cespuglio e arredo esterno, con altezza e **da dove viene**
+     (prospetto o predefinita); si corregge con `MODIFICA_*` e `--tabella-giardino`;
    * `*.obj/.mtl` e `*_model.json` (per lo script di Cinema 4D).
 3. **Correggere**: apri `*_aperture.csv` in Excel, compila le colonne `MODIFICA_*` (tipo, larghezza, davanzale,
    altezza, ante, cerniera, `tieni = no`) e rilancia con `--tabella file_aperture.csv`.
@@ -239,5 +271,7 @@ Il tetto è **ricostruito dalla pianta del tetto**, non inventato: se la pianta 
 - [ ] Quote delle aperture scritte vicino (`120x150`, `ht 100`) — facoltative se c'è il prospetto
 - [ ] Prospetto sud sotto e nord sopra la pianta, stesse X, stessa scala, con almeno una porta
 - [ ] Pianta del tetto sul layer `TETTO`: solo contorno, colmi, displuvi, compluvi
+- [ ] Giardino: campiture verdi = prato, azzurre = acqua, altre = pavimentazione (o layer `Prato`/`Pavimentazione`/`Piscina`);
+      alberi, siepi, cespugli come blocchi con il nome giusto, fuori dai muri; gli stessi in prospetto per le altezze
 - [ ] Testi non esplosi; xref incorporati; `OVERKILL`/`PURGE` fatti
 - [ ] Salvato come DXF (2013 o successivo) oppure DWG con ODA File Converter / LibreDWG installato

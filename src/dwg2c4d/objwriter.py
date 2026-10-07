@@ -23,10 +23,22 @@ MATERIALS = {
     "Maniglie": ((0.78, 0.78, 0.80), 1.0),
     "Tramezzi": ((0.93, 0.92, 0.89), 1.0),
     "Battiscopa": ((0.96, 0.96, 0.95), 1.0),
+    "Pavimentazione": ((0.62, 0.61, 0.60), 1.0),
+    "Bordi": ((0.40, 0.40, 0.42), 1.0),
+    "Prato": ((0.36, 0.55, 0.26), 1.0),
+    "Terreno": ((0.45, 0.37, 0.29), 1.0),
+    "Vasca": ((0.80, 0.86, 0.89), 1.0),
+    "Acqua": ((0.30, 0.60, 0.78), 0.55),
+    "Tronco": ((0.38, 0.27, 0.18), 1.0),
+    "Chioma": ((0.20, 0.45, 0.20), 1.0),
+    "Siepe": ((0.16, 0.36, 0.15), 1.0),
+    "Cespuglio": ((0.27, 0.50, 0.22), 1.0),
+    "Arredo": ((0.82, 0.72, 0.52), 1.0),
 }
 
 
-SHARED = ("Telai", "Ante", "Vetri", "Maniglie")  # parts of every opening share one material
+# parts of every opening (and of every plant, piece of garden furniture) share one material
+SHARED = ("Telai", "Ante", "Vetri", "Maniglie", "Tronco", "Chioma", "Siepe", "Cespuglio", "Arredo")
 
 
 def material_of(group: str) -> str:

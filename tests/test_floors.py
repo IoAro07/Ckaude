@@ -105,7 +105,9 @@ def test_layer_rules_know_floors_skirting_and_partitions():
     assert rules.classify_layer("21 Pavimenti") == "floor"
     assert rules.classify_layer("20 Battiscopa") == "skirting"
     assert rules.classify_layer("19 Fondelli") == "wall" and rules.is_partition("19 Fondelli")
-    assert not rules.is_partition("18 Muri") and rules.classify_layer("Pavimento_esterno") == "floor"
+    assert not rules.is_partition("18 Muri") and rules.classify_layer("Pavimento_interno") == "floor"
+    # the floor of the garden is no floor of a room: it is the paving of the garden
+    assert rules.classify_layer("Pavimento_esterno") is None and rules.garden_kind("Pavimento_esterno") == "paving"
 
 
 # --- skirting --------------------------------------------------------------------------------

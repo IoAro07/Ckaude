@@ -2,12 +2,14 @@
 
 Legge una pianta 2D, ne **estrude i muri** (con i tramezzi a parte), **apre porte, finestre e vani** con le
 quote che trova (scritte del disegno, prospetti), costruisce **infissi dettagliati** (imbotto, cornice, telai, ante,
-maniglie, toppe), **pavimenti per locale**, **battiscopa** e, se vuoi, il **tetto**. Scrive un file **OBJ + MTL**
+maniglie, toppe), **pavimenti per locale**, **battiscopa**, il **tetto** e il **giardino** (pavimentazione, prato,
+piscina scavata, siepi, alberi, cespugli, arredi esterni). Scrive un file **OBJ + MTL**
 per Cinema 4D, e se vuoi anche un `*_model.json` per lo script di importazione (oggetti nativi, materiali Corona).
 
 ```
 pianta.dwg  ──►  dwg2c4d  ──►  pianta.obj + .mtl  (+ _model.json)  ──►  Cinema 4D
                            └►  pianta_aperture.csv   (porte/finestre: correggile in Excel e rilancia)
+                           └►  pianta_giardino.csv   (siepi, alberi, cespugli, arredi: altezze e tipi correggibili)
                            └►  pianta_controllo_pianta.png, pianta_anteprima_3d.png, pianta_report.txt
 ```
 
@@ -355,6 +357,81 @@ I testi (TEXT, MTEXT, attributi dei blocchi, multileader) vengono letti e colleg
 * Ogni locale chiuso dai muri è elencato nel riepilogo, con area, nome e altezza. Se i tramezzi non si chiudono
   (un varco senza porta) i locali si fondono in uno solo con tutti i nomi.
 
+## Giardino e aree esterne
+
+Quello che sta fuori dai muri diventa il **giardino** (`--no-giardino` lo esclude): terreno, pavimentazione, prato,
+piscina scavata, e le piante e gli arredi disegnati come blocchi. Il giardino si cerca attorno alla casa (campiture a
+meno di 3 m dall'edificio o dal giardino già trovato) e **non** prende i retini dentro i muri, né quelli dei prospetti,
+né quelli lontani (la pianta del tetto, un altro disegno nello stesso file). Per indicarlo tu: `--area-giardino XMIN,YMIN,XMAX,YMAX`
+(coordinate del disegno).
+
+**Il terreno.** Ogni campitura (HATCH) fuori dai muri, e ogni polilinea chiusa su un layer che dice cosa è, è un pezzo di
+terreno. Cosa sia lo decide, nell'ordine: il **nome del layer**, il **nome del retino**, il **colore** del retino
+(verde = prato, azzurro = acqua, ogni altro colore = pavimentazione; il bianco è una maschera e si ignora).
+
+| Layer (nome contiene) | Terreno |
+|---|---|
+| `Prato`, `Erba`, `Lawn`, `Grass` | prato |
+| `Pavimentazione`, `Pavimenti esterni`, `Terrazza`, `Patio`, `Vialetto`, `Camminamento`, `Marciapiede`, `Cortile`, `Deck` | pavimentazione |
+| `Piscina`, `Pool`, `Acqua`, `Vasca`, `Laghetto` | acqua |
+| `Giardino`, `Verde`, `Esterno`, `Sistemazioni esterne`, `Landscape` | generico: colore e retino decidono |
+
+Le campiture vengono messe **nell'ordine di disegno** (quello che è disegnato dopo copre quello che sta sotto), quindi
+non si sovrappongono mai. Ne esce un oggetto per tipo: `Pavimentazione` (quota 0, a filo del pavimento di casa), `Prato` e
+`Terreno` (5 cm più bassi: `Config.garden_lawn_drop`), `Bordi` (le strisce più sottili di 35 cm: cordoli, muretti,
+disegnati a campitura), tutti spessi 20 cm sotto la loro quota (`garden_thickness`). Gli spazi stretti tra un pezzo e l'altro
+si riempiono di terreno; un buco che resta scoperto in mezzo a un pezzo (dove sta un cespuglio, un tavolo) prende ciò che lo
+circonda.
+
+**La piscina.** L'acqua (un pezzo azzurro di almeno 1 m2) diventa una **vasca scavata**: `Vasca` è un guscio chiuso
+(pareti e fondo) profondo 1,5 m (`--profondita-piscina`), spesso 15 cm, che arriva fino al bordo del buco che la
+pavimentazione lascia attorno all'acqua (il bordo scoperto del disegno è il **bordo vasca**, fino a 80 cm); `Acqua` è il
+volume dell'acqua, 20 cm sotto il bordo. La pavimentazione e il prato non entrano nella vasca.
+
+**Piante e arredi.** I blocchi fuori dai muri con un nome che dice cosa sono, o inseriti su un layer del giardino,
+diventano **segnaposto** della dimensione del blocco, ciascuno con la sua sigla e il suo gruppo:
+
+| Il blocco si chiama… | Tipo | Segnaposto | Sigla | Altezza predefinita |
+|---|---|---|---|---|
+| `Siepe`, `Hedge` | siepe | scatola | `S01`… | 1,2 m |
+| `Albero`, `Tree`, `Pino`, `Palma`… | albero | tronco + chioma (ellissoide) | `A01`… | 4,5 m |
+| `Cespuglio`, `Shrub`, `Arbusto`, `Vaso`… | cespuglio | ellissoide | `C01`… | 0,9 m |
+| `Sdraio`, `Tavolo`, `Sedia`, `Panchina`, `Ombrellone`… (o altro, su un layer del giardino) | arredo | scatola | `E01`… | 0,35–2,3 m a seconda del nome, altrimenti 0,5 |
+
+Le sigle seguono l'ordine di lettura (dall'alto a sinistra). Il **gruppo di ogni oggetto ha l'asse al centro della base**,
+come gli infissi (X lungo la lunghezza, Y in alto): nel JSON è un null `A01`, `S01`… sotto `Alberi`, `Siepi`, `Cespugli`,
+`Arredi_esterni`; per sostituire un albero con il tuo modello cancelli le mesh del null e ci metti dentro il tuo, con
+posizione e rotazione a zero. Gli oggetti poggiano sulla quota del terreno in cui stanno (pavimentazione 0, prato −5 cm).
+
+**Altezze.** Il disegno in pianta non le dà: vengono dal **prospetto** se lo trova (un blocco `Albero Prospetto` o una
+siepe disegnata in prospetto con blocchi o con campiture larghe come quelle in pianta; le righe di siepe disegnate una
+sopra l'altra contano insieme; vale la più alta trovata), altrimenti sono le predefinite
+(`--altezza-alberi`, `--altezza-siepi`, `--altezza-cespugli`). Il riepilogo dice da dove viene ogni altezza.
+
+**La tabella del giardino.** Ogni conversione scrive `NOME_giardino.csv` (`;`, centimetri, virgola decimale): una
+riga per oggetto con sigla, tipo, blocco, posizione, rotazione, lunghezza, larghezza, altezza e origine
+dell'altezza. Compila le colonne `MODIFICA_*` e rilancia con `--tabella-giardino NOME_giardino.csv`
+(solo le celle compilate valgono):
+
+| Colonna | Valori |
+|---|---|
+| `MODIFICA_tipo` | `albero`, `siepe`, `cespuglio`, `arredo` (cambia la forma e, se non indichi l'altezza, l'altezza predefinita) |
+| `MODIFICA_lunghezza`, `MODIFICA_larghezza`, `MODIFICA_altezza` | centimetri |
+| `MODIFICA_tieni` | `no` = l'oggetto non viene costruito |
+
+Ordine di priorità delle altezze: **tabella > prospetto > predefinite**. La tabella non si sovrascrive mai
+(`NOME_giardino_nuova.csv` se il nome coincide); `--no-tabella` non scrive né questa né quella delle aperture.
+
+**Nel file di Cinema 4D** il terreno sta sotto il null `Giardino`, la piscina sotto `Piscina`, ognuno con un materiale
+(`Pavimentazione esterna`, `Prato`, `Terreno`, `Bordi e cordoli`, `Vasca piscina`, `Acqua`, `Tronco`, `Chioma`, `Siepe`,
+`Cespuglio`, `Arredi esterni`) da sostituire con i tuoi. L'immagine `NOME_controllo_pianta.png` mostra il giardino
+com'è stato capito, con le sigle degli oggetti.
+
+**Limiti del giardino.** Il terreno è piano (il disegno è 2D) e le forme delle piante sono segnaposto, non vegetazione;
+muretti e recinzioni disegnati come linee non vengono costruiti (solo quelli a campitura sottile diventano `Bordi`, piatti);
+un'altra campitura azzurra fuori casa (un laghetto sì, una fontana no) è comunque acqua; le campiture di un colore
+insolito sono pavimentazione (si cambia con il nome del layer). I retini di una casa senza giardino non producono nulla.
+
 ## Importare in Cinema 4D
 
 Ci sono due modi. Il secondo è consigliato se usi Corona.
@@ -363,7 +440,8 @@ Ci sono due modi. Il secondo è consigliato se usi Corona.
 sono quelli base del file `.mtl`.
 
 **B. File `_model.json` + script Python in Cinema 4D** (`--json-c4d`): lo script crea oggetti nativi, raggruppati
-per tipo (`Murature`, `Infissi` con un gruppo per ogni F01/P01…, `Pavimenti`, `Battiscopa`, `Tetto`…), con un
+per tipo (`Murature`, `Infissi` con un gruppo per ogni F01/P01…, `Pavimenti`, `Battiscopa`, `Tetto`, `Giardino`,
+`Piscina`, `Alberi`, `Siepi`…), con un
 materiale per tipo (Corona Physical se Corona è installato, altrimenti standard), e risolve da solo assi e
 orientamento delle facce. Il file è in **centimetri**, con assi del disegno (X, Y, Z in alto). Lo script è
 `c4d/plan2c4d_import.py` (nel progetto): in Cinema 4D *Estensioni → Script Manager → File → Carica* quel file,
@@ -430,6 +508,10 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--prospetto` | zona di un prospetto (ripetibile): altezze di porte e finestre; 5° valore opzionale = Y del pavimento finito |
 | `--tetto`, `--no-tetto`, `--layer-tetto`, `--area-tetto` | tetto dalla pianta del tetto: automatico se il layer c'è (`--no-tetto` lo evita, `--tetto` lo richiede) |
 | `--pendenza`, `--spessore-tetto`, `--sposta-tetto` | pendenza (gradi), spessore (0,15 m), spostamento della pianta del tetto |
+| `--no-giardino` | non costruire il giardino (terreno, piscina, siepi, alberi, arredi esterni) |
+| `--area-giardino` | dove è il giardino (coordinate del disegno); default: lo trova attorno alla casa |
+| `--tabella-giardino` | applica la tabella del giardino corretta a mano (`NOME_giardino.csv`, colonne `MODIFICA_*`) |
+| `--profondita-piscina`, `--altezza-alberi`, `--altezza-siepi`, `--altezza-cespugli` | in metri, se il prospetto non le dà |
 | `--origine` | `centro` (default), `minimo`, `disegno`: dove sta lo zero del modello |
 | `--json-c4d` | scrivi anche `NOME_model.json` per lo script di importazione di Cinema 4D |
 | `--specchia` | specchia la pianta |
@@ -456,7 +538,8 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 - **Un piano alla volta.** Con i layer nominati per piano (`P1_`, `pianta2`) si sceglie con `--piano`; più piani
   sovrapposti o affiancati senza numeri nei nomi vanno separati con `--area` o su file distinti. Ogni piano è un OBJ:
   non vengono impilati.
-- Non vengono generati: scale, arredi, tratteggi, quote, comignoli e abbaini. Porte e finestre hanno imbotto, cornice,
+- Non vengono generati: scale, arredi interni, tratteggi, quote, comignoli e abbaini (gli arredi del giardino sono
+  segnaposto: vedi *Giardino e aree esterne*). Porte e finestre hanno imbotto, cornice,
   telaio, ante, maniglie e toppa, ma niente cerniere vere: la forma è fatta di scatole (nessun profilo, nessun
   vetro stratificato). La **cerniera** si ricava dall'arco in pianta: senza arco è a sinistra (nota nella tabella).
 - **Le scritte**: quelle esplose in linee sono lette per confronto di forma e possono sbagliare (un `1` per una `l`,
@@ -497,6 +580,9 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 | Le lettere esplose sono lette male | Correggi nella tabella (`MODIFICA_*`); `--no-testi-esplosi` le ignora. |
 | Un vano compare dove non c'è | Nella tabella `MODIFICA_tieni = no`, oppure `--no-vani`. |
 | Una porta/finestra non compare | Il simbolo non tocca il muro (avviso nel riepilogo) o è su un layer non riconosciuto. |
+| Il giardino non compare o manca un pezzo | Guarda `Giardino:` nel riepilogo e l'immagine `*_controllo_pianta.png`. Le campiture devono stare a meno di 3 m dalla casa o dal resto del giardino; altrimenti `--area-giardino`. I retini nei prospetti, dentro i muri o lontani si ignorano di proposito. |
+| Il prato è pavimentazione (o l'acqua no) | Il colore del retino non è verde/azzurro: dai al layer un nome che lo dica (`Prato`, `Pavimentazione`, `Piscina`) o cambia il colore o il nome del retino (`GRASS`). |
+| Un albero/una siepe manca o ha l'altezza sbagliata | Il blocco deve chiamarsi `Albero…`/`Siepe…`/`Cespuglio…` (o stare su un layer `Verde`/`Giardino`) e stare fuori dai muri; l'altezza si corregge nella tabella `NOME_giardino.csv` (`MODIFICA_altezza`). |
 | Pianta specchiata in Cinema 4D | `--specchia`, oppure *Flip Z* nelle opzioni d'importazione. |
 | `Impossibile leggere il file DWG` | Installa ODA File Converter o LibreDWG, oppure salva il DWG come DXF. |
 

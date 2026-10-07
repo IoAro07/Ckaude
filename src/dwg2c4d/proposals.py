@@ -12,6 +12,9 @@ from dataclasses import dataclass, replace
 
 from .config import Config, LayerRules
 
+GARDEN_LABELS = {"water": "giardino: acqua / piscina", "lawn": "giardino: prato", "paving": "giardino: pavimentazione esterna",
+                 "plants": "giardino: vegetazione (alberi, siepi, cespugli)", "furniture": "giardino: arredi esterni",
+                 "garden": "giardino / esterno"}
 NAME_HINTS = (
     (("arred", "furnit", "mobil", "sanit", "bagno_"), "arredi (blocchi e linee di mobili)"),
     (("quot", "dimens", "testi", "text", "annot", "scritt", "note"), "quote e testi"),
@@ -83,7 +86,7 @@ def propose_layers(doc, cfg: Config, rows: list[dict]) -> list[Proposal]:
 
     for row in unknown:
         layer, counts = row["layer"], row["entities"]
-        hint = _name_hint(layer)
+        hint = GARDEN_LABELS.get(row.get("garden") or "") or _name_hint(layer)
         if hint:
             out.append(Proposal(layer, None, hint, "alta", "dal nome del layer"))
         elif _only(counts, ("TEXT", "MTEXT", "DIMENSION", "LEADER", "MULTILEADER", "ATTRIB")):

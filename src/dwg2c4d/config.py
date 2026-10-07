@@ -62,11 +62,44 @@ class LayerRules:
     # Checked in this order: "MURI_PORTANTI" must not become a door layer.
     _ORDER = ("door", "window", "column", "skirting", "floor", "wall", "roof")
 
+    # The garden: layers that say what the ground outside the building is made of (or what grows on it).
+    # Checked in this order; "estern..." and the like only say "outside": the hatches there are told apart by
+    # their pattern and colour.
+    _GARDEN = (
+        ("water", ("piscin", "pool", "acqua", "water", "vasca", "laghett", "stagn")),
+        ("lawn", ("prato", "prati", "erba", "lawn", "grass")),
+        ("paving", ("pavimentazion", "terrazz", "patio", "vialett", "camminament", "marciapied", "cortile",
+                    "piazzal", "paving", "deck", "selciat", "ghiai")),
+        ("plants", ("siep", "hedge", "alber", "tree", "cespugl", "shrub", "bush", "arbust")),
+    )
+    _GARDEN_ANY = ("giardin", "garden", "verde", "green", "landscap", "estern", "outdoor", "exterior", "sistemazion")
+    # a layer with one of these is an elevation, a section, a text...: never garden
+    _NOT_GARDEN = ("prospett", "sezion", "section", "elevat", "quot", "dimens", "text", "testi", "tett", "roof",
+                   "luci", "prese", "interrutt", "elettr", "impiant", "immagin", "riferiment")
+
     @staticmethod
     def tokens(name: str) -> list[str]:
         return [t for t in re.split(r"[^a-z]+", name.lower()) if t]
 
+    def garden_kind(self, layer: str) -> str | None:
+        """What a layer holds of the garden: water | lawn | paving | plants | furniture | garden (outside, in
+        general) | None. Meant for layers that are no plan element (it does not look at walls, doors...)."""
+        toks = self.tokens(layer)
+        if not toks or any(t.startswith(self._NOT_GARDEN) for t in toks):
+            return None
+        for kind, prefixes in self._GARDEN:
+            if any(t.startswith(prefixes) for t in toks):
+                return kind
+        outside = any(t.startswith(self._GARDEN_ANY) for t in toks)
+        if any(t.startswith(("arred", "furnit", "mobil")) for t in toks):
+            return "furniture" if outside else None
+        if outside and any(t.startswith(("pavim", "floor", "solai")) for t in toks):
+            return "paving"  # "Pavimenti esterni" is the paving of the garden, not the floors of the rooms
+        return "garden" if outside else None
+
     def _default_match(self, category: str, name: str, ignore_veto: bool = False) -> bool:
+        if category == "floor" and self.garden_kind(name) == "paving":
+            return False  # "Pavimentazione", "Pavimenti esterni": the ground outside, not the floors inside
         toks = self.tokens(name)
         # "Tetto"/"Roof" are on the veto list for plan elements, but they are what the
         # roof category looks for.
@@ -177,6 +210,24 @@ class Config:
     fixtures_per_opening: bool = False  # parts of each door/window as objects of their own (Telai_F01...)
     fixtures: str = "simple"  # simple: a thin pane per window | detailed: frames, sashes, leaves, handles
 
+    # The garden: the ground outside the building (paving, lawn, water, soil), a dug pool, and the plants and
+    # outdoor furniture drawn as blocks. Heights in metres; the library leaves it off (the command line turns it on).
+    garden: bool = False
+    garden_area: tuple[float, float, float, float] | None = None  # drawing units: where the garden is (default: found)
+    garden_thickness: float = 0.20  # thickness of the ground slabs, below their top
+    garden_lawn_drop: float = 0.05  # the lawn and the soil are this much lower than the paving (which is at 0)
+    pool_depth: float = 1.50
+    pool_wall: float = 0.15  # thickness of the walls and the floor of the pool shell
+    pool_water_drop: float = 0.20  # the water is this much lower than the edge
+    tree_height: float = 4.50
+    shrub_height: float = 0.90
+    hedge_height: float = 1.20
+    furniture_height: float = 0.50  # outdoor furniture the name of which says nothing about its height
+    write_garden_table: bool = True  # write <name>_giardino.csv: every plant / piece of furniture, editable by hand
+    garden_table_in: str | None = None  # an edited garden table to apply (MODIFICA_* columns)
+    area_auto: bool = False  # internal: ``area`` was set by the program (to leave out a roof plan), not by the user
+    garden_exclude: list[tuple[float, float, float, float]] = field(default_factory=list)  # internal: drawing units
+
     # Input / output.
     units: str | None = None  # force drawing units: mm, cm, m, in, ft
     out_units: str = "m"
@@ -219,8 +270,9 @@ class Config:
             "wall_height", "door_height", "window_sill", "window_height", "wall_thickness",
             "max_wall_thickness", "floor_thickness", "ceiling_thickness", "glass_thickness",
             "roof_thickness", "roof_default_pitch", "label_radius", "passage_max", "skirting_height",
-            "skirting_thickness")]
-        numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset) if box_ for v in box_]
+            "skirting_thickness", "garden_thickness", "garden_lawn_drop", "pool_depth", "pool_wall",
+            "pool_water_drop", "tree_height", "shrub_height", "hedge_height", "furniture_height")]
+        numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset, self.garden_area) if box_ for v in box_]
         numbers += [v for ev in self.elevations for v in ev]
         if self.roof_pitch is not None:
             numbers.append(self.roof_pitch)
@@ -244,7 +296,14 @@ class Config:
             raise ValueError("label_radius deve essere positivo")
         if self.window_sill < 0 or self.floor_thickness < 0:
             raise ValueError("davanzale e spessore pavimento non possono essere negativi")
-        for name, box_ in (("area", self.area), ("roof_area", self.roof_area)):
+        for name in ("garden_thickness", "pool_depth", "pool_wall", "tree_height", "shrub_height", "hedge_height",
+                     "furniture_height"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} deve essere positivo")
+        if self.garden_lawn_drop < 0 or self.pool_water_drop < 0 or self.pool_water_drop >= self.pool_depth:
+            raise ValueError("garden_lawn_drop e pool_water_drop non possono essere negativi, e l'acqua deve "
+                             "stare dentro la vasca (pool_water_drop < pool_depth)")
+        for name, box_ in (("area", self.area), ("roof_area", self.roof_area), ("garden_area", self.garden_area)):
             if box_ is not None:
                 x0, y0, x1, y1 = box_
                 if not (x1 > x0 and y1 > y0):
@@ -275,7 +334,7 @@ class Config:
         bad = set(layers) - set(CATEGORIES)
         if bad:
             raise ValueError(f"categorie di layer sconosciute: {sorted(bad)} (valide: {CATEGORIES})")
-        for key in ("area", "roof_area", "roof_offset"):
+        for key in ("area", "roof_area", "roof_offset", "garden_area"):
             if data.get(key) is not None:
                 data[key] = tuple(float(v) for v in data[key])
         if "elevations" in data:

@@ -19,6 +19,12 @@ Versione di dwg2c4d: ogni infisso (F01, P01, ...) e' un null con l'ASSE al centr
 orientato sul muro: X lungo il muro, Y verso l'alto, Z verso l'esterno dell'edificio (per una porta interna: dal lato
 in cui si apre l'anta). Le mesh dentro il null sono relative a quell'asse: per sostituire un infisso basta cancellarne
 le mesh e mettere dentro il null il tuo modello (con l'asse al centro in basso) con posizione e rotazione a zero.
+
+Giardino (dwg2c4d 0.4): sotto il null Giardino stanno la pavimentazione, il prato, il terreno e i bordi; sotto Piscina la
+vasca e l'acqua; sotto Alberi, Siepi, Cespugli e Arredi_esterni un null per ogni oggetto (A01, S01, C01, E01...), con lo
+stesso asse degli infissi: al centro della base, X lungo la lunghezza dell'oggetto, Y in alto. Le forme sono segnaposto
+(scatola, sfera, tronco e chioma): per sostituire un albero o una siepe cancella le mesh del null e metti dentro il tuo
+modello con l'asse alla base e posizione e rotazione a zero.
 """
 import base64
 import json
@@ -72,10 +78,10 @@ def make_material(doc, key, spec, use_corona=True):
         mat = c4d.BaseMaterial(c4d.Mmaterial)
         mat.SetName(spec["name"])
         mat[c4d.MATERIAL_COLOR_COLOR] = color
-        if key == "glass":
+        if key in ("glass", "water"):
             mat[c4d.MATERIAL_USE_TRANSPARENCY] = True
-            mat[c4d.MATERIAL_TRANSPARENCY_BRIGHTNESS] = 0.85
-            mat[c4d.MATERIAL_TRANSPARENCY_REFRACTION] = 1.52
+            mat[c4d.MATERIAL_TRANSPARENCY_BRIGHTNESS] = 0.85 if key == "glass" else 0.6
+            mat[c4d.MATERIAL_TRANSPARENCY_REFRACTION] = 1.52 if key == "glass" else 1.33
     doc.InsertMaterial(mat)
     return mat
 
@@ -117,7 +123,9 @@ def build(doc, model, use_corona=True, use_layers=True, phong_angle_deg=40.0):
     last_child = {}                # per inserire in ordine: ultimo figlio inserito di ogni genitore
     layers = {}
     palette = {"Murature": (0.85, 0.85, 0.8), "Pavimenti": (0.6, 0.45, 0.3), "Battiscopa": (1, 1, 1),
-               "Infissi": (0.3, 0.6, 0.9), "Soffitti": (0.9, 0.9, 0.9)}
+               "Infissi": (0.3, 0.6, 0.9), "Soffitti": (0.9, 0.9, 0.9), "Giardino": (0.4, 0.65, 0.3),
+               "Piscina": (0.3, 0.6, 0.85), "Alberi": (0.2, 0.5, 0.2), "Siepi": (0.15, 0.4, 0.15),
+               "Cespugli": (0.3, 0.6, 0.25), "Arredi_esterni": (0.85, 0.7, 0.45)}
     for g in model["groups"]:
         if g["name"] == model["name"]:
             continue

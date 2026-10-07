@@ -23,6 +23,8 @@ from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
 from .texts import read_words
 from .passages import find_passages
+from .garden import build_garden
+from .garden_table import apply_garden_table, read_garden_table, write_garden_table
 from .floors import extend_to_outer_faces, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
 from .qa import plan_overlay, preview_3d, write_report
 
@@ -59,6 +61,8 @@ class ConversionReport:
     mesh: object | None = None  # the final Mesh (for previews); not part of the printed summary
     elevations: list[dict] = field(default_factory=list)  # side, matched, total, zero source
     roof: dict | None = None  # pitch_deg, pitch_source, ridge_height, faces
+    garden: object | None = None  # the Garden: ground, pools, plants, furniture
+    garden_table_path: Path | None = None
 
 
 def _extent(geom: BaseGeometry) -> tuple[float, float]:
@@ -177,7 +181,10 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             y1 = max(g["bounds"][3] for g in real) + margin
             area = tuple(v / result.unit_scale for v in (x0, y0, x1, y1))
             dropped = [g for g in groups if g["openings"] == 0]
-            fixed = convert(input_path, output_path, replace(cfg, area=area))
+            skip = [tuple((v + d) / result.unit_scale for v, d in zip(g["bounds"], (-0.5, -0.5, 0.5, 0.5)))
+                    for g in dropped]  # a roof plan or a section is not the garden either
+            fixed = convert(input_path, output_path,
+                            replace(cfg, area=area, area_auto=True, garden_exclude=[*cfg.garden_exclude, *skip]))
             fixed.warnings.insert(0, (
                 f"Ho escluso {len(dropped)} gruppo/i di muri senza porte ne' finestre (di solito la pianta del tetto "
                 f"o una sezione disegnate sullo stesso layer): {_describe_groups(dropped, result.unit_scale)}. "
@@ -269,6 +276,14 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     footprint = building_footprint(solid)
     for o in openings:
         o.face_sign = facing_sign(o, footprint)
+    garden = None
+    if cfg.garden:
+        garden = build_garden(doc, cfg, result.unit_scale, footprint, [tuple(spec[:4]) for spec, _ in specs], warnings)
+        if garden is not None and cfg.garden_table_in:
+            changed = apply_garden_table(garden, read_garden_table(cfg.garden_table_in), cfg, warnings)
+            if not changed:
+                warnings.append("Tabella del giardino: nessuna riga con celle MODIFICA_* compilate da applicare.")
+        plan.garden = garden
     mesh = build_mesh(plan, cfg, warnings)
     offset = (0.0, 0.0)
     if cfg.origin != "drawing":
@@ -278,7 +293,8 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     write_obj(mesh, output_path, cfg.out_units, cfg.mirror)
     json_path = None
     if cfg.c4d_json:
-        json_path = write_json(to_model_dict(mesh, output_path.stem, offset, openings),
+        json_path = write_json(to_model_dict(mesh, output_path.stem, offset, openings,
+                                             garden.objects if garden else None),
                                output_path.with_name(output_path.stem + "_model.json"))
 
     table_path = None
@@ -287,6 +303,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         if cfg.table_in and Path(cfg.table_in).resolve() == table_path.resolve():
             table_path = output_path.with_name(output_path.stem + "_aperture_nuova.csv")  # never overwrite the input
         write_table(table_path, openings, result.unit_scale)
+
+    garden_table_path = None
+    if cfg.write_garden_table and garden is not None and garden.objects:
+        garden_table_path = output_path.with_name(output_path.stem + "_giardino.csv")
+        if cfg.garden_table_in and Path(cfg.garden_table_in).resolve() == garden_table_path.resolve():
+            garden_table_path = output_path.with_name(output_path.stem + "_giardino_nuova.csv")  # never overwrite the input
+        write_garden_table(garden_table_path, garden, result.unit_scale)
 
     report = ConversionReport(
         output=output_path,
@@ -315,9 +338,11 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         openings=openings,
         plan=plan,
         room_objects=rooms,
+        garden=garden,
+        garden_table_path=garden_table_path,
     )
     created = [output_path.name, output_path.with_suffix(".mtl").name]
-    created += [p.name for p in (json_path, table_path) if p]
+    created += [p.name for p in (json_path, table_path, garden_table_path) if p]
     if cfg.images:
         report.preview_path = preview_3d(mesh, output_path.with_name(output_path.stem + "_anteprima_3d.png"))
         created.append(report.preview_path.name)

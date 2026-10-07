@@ -29,8 +29,22 @@ GROUPS = {
     "Battiscopa": ("Battiscopa", "skirting"),
     "Soffitto": ("Soffitti", "ceiling"),
     "Tetto": ("Tetto", "roof"),
+    # the garden: the ground and the pool, then plants and furniture (a null for each kind, one for each object)
+    "Pavimentazione": ("Giardino", "paving"),
+    "Bordi": ("Giardino", "garden_edge"),
+    "Prato": ("Giardino", "lawn"),
+    "Terreno": ("Giardino", "soil"),
+    "Vasca": ("Piscina", "pool_shell"),
+    "Acqua": ("Piscina", "water"),
+    "Tronco": ("Alberi", "trunk"),
+    "Chioma": ("Alberi", "foliage"),
+    "Siepe": ("Siepi", "hedge"),
+    "Cespuglio": ("Cespugli", "shrub"),
+    "Arredo": ("Arredi_esterni", "outdoor_furniture"),
 }
 FIXTURE_PARTS = ("Telai", "Ante", "Vetri", "Maniglie")
+GARDEN_PARTS = ("Tronco", "Chioma", "Siepe", "Cespuglio", "Arredo")  # parts of a plant / piece of furniture
+FRAME_PARTS = FIXTURE_PARTS + GARDEN_PARTS  # groups named PART_ID (Telai_F01, Chioma_A01) hang under a null ID
 MATERIALS = {
     "wall": {"name": "Muro", "color": [0.90, 0.89, 0.86], "rough": 0.85},
     "wall_outer": {"name": "Muro esterno", "color": [0.85, 0.78, 0.68], "rough": 0.9},
@@ -45,17 +59,29 @@ MATERIALS = {
     "frame": {"name": "Telaio", "color": [0.92, 0.92, 0.90], "rough": 0.45},
     "door_leaf": {"name": "Anta porta", "color": [0.55, 0.38, 0.22], "rough": 0.5},
     "metal": {"name": "Metallo", "color": [0.78, 0.78, 0.80], "rough": 0.25},
+    "paving": {"name": "Pavimentazione esterna", "color": [0.62, 0.61, 0.60], "rough": 0.7},
+    "garden_edge": {"name": "Bordi e cordoli", "color": [0.40, 0.40, 0.42], "rough": 0.8},
+    "lawn": {"name": "Prato", "color": [0.36, 0.55, 0.26], "rough": 0.95},
+    "soil": {"name": "Terreno", "color": [0.45, 0.37, 0.29], "rough": 0.95},
+    "pool_shell": {"name": "Vasca piscina", "color": [0.80, 0.86, 0.89], "rough": 0.4},
+    "water": {"name": "Acqua", "color": [0.30, 0.60, 0.78], "rough": 0.02},
+    "trunk": {"name": "Tronco", "color": [0.38, 0.27, 0.18], "rough": 0.9},
+    "foliage": {"name": "Chioma", "color": [0.20, 0.45, 0.20], "rough": 0.9},
+    "hedge": {"name": "Siepe", "color": [0.16, 0.36, 0.15], "rough": 0.95},
+    "shrub": {"name": "Cespuglio", "color": [0.27, 0.50, 0.22], "rough": 0.95},
+    "outdoor_furniture": {"name": "Arredi esterni", "color": [0.82, 0.72, 0.52], "rough": 0.6},
 }
 
 
-def _frames(mesh: Mesh, openings, origin_offset: tuple[float, float]) -> dict[str, dict]:
-    """The local frame of each opening's group, in centimetres and CAD axes: the origin at the centre of the
-    opening and the lowest point of its parts, X (``ex``) along the wall, Y (``ey``) across it looking out,
-    Z up. A group is then a null placed there, with its objects' points relative to it."""
+def _frames(mesh: Mesh, openings, origin_offset: tuple[float, float], garden_objects=None) -> dict[str, dict]:
+    """The local frame of each opening's (and each plant's, piece of furniture's) group, in centimetres and CAD
+    axes: the origin at the centre of the object and the lowest point of its parts, X (``ex``) along the wall (or
+    along the length of the plant), Y (``ey``) across it looking out, Z up. A group is then a null placed there,
+    with its objects' points relative to it."""
     low: dict[str, float] = {}
     for gname, faces in mesh.groups.items():
         base, _, oid = gname.partition("_")
-        if oid and base in FIXTURE_PARTS:
+        if oid and base in FRAME_PARTS:
             for ids, _n in faces:
                 for vid in ids:
                     low[oid] = min(low.get(oid, math.inf), mesh.vertices[vid][2])
@@ -71,14 +97,26 @@ def _frames(mesh: Mesh, openings, origin_offset: tuple[float, float]) -> dict[st
             "ex": [round(sign * ux, 6) + 0.0, round(sign * uy, 6) + 0.0],  # "+ 0.0": no -0.0 in the file
             "ey": [round(-sign * uy, 6) + 0.0, round(sign * ux, 6) + 0.0],
         }
+    for g in garden_objects or []:
+        if g.id not in low:
+            continue
+        ux, uy = g.axis
+        frames[g.id] = {
+            "origin": [round((g.cx + origin_offset[0]) * 100, 3), round((g.cy + origin_offset[1]) * 100, 3),
+                       round(low[g.id] * 100, 3)],
+            "ex": [round(ux, 6) + 0.0, round(uy, 6) + 0.0],
+            "ey": [round(-uy, 6) + 0.0, round(ux, 6) + 0.0],
+        }
     return frames
 
 
-def to_model_dict(mesh: Mesh, name: str, origin_offset: tuple[float, float] = (0.0, 0.0), openings=None) -> dict:
+def to_model_dict(mesh: Mesh, name: str, origin_offset: tuple[float, float] = (0.0, 0.0), openings=None,
+                  garden_objects=None) -> dict:
     """``mesh`` is in metres, CAD axes. ``origin_offset`` (m) was already applied to it and is
     recorded so the CAD position can be recovered. With ``openings`` the group of each door/window has its
-    own origin and axes (``origin``, ``ex``, ``ey``) and its objects' points are relative to them."""
-    frames = _frames(mesh, openings, origin_offset)
+    own origin and axes (``origin``, ``ex``, ``ey``) and its objects' points are relative to them; so does each
+    plant and piece of furniture of the garden (``garden_objects``)."""
+    frames = _frames(mesh, openings, origin_offset, garden_objects)
     groups, objects, used = [], [], set()
     for gname, faces in mesh.groups.items():
         base, _, opening = gname.partition("_")
@@ -87,7 +125,7 @@ def to_model_dict(mesh: Mesh, name: str, origin_offset: tuple[float, float] = (0
             used.add(null)
             groups.append({"name": null, "label": null, "parent": name})
         frame = None
-        if opening and base in FIXTURE_PARTS:  # Telai_F01: under a null F01 inside Infissi
+        if opening and base in FRAME_PARTS:  # Telai_F01: under a null F01 inside Infissi; Chioma_A01 inside Alberi
             frame = frames.get(opening)
             if opening not in used:
                 used.add(opening)
