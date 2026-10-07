@@ -384,10 +384,19 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
   l'edificio risulterebbe più piccolo di 3 m o più grande di 300 m (succede: un file in cm che dichiara mm) e
   un'altra unità lo rende plausibile, lo strumento usa quella e lo scrive tra gli avvisi. Sono ipotesi: verifica
   `Ingombro muri` nel riepilogo e, se serve, forza con `--unita cm` (con `--unita` non corregge nulla).
-- **Un piano alla volta.** Più piani sovrapposti o affiancati nello stesso file vanno separati con `--area`
-  o su file distinti.
-- Non vengono generati: scale, arredi, tratteggi, quote, testi, comignoli e abbaini. Le porte sono solo aperture
-  (senza anta); le finestre hanno una lastra di vetro, senza telaio.
+- **Un piano alla volta.** Con i layer nominati per piano (`P1_`, `pianta2`) si sceglie con `--piano`; più piani
+  sovrapposti o affiancati senza numeri nei nomi vanno separati con `--area` o su file distinti. Ogni piano è un OBJ:
+  non vengono impilati.
+- Non vengono generati: scale, arredi, tratteggi, quote, comignoli e abbaini. Porte e finestre hanno imbotto, cornice,
+  telaio, ante, maniglie e toppa, ma niente cerniere vere: la forma è fatta di scatole (nessun profilo, nessun
+  vetro stratificato). La **cerniera** si ricava dall'arco in pianta: senza arco è a sinistra (nota nella tabella).
+- **Le scritte**: quelle esplose in linee sono lette per confronto di forma e possono sbagliare (un `1` per una `l`,
+  un testo molto piccolo o in un font insolito): i numeri e i nomi letti si vedono nella colonna `scritta` della
+  tabella e nel report. Una quota scritta lontana più di `--raggio-scritte` dall'apertura non si collega.
+- **I vani senza simbolo** sono dedotti solo tra due testate di muro libere, allineate, con un vuoto di 0,5-2 m:
+  un varco tra una testata e un muro che la incrocia non viene visto. Se ne vede uno che non c'è, `MODIFICA_tieni = no`.
+- **I locali** sono gli spazi chiusi dai muri: un varco non segnato li fonde in uno (nome con tutti i nomi).
+- **Più altezze di muri** (`h 300` in un locale, `h 290` in un altro): tutti i muri prendono la maggiore, con avviso.
 - **Il tetto** nasce dalle linee della pianta del tetto: non c'è nessun calcolo statico né ricostruzione da zero.
   Gronda sempre alla quota dei muri, senza sporgenza oltre il contorno interno; falde con pendenze diverse sono
   gestite solo se i colmi nel prospetto le fissano. Se la pianta del tetto è confusa il risultato lo sarà.
@@ -415,6 +424,9 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 | `--area -200,...` dà errore | Con numeri negativi scrivi `--area=-200,...` (con il segno uguale). |
 | Il tetto è piatto o strano | Controlla il layer del tetto (`--layer-tetto`), che contenga solo contorno e colmi, e `--area-tetto`; leggi gli avvisi `Tetto:`. |
 | Le finestre non prendono le quote del prospetto | Il prospetto deve avere le stesse X della pianta e stare sotto/sopra; guarda l'avviso e `Prospetto sud: N di M`. |
+| Una quota scritta non è stata presa | Guarda l'avviso `Scritta ... non associata`: allarga `--raggio-scritte`, oppure la porta/finestra manca nel disegno. |
+| Le lettere esplose sono lette male | Correggi nella tabella (`MODIFICA_*`); `--no-testi-esplosi` le ignora. |
+| Un vano compare dove non c'è | Nella tabella `MODIFICA_tieni = no`, oppure `--no-vani`. |
 | Una porta/finestra non compare | Il simbolo non tocca il muro (avviso nel riepilogo) o è su un layer non riconosciuto. |
 | Pianta specchiata in Cinema 4D | `--specchia`, oppure *Flip Z* nelle opzioni d'importazione. |
 | `Impossibile leggere il file DWG` | Installa ODA File Converter o LibreDWG, oppure salva il DWG come DXF. |
@@ -430,5 +442,10 @@ I test costruiscono piante DXF sintetiche (`src/dwg2c4d/sample.py`) e verificano
 assi, coerenza tra normali e ordine dei vertici, tenuta delle mesh, rotazione della pianta, unità, e l'intera catena
 da riga di comando, compresa la conversione DWG tramite un finto `dwg2dxf`.
 
-Struttura: `dwgfile.py` (apertura DWG/DXF) → `reader.py` (entità → geometrie in metri) → `walls.py` e `openings.py`
-(muri, porte, finestre) → `model.py` e `mesh.py` (estrusione) → `objwriter.py` (OBJ/MTL).
+Struttura: `dwgfile.py` (apertura DWG/DXF) → `reader.py` (entità → geometrie in metri) → `walls.py`, `openings.py`,
+`passages.py` (muri, porte, finestre, vani) → `texts.py`, `vtext.py`, `glyphs.py`, `labels.py` (scritte, locali) →
+`elevation.py`, `roof.py` (prospetti, tetto) → `table.py` (tabella delle aperture) → `model.py`, `fixtures.py`,
+`floors.py`, `mesh.py` (estrusione e infissi) → `objwriter.py`, `export.py` (OBJ/MTL, JSON per Cinema 4D) →
+`qa.py`, `render.py` (immagini di controllo, report). `proposals.py` sono le proposte di `--elenca-layer`.
+I template delle lettere (`data/glyph_templates.npz`) sono bitmap dei caratteri di Liberation Sans, FreeSans e DejaVu
+Sans, tutti con licenza libera.
