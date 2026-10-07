@@ -8,7 +8,9 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-python -m pip install --upgrade "%~dp0"
+rem (si entra nella cartella e si installa "."; il percorso della cartella non va passato a pip tra virgolette)
+cd /d "%~dp0"
+python -m pip install --upgrade .
 if errorlevel 1 (
   echo.
   echo L'installazione non e' riuscita: copia il messaggio qui sopra.

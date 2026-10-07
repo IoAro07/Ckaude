@@ -40,6 +40,10 @@ dwg2c4d --help           # se il comando non si trova: python -m dwg2c4d --help
 
 Installa da solo `ezdxf`, `shapely`, `numpy` e `matplotlib` (quest'ultimo serve solo alla pianta di controllo).
 
+Su Windows pip può installare "per l'utente" (avviso *Defaulting to user installation*): è normale, ma il comando
+`dwg2c4d` potrebbe non essere nel PATH. I file `.bat` usano `python -m dwg2c4d`, che funziona sempre; da terminale
+scrivi `python -m dwg2c4d pianta.dwg` al posto di `dwg2c4d pianta.dwg`.
+
 ### Leggere i file `.dwg`
 
 Il formato DWG è chiuso: lo strumento lo converte in DXF con uno di questi programmi gratuiti
