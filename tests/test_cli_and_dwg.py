@@ -46,7 +46,7 @@ def test_cli_list_layers(capsys, sample_lines):
 
 def test_cli_options_are_applied(tmp_path, sample_lines):
     out = tmp_path / "o.obj"
-    assert cli.main([str(sample_lines), "-o", str(out), "--no-pavimento", "--no-vetri", "--soffitto",
+    assert cli.main([str(sample_lines), "-o", str(out), "--no-pavimento", "--no-vetri", "--soffitto", "--muri-uniti",
                      "--unita-output", "cm", "--specchia", "--origine", "disegno", "--infissi", "semplici"]) == 0
     obj = Obj(out)
     assert set(obj.groups) == {"Muri", "Soffitto"}

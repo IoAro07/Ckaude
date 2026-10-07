@@ -13,7 +13,7 @@ from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer
 from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
-from .model import Plan, build_mesh
+from .model import Plan, build_mesh, building_footprint, facing_sign
 from .objwriter import write_obj
 from .openings import assign_ids, build_openings
 from .reader import storeys, read_items
@@ -23,7 +23,7 @@ from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
 from .texts import read_words
 from .passages import find_passages
-from .floors import layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
+from .floors import extend_to_outer_faces, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
 from .qa import plan_overlay, preview_3d, write_report
 
 
@@ -234,18 +234,20 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             solid = plan.solid_walls
             rooms = find_rooms(solid, words, text_unit, [])
 
+    part_layers = {k: g for k, g in layer_walls.items() if cfg.layers.is_partition(k)}
+    if cfg.partitions_apart and part_layers and len(part_layers) < len(layer_walls):
+        main = union(g for k, g in layer_walls.items() if k not in part_layers)
+        plan.partitions = split_partitions(solid, main, union(part_layers.values()), openings)
     if cfg.floors_by_room and cfg.floor_thickness > 0:
         regions = layer_floors(result.items)
         if regions:
             plan.floors = name_floors(regions, rooms)
         elif rooms and (len(rooms) > 1 or rooms[0].named):
             plan.floors = room_floors(rooms, openings)
+        if cfg.floors_to_outer_face:
+            plan.floors = extend_to_outer_faces(plan.floors, solid, cfg.max_wall_thickness, plan.partitions)
     if skirting_items(result.items):
         plan.skirting = skirting_strips(result.items, solid, openings, cfg)
-    part_layers = {k: g for k, g in layer_walls.items() if cfg.layers.is_partition(k)}
-    if cfg.partitions_apart and part_layers and len(part_layers) < len(layer_walls):
-        main = union(g for k, g in layer_walls.items() if k not in part_layers)
-        plan.partitions = split_partitions(solid, main, union(part_layers.values()), openings)
 
     roof_report = None
     roof_items = None
@@ -264,6 +266,9 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
                            "ridge_height": roof.ridge_height + cfg.wall_height, "faces": roof.faces,
                            "ridges_from_elevation": roof.ridges_from_elevation}
 
+    footprint = building_footprint(solid)
+    for o in openings:
+        o.face_sign = facing_sign(o, footprint)
     mesh = build_mesh(plan, cfg, warnings)
     offset = (0.0, 0.0)
     if cfg.origin != "drawing":
@@ -273,7 +278,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     write_obj(mesh, output_path, cfg.out_units, cfg.mirror)
     json_path = None
     if cfg.c4d_json:
-        json_path = write_json(to_model_dict(mesh, output_path.stem, offset),
+        json_path = write_json(to_model_dict(mesh, output_path.stem, offset, openings),
                                output_path.with_name(output_path.stem + "_model.json"))
 
     table_path = None

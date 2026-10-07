@@ -22,14 +22,14 @@ Il codice sta nel repository pubblico <https://github.com/IoAro07/Ckaude> (il ra
   qualsiasi (per esempio `C:\dwg2c4d`).
 - **Con git**: `git clone https://github.com/IoAro07/Ckaude.git`
 
-In alternativa il file `dwg2c4d-0.2.1-py3-none-any.whl` (se te l'hanno consegnato): `pip install
-dwg2c4d-0.2.1-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+In alternativa il file `dwg2c4d-0.3.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.3.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
 script di Cinema 4D, che stanno nella cartella del progetto.
 
 **Per aggiornare** a una versione nuova: scarica di nuovo il progetto in una **cartella nuova** (o `git pull`) e rifai
 `installa.bat`. I file `converti.bat` ed `elenca_layer.bat` usano comunque sempre il codice della cartella in cui stanno
 (`src`), anche se in Python è rimasta installata una copia vecchia. Quando parte, `converti.bat` stampa la riga
-`dwg2c4d 0.2.1  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
+`dwg2c4d 0.3.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
 usando una cartella vecchia. `python -m dwg2c4d --version` fa lo stesso da terminale.
 
 *Perché la cartella nuova*: pip lascia dentro il progetto una cartella `build`; uno ZIP non porta il fuso orario, quindi
@@ -202,11 +202,20 @@ viene ricostruito sopra la porta (architrave) e sopra/sotto la finestra, poi tag
 del muro. Diventa un'apertura `vano` (`V01`...): architrave sopra i 2,10 m (o l'altezza scritta), imbotto e cornice,
 nessuna anta. Compare nella tabella: `MODIFICA_tieni = no` lo richiude con il muro; `--no-vani` non li cerca.
 
+**Muri con due materiali.** I muri escono in tre oggetti sotto `Murature`: `Muri_esterno` (le facce rivolte
+all'esterno dell'edificio), `Muri_interno` (le facce rivolte verso i locali) e `Muri_spessori` (le cime dei muri, le spalle
+di porte e finestre, il fondo). Così all'esterno puoi avere intonaco o rivestimento e all'interno la finitura dei locali;
+se non ti serve la terza, dagli lo stesso materiale dell'interno. Il **fondo dei muri è chiuso**. `--muri-uniti` torna a
+un solo oggetto `Muri`. (Per la libreria: `Config(wall_finishes=True)`.)
+
 **Pavimenti, battiscopa, tramezzi** (convenzione dei nomi dei layer, anche in inglese: floor, skirting):
 
 | Layer (nome contiene) | Cosa produce |
 |---|---|
 | `Pavimenti`, `floor`, `solaio` | poligoni chiusi: **un oggetto per poligono** (`Pavimento_Soggiorno`...), col nome del locale scritto sopra; se un poligono ne sta dentro un altro viene scavato (altra finitura) |
+
+I pavimenti per locale **arrivano fino alla faccia esterna dei muri perimetrali** (sotto i muri), si dividono lungo la mezzeria dei tramezzi che arrivano al muro esterno e non si sovrappongono; sotto i tramezzi, lontano dal bordo, restano vuoti. Con `Config(floors_to_outer_face=False)` si fermano alla faccia interna.
+
 | nessun layer di pavimenti | un oggetto per **locale chiuso dai muri**, esteso sotto le porte (nessun buco alla soglia); con un solo locale senza nome resta la lastra unica `Pavimento`. `--no-pavimento-per-locale` non separa |
 | `Battiscopa`, `skirting`, `zoccolino` | linee/polilinee: fascetta alta 8 cm, spessa 1,2 cm (`skirting_height`, `skirting_thickness` nel file di configurazione), dalla parte della stanza se la linea corre sulla faccia del muro; si ferma alle porte |
 | `Fondelli`, `Tramezzi`, `Divisori` | sono muri come gli altri, ma finiscono nell'oggetto **`Tramezzi`** (materiale a parte); `--no-tramezzi` li lascia in `Muri` |
@@ -357,6 +366,14 @@ orientamento delle facce. Il file è in **centimetri**, con assi del disegno (X,
 accetti il file con un modulo `c4d` simulato; **non è stato provato dentro Cinema 4D** e gli ID dei parametri Corona
 dello script dipendono dalla tua versione di Corona.
 
+**L'asse di ogni infisso.** Nel JSON ogni gruppo `F01`, `P01`… è un null con l'**asse al centro dell'apertura, nel punto
+più basso** (per una porta a livello del pavimento, per una finestra sotto il davanzale), e orientato sul muro: **X lungo
+il muro, Y verso l'alto, Z verso l'esterno** dell'edificio (per una porta interna, dal lato in cui si apre l'anta). Le mesh
+dentro il null sono relative a quell'asse, quindi per **sostituire un infisso** basta cancellarne le mesh e trascinare il
+tuo modello (con l'asse al centro in basso) dentro il null azzerandone posizione e rotazione. Serve lo script
+`c4d/plan2c4d_import.py` del progetto (quello vecchio non conosce l'asse e mette le mesh nel posto sbagliato). Nel file
+OBJ gli oggetti restano con l'asse nell'origine: C4D non legge gli assi dall'OBJ.
+
 **Origine del modello** (`--origine`): i disegni reali stanno spesso a centinaia di metri dall'origine (il tuo
 a circa 730 m). Di default il modello viene portato al **centro dei muri** (`--origine centro`), con la quota
 del pavimento a zero; `minimo` mette lo zero nell'angolo, `disegno` lascia le coordinate del CAD. Il riepilogo
@@ -396,6 +413,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--infissi` | `dettagliati` (default: telai, ante, maniglie, toppe) o `semplici` (solo vetro) |
 | `--no-testi-esplosi`, `--layer-testi` | non cercare / dove cercare le lettere disegnate con le linee |
 | `--pavimenti`, `--battiscopa` | layer dei pavimenti / dei battiscopa (virgole, `*` jolly) |
+| `--muri-uniti` | i muri in un solo oggetto invece di esterno / interno / spessori |
 | `--no-tramezzi`, `--no-pavimento-per-locale` | tramezzi dentro `Muri` / una sola lastra di pavimento |
 | `--no-vani`, `--vano-max` | non dedurre i vani senza simbolo / larghezza massima (m) |
 | `--no-scritte`, `--raggio-scritte` | non leggere i testi / distanza massima tra apertura e quota scritta (m) |

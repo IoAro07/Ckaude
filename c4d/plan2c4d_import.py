@@ -14,6 +14,11 @@ materiale per tipo di elemento (Muro, Pavimento, Telaio, Vetro, ...): cambiando 
 cambi tutti gli elementi dello stesso tipo.  Se Corona e' installato i materiali sono
 Corona Physical, altrimenti materiali standard.
 Unita': cm.  Assi: X = X del CAD, Z = Y del CAD, Y = quota (alto).
+
+Versione di dwg2c4d: ogni infisso (F01, P01, ...) e' un null con l'ASSE al centro, nel punto piu' basso dell'infisso,
+orientato sul muro: X lungo il muro, Y verso l'alto, Z verso l'esterno dell'edificio (per una porta interna: dal lato
+in cui si apre l'anta). Le mesh dentro il null sono relative a quell'asse: per sostituire un infisso basta cancellarne
+le mesh e mettere dentro il null il tuo modello (con l'asse al centro in basso) con posizione e rotazione a zero.
 """
 import base64
 import json
@@ -75,6 +80,18 @@ def make_material(doc, key, spec, use_corona=True):
     return mat
 
 
+def frame_matrix(g):
+    """Matrice locale di un gruppo con 'origin', 'ex', 'ey' (cm, assi CAD): origine nel punto dato, X lungo 'ex',
+    Y verso l'alto, Z lungo 'ey'.  (x, y, z) del CAD  ->  (x, z, y) di Cinema 4D."""
+    ox, oy, oz = g["origin"]
+    ex, ey = g["ex"], g["ey"]
+    off = c4d.Vector(ox, oz, oy)
+    v1 = c4d.Vector(ex[0], 0.0, ex[1])
+    v2 = c4d.Vector(0.0, 1.0, 0.0)
+    v3 = c4d.Vector(ey[0], 0.0, ey[1])
+    return c4d.Matrix(off, v1, v2, v3)
+
+
 def make_layer(doc, name, color):
     try:
         root = doc.GetLayerObjectRoot()
@@ -110,6 +127,8 @@ def build(doc, model, use_corona=True, use_layers=True, phong_angle_deg=40.0):
         doc.InsertObject(n, par, last_child.get(id(par)))
         last_child[id(par)] = n
         nulls[g["name"]] = n
+        if g.get("origin"):          # asse del gruppo (infissi): le mesh dei figli sono relative ad esso
+            n.SetMl(frame_matrix(g))
         if use_layers and g["parent"] == model["name"] and g["name"] in palette:
             lay = make_layer(doc, g["name"], palette[g["name"]])
             if lay is not None:

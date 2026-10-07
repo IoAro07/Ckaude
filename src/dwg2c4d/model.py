@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from functools import cached_property
 
-from shapely.geometry import Polygon
+import shapely
+from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from .config import Config
@@ -69,19 +71,64 @@ def wall_slabs(walls: BaseGeometry, openings: list[Opening], height: float) -> l
     return slabs
 
 
+FACE_PROBE = 0.03  # m: how far in front of a wall face we look to see what it faces
+
+
+def building_footprint(solid: BaseGeometry) -> BaseGeometry:
+    """Everything the walls enclose, walls included: the outline of the building with no holes."""
+    return union(Polygon(p.exterior) for p in polygons_of(solid))
+
+
+def facing_sign(op: Opening, footprint: BaseGeometry) -> int:
+    """Which way the front of an opening's group looks, as +1/-1 along its across axis ``v``: towards the
+    outside of the building when one side of the opening is outside (a window or an entrance door), else
+    the side a door leaf swings to, else +1. A replacement model dropped into the group then faces the
+    same way as the one it replaces."""
+    ux, uy = op.axis
+    vx, vy = -uy, ux
+    reach = op.thickness / 2.0 + 0.3
+    cx, cy = op.center
+    ahead = not footprint.covers(Point(cx + vx * reach, cy + vy * reach))
+    behind = not footprint.covers(Point(cx - vx * reach, cy - vy * reach))
+    if ahead != behind:
+        return 1 if ahead else -1
+    if op.kind == "door" and op.leaves:
+        return int(op.leaves[0].get("swing", 1)) or 1
+    return 1
+
+
+def wall_face_groups(solid: BaseGeometry):
+    """``edge -> group`` for the vertical faces of the walls: what a face looks at decides its material.
+    The outside of the building: Muri_esterno; a room: Muri_interno; the jamb of a door or window cut
+    (it looks into the opening, which belongs to the wall's footprint): Muri_spessori."""
+    footprint = building_footprint(solid)
+    shapely.prepare(solid)
+    shapely.prepare(footprint)
+
+    def group(edge) -> str:
+        (ax, ay), (bx, by) = edge
+        length = math.hypot(bx - ax, by - ay) or 1.0
+        qx = (ax + bx) / 2 + (by - ay) / length * FACE_PROBE  # right-hand normal: out of the wall
+        qy = (ay + by) / 2 - (bx - ax) / length * FACE_PROBE
+        if shapely.contains_xy(solid, qx, qy):
+            return "Muri_spessori"
+        return "Muri_interno" if shapely.contains_xy(footprint, qx, qy) else "Muri_esterno"
+
+    return group
+
+
 def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
     mesh = Mesh()
     walls = plan.solid_walls
     cutting = [o for o in plan.openings if o.keep]  # a dropped opening is closed with wall
-    if plan.partitions.is_empty:
-        mesh.add_extrusion("Muri", wall_slabs(walls, cutting, cfg.wall_height), bottom=False)
-    else:
-        mesh.add_extrusion("Muri", wall_slabs(walls.difference(plan.partitions), cutting, cfg.wall_height),
-                           bottom=False)
-        mesh.add_extrusion("Tramezzi", wall_slabs(plan.partitions, cutting, cfg.wall_height), bottom=False)
+    main = walls if plan.partitions.is_empty else walls.difference(plan.partitions)
+    wall_group, faces = ("Muri_spessori", wall_face_groups(walls)) if cfg.wall_finishes else ("Muri", None)
+    mesh.add_extrusion(wall_group, wall_slabs(main, cutting, cfg.wall_height), bottom=True, side_group=faces)
+    if not plan.partitions.is_empty:
+        mesh.add_extrusion("Tramezzi", wall_slabs(plan.partitions, cutting, cfg.wall_height), bottom=True)
 
     if not plan.columns.is_empty:
-        mesh.add_extrusion("Pilastri", [Slab(0.0, cfg.wall_height, plan.columns)], bottom=False)
+        mesh.add_extrusion("Pilastri", [Slab(0.0, cfg.wall_height, plan.columns)], bottom=True)
 
     if cfg.fixtures == "detailed":
         add_fixtures(mesh, cutting, cfg)

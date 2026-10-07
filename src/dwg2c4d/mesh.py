@@ -73,11 +73,13 @@ class Mesh:
 
     # -- extrusion ---------------------------------------------------------
 
-    def add_extrusion(self, group: str, slabs: list[Slab], bottom: bool = True) -> None:
+    def add_extrusion(self, group: str, slabs: list[Slab], bottom: bool = True, side_group=None) -> None:
         """Extrude stacked slabs (contiguous in z, ascending).
 
         Only exposed horizontal faces are generated: where a slab's footprint
         differs from its neighbour's, the difference becomes a top/bottom face.
+        ``side_group(edge)`` may name another group for the vertical faces along a boundary edge
+        (e.g. the outside face of a wall); caps and edges it does not rename go to ``group``.
         """
         snapped = [_snap(s.geom) for s in slabs]
         # Side faces: an edge that stays the same in consecutive slabs becomes one tall quad
@@ -86,11 +88,11 @@ class Mesh:
         for k, slab in enumerate(slabs):
             edges = {e for poly in polygons_of(snapped[k]) for e in _ring_edges(poly)}
             for edge in [e for e in running if e not in edges]:
-                self._side(group, edge, running.pop(edge), slab.z0)
+                self._side(side_group(edge) if side_group else group, edge, running.pop(edge), slab.z0)
             for edge in edges:
                 running.setdefault(edge, slab.z0)
         for edge, z0 in running.items():
-            self._side(group, edge, z0, slabs[-1].z1)
+            self._side(side_group(edge) if side_group else group, edge, z0, slabs[-1].z1)
         for k, slab in enumerate(slabs):
             geom = snapped[k]
             above = snapped[k + 1] if k + 1 < len(slabs) else None

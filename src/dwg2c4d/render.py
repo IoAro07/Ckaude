@@ -14,7 +14,8 @@ import numpy as np
 from .mesh import Mesh
 
 COLORS = {
-    "Muri": (0.86, 0.84, 0.80), "Pilastri": (0.75, 0.75, 0.75), "Pavimento": (0.66, 0.60, 0.54),
+    "Muri": (0.86, 0.84, 0.80), "Muri_esterno": (0.84, 0.74, 0.62), "Muri_interno": (0.93, 0.92, 0.90),
+    "Muri_spessori": (0.93, 0.92, 0.90), "Pilastri": (0.75, 0.75, 0.75), "Pavimento": (0.66, 0.60, 0.54),
     "Soffitto": (0.95, 0.95, 0.95), "Tetto": (0.72, 0.40, 0.31), "Vetri": (0.50, 0.72, 0.88),
     "Telai": (0.97, 0.97, 0.95), "Tramezzi": (0.90, 0.88, 0.84), "Battiscopa": (0.98, 0.98, 0.97), "Ante": (0.60, 0.42, 0.25), "Maniglie": (0.12, 0.12, 0.14),
 }

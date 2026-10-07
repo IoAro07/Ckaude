@@ -62,6 +62,7 @@ class Opening:
     src: dict = field(default_factory=dict)  # where width/height/sill/leaves came from
     notes: list[str] = field(default_factory=list)
     keep: bool = True  # False: the table asked to drop it (the gap is closed with wall)
+    face_sign: int = 0  # +1/-1: the local Z of its group points along +v / -v (outside, or the swing side); 0 = not decided
     label: str = ""
     layer: str = ""
     block: str = ""

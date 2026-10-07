@@ -156,6 +156,9 @@ def build_parser() -> argparse.ArgumentParser:
                         "(oggetti nativi, un materiale per tipo, anche Corona)")
     g.add_argument("--no-pavimento-per-locale", action="store_true",
                    help="una sola lastra di pavimento sotto tutto l'edificio invece di un oggetto per locale")
+    g.add_argument("--muri-uniti", action="store_true",
+                   help="i muri in un solo oggetto/materiale invece di Muri_esterno, Muri_interno e Muri_spessori "
+                        "(cime, spalle di porte e finestre, fondo)")
     g.add_argument("--no-tramezzi", action="store_true",
                    help="i muri dei layer fondelli/tramezzi restano nell'oggetto Muri invece di avere il loro (Tramezzi)")
     g.add_argument("--no-vani", action="store_true",
@@ -249,6 +252,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
     if args.tabella:
         cfg.table_in = args.tabella
     cfg.images = not args.no_immagini
+    cfg.wall_finishes = not args.muri_uniti
     cfg.roof_auto = not args.no_tetto
     if args.piano is not None:
         cfg.floor = args.piano

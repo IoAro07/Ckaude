@@ -165,6 +165,8 @@ class Config:
     skirting_height: float = 0.08  # battiscopa, from the skirting layer
     skirting_thickness: float = 0.012
     partitions_apart: bool = True  # walls of the fondelli/tramezzi layers as their own object (Tramezzi)
+    wall_finishes: bool = False  # walls in three objects: Muri_esterno, Muri_interno, Muri_spessori (the command line turns it on)
+    floors_to_outer_face: bool = True  # floors per room reach the outer face of the perimeter walls
     floors_by_room: bool = True  # one floor object per room (or per polygon of the floor layer)
     passages: bool = True  # doorways drawn only as a gap between two wall ends (no door symbol)
     passage_max: float = 2.0  # metres: a wider gap between facing wall ends is open space, not a doorway

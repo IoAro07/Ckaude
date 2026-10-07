@@ -8,11 +8,14 @@ what the "fondelli/tramezzi" layers add to the walls, kept apart so it can have 
 
 from __future__ import annotations
 
+import math
+import random
 import re
 
-from shapely.geometry import Point, Polygon
+from shapely.geometry import MultiPoint, Point, Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import polygonize, unary_union
+from shapely.ops import polygonize, unary_union, voronoi_diagram
+from shapely.strtree import STRtree
 
 from .config import Config
 from .geom import fix, polygons_of, union
@@ -24,6 +27,7 @@ MIN_FLOOR_AREA = 0.5  # m2
 OVERLAP_SAME = 0.5  # a floor covers a room when it holds at least this share of the room
 SKIRTING_WALL_NEAR = 0.02  # a skirting line this close to a wall is on its face: the strip goes room-side
 GUARD = 0.005
+OUTER_TOLERANCE = 0.05  # m: the band of perimeter wall is this much thicker than the walls found
 
 
 def _slug(name: str) -> str:
@@ -92,6 +96,90 @@ def room_floors(rooms: list[Room], openings: list[Opening]) -> list[tuple[str, B
         shapes[i] = shape.difference(seen) if not seen.is_empty else shape
         seen = seen.union(shapes[i])
     return name_floors(shapes, rooms)
+
+
+SAMPLE = 0.1  # m: spacing of the points that stand for a floor's outline when sharing the wall band
+
+
+def _share_band(shapes: list[BaseGeometry], band: BaseGeometry, reach: float) -> list[BaseGeometry]:
+    """Split ``band`` between the floors by nearest floor (a Voronoi diagram of their outlines' vertices and
+    points every ``SAMPLE``). Where a partition meets the perimeter wall the line falls on the partition's
+    middle line, straight, because it is the bisector of the two floors' corners."""
+    pts: list[tuple[float, float]] = []
+    owner: list[int] = []
+    zone = band.buffer(reach * 1.6)
+    for i, shape in enumerate(shapes):
+        for poly in polygons_of(shape):
+            for ring in (poly.exterior, *poly.interiors):
+                c = list(ring.coords)
+                for (ax, ay), (bx, by) in zip(c, c[1:]):
+                    n = max(int(math.hypot(bx - ax, by - ay) / SAMPLE), 1)
+                    for k in range(n):
+                        x, y = ax + (bx - ax) * k / n, ay + (by - ay) * k / n
+                        if zone.covers(Point(x, y)):
+                            pts.append((round(x, 6), round(y, 6)))
+                            owner.append(i)
+    if not pts:
+        return [Polygon() for _ in shapes]
+    seen: dict[tuple[float, float], int] = {}
+    for pt, o in zip(pts, owner):
+        seen.setdefault(pt, o)
+    # Perfectly regular points (a straight wall sampled every 10 cm) make a degenerate diagram in which GEOS
+    # can lose a cell: a 0.2 mm jitter, always the same, removes the symmetry and moves no line visibly.
+    rng = random.Random(7)
+    points = [Point(x + rng.uniform(-2e-4, 2e-4), y + rng.uniform(-2e-4, 2e-4)) for x, y in seen]
+    owners = list(seen.values())
+    diagram = voronoi_diagram(MultiPoint(points), envelope=band.envelope.buffer(2.0 * reach + 1.0))
+    tree = STRtree(points)
+    cells: list[list[BaseGeometry]] = [[] for _ in shapes]
+    for cell in diagram.geoms:
+        hit = tree.query(cell, predicate="contains")
+        if len(hit):
+            cells[owners[int(hit[0])]].append(cell)
+    shares = [union(c).intersection(band).intersection(shapes[i].buffer(reach * 1.6)) if c else Polygon()
+              for i, c in enumerate(cells)]
+    # Safety net: whatever a cell lost (a degenerate diagram) goes to the nearest floor within reach.
+    for piece in polygons_of(band.difference(union(shares))):
+        if piece.area < 1e-6:
+            continue
+        near = min(range(len(shapes)), key=lambda i: shapes[i].distance(piece))
+        if shapes[near].distance(piece) <= reach * 1.6:
+            shares[near] = union([shares[near], piece])
+    return shares
+
+
+def extend_to_outer_faces(floors: list[tuple[str, BaseGeometry]], solid: BaseGeometry, max_thickness: float,
+                          exclude: BaseGeometry | None = None) -> list[tuple[str, BaseGeometry]]:
+    """Let every floor reach the outer face of the perimeter walls (they stop at the inner face).
+
+    The strip of wall that lies within a wall's thickness of the outside is shared between the floors by
+    nearest floor: where a partition ends on the perimeter wall the two floors meet on the partition's middle
+    line and never overlap. ``exclude``: material that stays free (the partitions)."""
+    if not floors:
+        return floors
+    footprint = union(Polygon(p.exterior) for p in polygons_of(solid))
+    if footprint.is_empty:
+        return floors
+    gaps = [shape.distance(footprint.boundary) for _, shape in floors]
+    gaps = [g for g in gaps if 1e-6 < g <= max_thickness]
+    if not gaps:
+        return floors  # nothing between the floors and the outside, or no perimeter wall to speak of
+    reach = max(gaps) + OUTER_TOLERANCE
+    inner = footprint.buffer(-reach, join_style="mitre")
+    band = (footprint.difference(inner) if not inner.is_empty else footprint).intersection(solid)
+    if exclude is not None and not exclude.is_empty:
+        band = band.difference(exclude)
+    shapes = [shape for _, shape in floors]
+    band = band.difference(union(shapes))
+    if band.is_empty:
+        return floors
+    out = []
+    for (name, shape), extra in zip(floors, _share_band(shapes, band, reach)):
+        if not extra.is_empty:
+            merged = unary_union([shape, extra]).buffer(0.0005, join_style="mitre").buffer(-0.0005, join_style="mitre")
+            shape = merged.simplify(0.001, preserve_topology=True)
+        out.append((name, shape))
+    return out
 
 
 def skirting_strips(items: list[Item], walls: BaseGeometry, openings: list[Opening], cfg: Config) -> BaseGeometry:

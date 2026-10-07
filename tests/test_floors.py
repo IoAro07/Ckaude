@@ -31,6 +31,7 @@ def divided(tmp_path, names=True):
 
 
 def run(path, tmp_path, name="o", **kw):
+    kw.setdefault("floors_to_outer_face", False)  # most tests are about the shapes, not the outer reach
     return convert(path, tmp_path / f"{name}.obj", Config(area=PLAN_AREA, **kw))
 
 
@@ -191,3 +192,77 @@ def test_exports_know_the_new_groups(tmp_path):
     doc.saveas(tmp_path / "k.dxf")
     model = to_model_dict(run(tmp_path / "k.dxf", tmp_path, "k").mesh, "k")
     assert {o["name"]: o["material"] for o in model["objects"]}["Battiscopa"] == "skirting"
+
+
+# --- floors reach the outer face of the perimeter walls ---------------------------------------
+
+def outer(path, tmp_path, name="e", **kw):
+    return run(path, tmp_path, name, floors_to_outer_face=True, **kw)
+
+
+def floor_area(shape):
+    return shape.area
+
+
+def test_floors_reach_the_outer_face_of_the_perimeter_walls(tmp_path):
+    rep = outer(divided(tmp_path), tmp_path)
+    shapes = dict(rep.plan.floors)
+    sala, cucina = shapes["Sala"], shapes["Cucina"]
+    assert sala.bounds == pytest.approx((0.0, 0.0, 5.05, 6.0), abs=0.06)
+    assert cucina.bounds == pytest.approx((5.05, 0.0, 10.0, 6.0), abs=0.06)
+    # together they cover the footprint (60 m2) except the partition between them (10 cm x 5.4 m)
+    assert sala.area + cucina.area == pytest.approx(60.0 - 0.1 * 5.4, rel=0.006)
+
+
+def test_the_floors_do_not_overlap(tmp_path):
+    rep = outer(divided(tmp_path), tmp_path)
+    a, b = (shape for _, shape in rep.plan.floors)
+    assert a.intersection(b).area == pytest.approx(0.0, abs=1e-4)
+
+
+def test_without_the_option_they_stop_at_the_inner_face(tmp_path):
+    rep = run(divided(tmp_path), tmp_path, floors_to_outer_face=False)
+    sala = dict(rep.plan.floors)["Sala"]
+    assert sala.bounds[0] == pytest.approx(0.3, abs=1e-6) and sala.bounds[3] == pytest.approx(5.7, abs=1e-6)
+
+
+def test_the_object_in_the_file_is_the_extended_floor(tmp_path):
+    obj = Obj(outer(divided(tmp_path), tmp_path).output)
+    lo, hi = obj.bbox("Pavimento_Sala")
+    assert lo[0] == pytest.approx(0.0, abs=1e-4) and hi[2] == pytest.approx(0.0, abs=0.01)  # x = 0 .. , y = 0 (z = -y)
+    assert lo[2] == pytest.approx(-6.0, abs=1e-4)
+    assert obj.volume("Pavimento_Sala") > 0.19 * 5.0 * 6.0 * 0.9
+
+
+def test_floor_layer_shapes_are_extended_too(tmp_path):
+    doc, msp = building()
+    doc.layers.add("21 Pavimenti")
+    msp.add_lwpolyline([(30, 30), (970, 30), (970, 570), (30, 570)], close=True, dxfattribs={"layer": "21 Pavimenti"})
+    doc.saveas(tmp_path / "l.dxf")
+    rep = outer(tmp_path / "l.dxf", tmp_path)
+    ((_, shape),) = rep.plan.floors
+    assert shape.bounds == pytest.approx((0.0, 0.0, 10.0, 6.0), abs=1e-3) and shape.area == pytest.approx(60.0, abs=0.01)
+
+
+def test_floors_that_already_reach_the_outside_are_left_alone(tmp_path):
+    doc, msp = building()
+    doc.layers.add("Pavimenti")
+    msp.add_lwpolyline([(0, 0), (1000, 0), (1000, 600), (0, 600)], close=True, dxfattribs={"layer": "Pavimenti"})
+    doc.saveas(tmp_path / "f.dxf")
+    ((_, shape),) = outer(tmp_path / "f.dxf", tmp_path).plan.floors
+    assert shape.area == pytest.approx(60.0, abs=1e-6)
+
+
+def test_partition_layers_stay_free_of_floor(tmp_path):
+    rep = outer(partitions_plan(tmp_path), tmp_path)
+    for _, shape in rep.plan.floors:  # only the threshold of the 80 cm gap (0.8 x 0.1 m) may lie on a partition
+        assert shape.intersection(rep.plan.partitions).area <= 0.081
+
+
+def test_floors_are_the_same_in_obj_and_json(tmp_path):
+    import json
+
+    rep = outer(divided(tmp_path), tmp_path, c4d_json=True)
+    model = json.loads(rep.json_path.read_text())
+    names = {o["name"] for o in model["objects"]}
+    assert {"Pavimento_Sala", "Pavimento_Cucina"} <= names
