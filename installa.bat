@@ -1,16 +1,25 @@
 @echo off
 chcp 65001 >nul
-rem Installa dwg2c4d (serve Python 3.10 o piu' recente da python.org, con "Add Python to PATH" spuntato)
-rem Fai doppio clic su questo file, dalla cartella del progetto.
+rem Installa le librerie di dwg2c4d (serve Python 3.10 o piu' recente da python.org, con "Add Python to PATH" spuntato).
+rem Fai doppio clic su questo file, dalla cartella del progetto. Si puo' rifare quando vuoi, anche dopo un aggiornamento.
 python --version >nul 2>nul
 if errorlevel 1 (
   echo Python non trovato. Installalo da https://www.python.org/downloads/ e spunta "Add Python to PATH".
   pause
   exit /b 1
 )
-rem (si entra nella cartella e si installa "."; il percorso della cartella non va passato a pip tra virgolette)
 cd /d "%~dp0"
-python -m pip install --upgrade .
+rem Cartelle di costruzione lasciate da installazioni precedenti: se restano, pip puo' reinstallare il codice vecchio.
+if exist build rmdir /s /q build
+for /d %%D in (src\*.egg-info) do rmdir /s /q "%%D"
+python -m pip install --upgrade ezdxf shapely numpy matplotlib
+if errorlevel 1 (
+  echo.
+  echo L'installazione delle librerie non e' riuscita: copia il messaggio qui sopra.
+  pause
+  exit /b 1
+)
+python -m pip install --upgrade --force-reinstall --no-deps .
 if errorlevel 1 (
   echo.
   echo L'installazione non e' riuscita: copia il messaggio qui sopra.

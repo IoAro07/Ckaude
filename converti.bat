@@ -1,6 +1,8 @@
 @echo off
 chcp 65001 >nul
 set PYTHONIOENCODING=utf-8
+rem Usa sempre il codice che sta in questa cartella (src), anche se in Python ne e' installata una copia vecchia.
+set "PYTHONPATH=%~dp0src"
 rem Trascina un file .dwg o .dxf su questo file: i risultati (OBJ, tabella, immagini, report)
 rem vengono scritti accanto al disegno. I layer che il nome non spiega vengono letti con le proposte
 rem (--accetta-proposte): il programma dice quali ha usato. Per le opzioni usa il prompt dei comandi: dwg2c4d --help

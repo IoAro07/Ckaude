@@ -67,7 +67,9 @@ def opening_notes(report) -> "OrderedDict[str, list[str]]":
 
 
 def write_report(report, path: str | Path, created: list[str]) -> Path:
-    lines = ["PLANIMETRIA -> 3D", "=" * 60, ""]
+    from . import __version__
+
+    lines = [f"PLANIMETRIA -> 3D   (dwg2c4d {__version__})", "=" * 60, ""]
     lines += [f"Creato {name}" for name in created] + [""]
     lines += summary_lines(report)
     lines += ["", "APERTURE", "-" * 60]

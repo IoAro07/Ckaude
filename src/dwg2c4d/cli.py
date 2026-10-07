@@ -18,6 +18,13 @@ CATEGORY_IT = {"wall": "muri", "door": "porte", "window": "finestre", "column": 
                "floor": "pavimenti", "skirting": "battiscopa", "roof": "tetto"}
 
 
+def _where() -> str:
+    """The folder the program runs from: tells an old installed copy from the project folder."""
+    from pathlib import Path
+
+    return str(Path(__file__).resolve().parent)
+
+
 def _globs(text: str) -> list[str]:
     return [t.strip() for t in text.split(",") if t.strip()]
 
@@ -64,7 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--config", help="file JSON con le impostazioni (le opzioni da riga di comando prevalgono)")
     p.add_argument("--elenca-layer", action="store_true",
                    help="mostra i layer del disegno e come vengono classificati, poi esce")
-    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}  ({_where()})")
 
     g = p.add_argument_group("layer (nomi separati da virgola, jolly * ammessi)")
     g.add_argument("--muri")
@@ -316,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Errore: {exc}", file=sys.stderr)
         return 1
 
+    print(f"dwg2c4d {__version__}  ({_where()})")
     print(f"Creato {report.output}  (+ {report.output.with_suffix('.mtl').name})")
     if report.json_path:
         print(f"Creato {report.json_path}  (per lo script di importazione di Cinema 4D)")
