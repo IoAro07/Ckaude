@@ -75,8 +75,10 @@ Alla fine stampa un riepilogo: **controllalo**, e guarda `pianta_controllo_piant
 apertura con sigla e misure) e `pianta_report.txt`. Le dimensioni (`Ingombro muri`) devono corrispondere a quelle
 reali dell'edificio, e il numero di porte/finestre a quelle della pianta.
 
-Se il disegno ha più cose sullo stesso layer (il tetto o una sezione disegnati accanto alla pianta) il riepilogo lo
-dice (`I muri formano 2 gruppi distanti`) e ti dà l'`--area` di ciascun gruppo da copiare.
+Se il layer dei muri contiene anche altro disegnato accanto alla pianta (la pianta del tetto, una sezione), i muri
+formano gruppi distanti: **quelli senza porte né finestre vengono esclusi da soli** (il riepilogo dice quali e con quale
+`--area`). Se più gruppi hanno porte o finestre (due edifici), o nessuno ne ha, restano tutti e il riepilogo ti dà
+l'`--area` di ciascuno da copiare.
 
 ### Prova subito senza un tuo DWG
 
@@ -210,8 +212,8 @@ prese per intero, non tagliate.
 
 ## Quote delle aperture e tetto dai prospetti (facoltativo)
 
-Di norma altezze di porte e finestre sono i valori predefiniti e il tetto non viene creato. Se nel file ci sono i
-**prospetti** e la **pianta del tetto** puoi usarli.
+Le altezze di porte e finestre vengono dalle scritte del disegno e dai **prospetti** (altrimenti sono valori predefiniti);
+il **tetto** si costruisce da solo se nel file c'è un layer `Tetto`/`Roof`/`Copertura` con le linee della pianta del tetto.
 
 **Altezze di porte e finestre dal prospetto**: se nel file c'è un layer chiamato `Prospetto…` (`Prospetto Frontale`,
 `prospetto1`…) il prospetto viene **trovato da solo**: vale se sta tutto sotto o sopra la pianta, nella sua stessa
@@ -231,8 +233,9 @@ Ogni simbolo del prospetto viene associato all'apertura della pianta con lo stes
 un simbolo disegnato con telaio e vetro annidati conta come uno solo. Le aperture senza corrispondenza restano ai
 valori predefiniti, e il riepilogo dice quante sono state lette (`Prospetto sud: 2 di 2 aperture…`).
 
-**Tetto**: `--tetto`. Si costruisce dalle linee del layer `Tetto`/`Roof`/`Copertura` (o `--layer-tetto`):
-contorno, colmi, displuvi e compluvi, disegnati sul piano del tetto.
+**Tetto**: si costruisce da solo dalle linee del layer `Tetto`/`Roof`/`Copertura` (o `--layer-tetto`): contorno, colmi,
+displuvi e compluvi, disegnati sul piano del tetto. `--no-tetto` lo evita; `--tetto` lo richiede e avvisa se il layer
+non ha linee. Un layer `Prospetto…` non è mai una pianta del tetto.
 
 - le linee formano le falde; ogni falda sale dalla propria gronda con una pendenza;
 - **pendenza**: `--pendenza GRADI`; altrimenti viene **dedotta dal prospetto**, se le linee orizzontali dei colmi
@@ -392,7 +395,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--area` | converti solo questa zona del disegno |
 | `--no-prospetti-auto` | non cercare i prospetti dai layer `Prospetto…` |
 | `--prospetto` | zona di un prospetto (ripetibile): altezze di porte e finestre; 5° valore opzionale = Y del pavimento finito |
-| `--tetto`, `--layer-tetto`, `--area-tetto` | costruisci il tetto dalla pianta del tetto |
+| `--tetto`, `--no-tetto`, `--layer-tetto`, `--area-tetto` | tetto dalla pianta del tetto: automatico se il layer c'è (`--no-tetto` lo evita, `--tetto` lo richiede) |
 | `--pendenza`, `--spessore-tetto`, `--sposta-tetto` | pendenza (gradi), spessore (0,15 m), spostamento della pianta del tetto |
 | `--origine` | `centro` (default), `minimo`, `disegno`: dove sta lo zero del modello |
 | `--json-c4d` | scrivi anche `NOME_model.json` per lo script di importazione di Cinema 4D |

@@ -106,9 +106,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-prospetti-auto", action="store_true",
                    help="non cercare da solo i prospetti dai layer chiamati 'Prospetto...' "
                         "(vale solo se non indichi --prospetto)")
+    g.add_argument("--no-tetto", action="store_true",
+                   help="non costruire il tetto anche se c'e' un layer Tetto/Roof/Copertura")
     g.add_argument("--tetto", action="store_true",
-                   help="costruisci il tetto dalla pianta del tetto (layer Tetto/Roof/Copertura): "
-                        "contorno + colmi/displuvi")
+                   help="costruisci il tetto dalla pianta del tetto (layer Tetto/Roof/Copertura): contorno + "
+                        "colmi/displuvi. Se il layer c'e' il tetto si fa da solo (--no-tetto lo evita); con "
+                        "--tetto si avvisa anche quando non si trova nulla")
     g.add_argument("--layer-tetto", help="layer della pianta del tetto (virgole, * jolly)")
     g.add_argument("--area-tetto", type=_area, metavar="XMIN,YMIN,XMAX,YMAX",
                    help="dove e' disegnata la pianta del tetto (default: tutto il disegno)")
@@ -239,6 +242,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
     if args.tabella:
         cfg.table_in = args.tabella
     cfg.images = not args.no_immagini
+    cfg.roof_auto = not args.no_tetto
     if args.piano is not None:
         cfg.floor = args.piano
     if args.no_prospetti_auto:

@@ -597,3 +597,50 @@ def test_the_search_can_be_switched_off(tmp_path):
     area = south_elevation(msp, ground_y=-2000, door_h=200, sill=100, win_h=140)
     outline(msp, area, "Prospetto Sud")
     assert run(tmp_path, doc, Config(elevations_auto=False)).elevations == []
+
+
+# --- the roof is built by itself when a roof layer has lines (command line) -------------------
+
+def test_the_library_builds_no_roof_unless_asked(tmp_path):
+    doc, msp = building()
+    hip_roof(msp)
+    assert "Tetto" not in run(tmp_path, doc).groups
+
+
+def test_roof_auto_builds_it_from_the_roof_layer(tmp_path):
+    doc, msp = building()
+    hip_roof(msp)
+    rep = run(tmp_path, doc, Config(roof_auto=True))
+    assert "Tetto" in rep.groups and rep.roof["faces"] == 4 and rep.warnings == []
+
+
+def test_roof_auto_without_a_roof_layer_says_nothing(tmp_path):
+    doc, _ = building()
+    rep = run(tmp_path, doc, Config(roof_auto=True))
+    assert rep.roof is None and not any("Tetto" in w for w in rep.warnings)
+
+
+def test_asking_for_a_roof_that_is_not_there_still_warns(tmp_path):
+    doc, _ = building()
+    rep = run(tmp_path, doc, Config(roof=True))
+    assert any("Tetto: nessuna linea" in w for w in rep.warnings)
+
+
+def test_a_roof_line_on_an_elevation_layer_is_not_a_roof_plan(tmp_path):
+    doc, msp = building()
+    doc.layers.add("Prospetto Tetto")
+    hip_roof(msp, layer="Prospetto Tetto")
+    rep = run(tmp_path, doc, Config(roof_auto=True))
+    assert rep.roof is None
+
+
+def test_command_line_builds_the_roof_by_default_and_can_skip_it(tmp_path, capsys):
+    doc, msp = building()
+    hip_roof(msp)
+    path = tmp_path / "c.dxf"
+    doc.saveas(path)
+    area = "--area=" + ",".join(map(str, PLAN_AREA))
+    assert cli.main([str(path), "-o", str(tmp_path / "a.obj"), area, "--no-immagini"]) == 0
+    assert "Tetto              :" in capsys.readouterr().out and "Tetto" in Obj(tmp_path / "a.obj").groups
+    assert cli.main([str(path), "-o", str(tmp_path / "b.obj"), area, "--no-immagini", "--no-tetto"]) == 0
+    assert "Tetto" not in Obj(tmp_path / "b.obj").groups

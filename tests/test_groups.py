@@ -53,3 +53,48 @@ def test_a_small_free_standing_wall_is_not_a_group(tmp_path):
 def test_close_pieces_are_one_building(tmp_path):
     rep = run(with_second_drawing(tmp_path, dx=0, dy=700), tmp_path)  # 0.7 m from the first
     assert not any("gruppi" in w for w in rep.warnings)
+
+
+# --- groups without doors/windows are dropped by themselves (no --area given) ---------------
+
+def convert_all(path, tmp_path, **kw):
+    return convert(path, tmp_path / "o.obj", Config(**kw))  # no area: the whole drawing
+
+
+def test_a_group_without_openings_is_left_out_when_no_area_is_given(tmp_path):
+    """A roof plan drawn with the wall layer, above the real plan: no doors or windows on it."""
+    from helpers import Obj
+
+    rep = convert_all(with_second_drawing(tmp_path), tmp_path)
+    assert rep.size_m == pytest.approx((10.0, 6.0))
+    assert rep.warnings[0].startswith("Ho escluso 1 gruppo/i di muri senza porte ne' finestre")
+    assert "5.0 x 3.0 m" in rep.warnings[0]
+    hi = Obj(rep.output).bbox("Muri")[1]
+    assert hi[2] <= 0.1  # nothing at y = 15 m (z = -15): only the plan is modelled
+    assert Obj(rep.output).bbox("Muri")[0][2] == pytest.approx(-6.0)
+
+
+def test_two_groups_both_with_openings_are_both_kept(tmp_path):
+    doc, msp = building()
+    for pts in ([(1500, 0), (2000, 0), (2000, 300), (1500, 300)],
+                [(1530, 30), (1970, 30), (1970, 270), (1530, 270)]):
+        msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "MURI"})
+    msp.add_lwpolyline([(1600, 0), (1690, 0), (1690, 30), (1600, 30)], close=True, dxfattribs={"layer": "PORTE"})
+    doc.saveas(tmp_path / "two.dxf")
+    rep = convert_all(tmp_path / "two.dxf", tmp_path)
+    assert any("2 gruppi distanti" in w for w in rep.warnings)
+    assert not any("Ho escluso" in w for w in rep.warnings) and rep.size_m[0] > 19.0
+
+
+def test_groups_without_any_opening_are_kept_and_reported(tmp_path):
+    doc = ezdxf.new("R2018", setup=True)
+    doc.units = 5
+    doc.layers.add("MURI")
+    msp = doc.modelspace()
+    for dx in (0, 1500):
+        for pts in ([(dx, 0), (dx + 500, 0), (dx + 500, 300), (dx, 300)],
+                    [(dx + 30, 30), (dx + 470, 30), (dx + 470, 270), (dx + 30, 270)]):
+            msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": "MURI"})
+    doc.saveas(tmp_path / "none.dxf")
+    rep = convert_all(tmp_path / "none.dxf", tmp_path)
+    assert any("2 gruppi distanti" in w for w in rep.warnings) and rep.size_m[0] > 19.0

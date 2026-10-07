@@ -198,7 +198,8 @@ class Config:
     elevations_auto: bool = True  # find the facade elevations by their layer name when none is given
 
     # Roof built from the roof plan (layers named Tetto/Roof/Copertura, or --layer-tetto).
-    roof: bool = False
+    roof: bool = False  # build the roof even if no roof layer is found (warns then)
+    roof_auto: bool = False  # build it when a roof layer (Tetto/Roof/Copertura) has lines (the command line turns it on)
     roof_area: tuple[float, float, float, float] | None = None  # where the roof plan is drawn
     roof_offset: tuple[float, float] | None = None  # drawing units; default: centre on the walls
     roof_pitch: float | None = None  # degrees; default: from the elevations, else 25

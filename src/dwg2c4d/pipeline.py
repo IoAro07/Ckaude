@@ -9,7 +9,7 @@ from pathlib import Path
 from shapely.geometry.base import BaseGeometry
 
 from .config import UNIT_TO_METERS, Config
-from .elevation import apply_elevation, find_elevation_zones, read_elevation
+from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer, read_elevation
 from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
@@ -85,31 +85,34 @@ GROUP_GAP = 3.0  # m: wall pieces closer than this are one building
 MIN_GROUP_AREA = 1.0  # m2 of wall: smaller pieces are not worth a remark
 
 
-def _separate_groups(solid: BaseGeometry, unit_scale: float, cropped: bool) -> list[str]:
-    """When the walls form groups far apart (a roof plan, a section or a second building drawn on the same
-    layer) say so, and give the ``--area`` of each group to copy."""
+def _wall_groups(solid: BaseGeometry, openings: list) -> list[dict]:
+    """The walls as groups far apart: [{"area", "bounds", "openings"}], biggest first. A roof plan, a section
+    or a second building drawn on the same layer is a group of its own; only the real plan has doors and
+    windows on its walls."""
     pieces = polygons_of(solid)
     if len(pieces) < 2:
         return []
-    clusters = polygons_of(union(p.buffer(GROUP_GAP / 2.0) for p in pieces))
     groups = []
-    for cluster in clusters:
+    for cluster in polygons_of(union(p.buffer(GROUP_GAP / 2.0) for p in pieces)):
         mine = [p for p in pieces if cluster.intersects(p)]
         area = sum(p.area for p in mine)
-        if area >= MIN_GROUP_AREA:
-            groups.append((area, union(mine).bounds))
-    if len(groups) < 2:
-        return []
-    groups.sort(key=lambda g: -g[0])
+        if area < MIN_GROUP_AREA:
+            continue
+        shape = union(mine)
+        groups.append({"area": area, "bounds": shape.bounds,
+                       "openings": sum(1 for o in openings if shape.buffer(0.3).intersects(o.fill))})
+    groups.sort(key=lambda g: -g["area"])
+    return groups if len(groups) >= 2 else []
+
+
+def _describe_groups(groups: list[dict], unit_scale: float) -> str:
     lines = []
-    for n, (area, (x0, y0, x1, y1)) in enumerate(groups, 1):
-        margin = 0.5
-        box = ",".join(f"{v / unit_scale:.0f}" for v in (x0 - margin, y0 - margin, x1 + margin, y1 + margin))
-        lines.append(f"{n}) {x1 - x0:.1f} x {y1 - y0:.1f} m, {area:.1f} m2 di muri: --area={box}")
-    note = " (c'e' gia' --area, ma include piu' di una zona)" if cropped else ""
-    return [f"I muri formano {len(groups)} gruppi distanti{note}. Se solo uno e' la pianta (gli altri sono tetto, "
-            "sezioni, un altro edificio disegnati sullo stesso layer) convertilo da solo con la sua area: "
-            + "; ".join(lines)]
+    for n, g in enumerate(groups, 1):
+        x0, y0, x1, y1 = g["bounds"]
+        box = ",".join(f"{v / unit_scale:.0f}" for v in (x0 - 0.5, y0 - 0.5, x1 + 0.5, y1 + 0.5))
+        lines.append(f"{n}) {x1 - x0:.1f} x {y1 - y0:.1f} m, {g['area']:.1f} m2 di muri, {g['openings']} "
+                     f"porte/finestre: --area={box}")
+    return "; ".join(lines)
 
 
 def convert(input_path: str | Path, output_path: str | Path | None = None,
@@ -161,7 +164,29 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         )
     plan = Plan(walls=walls, columns=columns, openings=openings, merge_tolerance=cfg.merge_tolerance)
     solid = plan.solid_walls
-    warnings.extend(_separate_groups(solid, result.unit_scale, cfg.area is not None))
+    groups = _wall_groups(solid, openings)
+    if groups:
+        real = [g for g in groups if g["openings"] > 0]
+        if cfg.area is None and 0 < len(real) < len(groups):
+            # Only some groups have doors/windows: the others are a roof plan, a section... drawn on the same
+            # layer. Read the drawing again cropped to the groups that are plans.
+            margin = 1.0
+            x0 = min(g["bounds"][0] for g in real) - margin
+            y0 = min(g["bounds"][1] for g in real) - margin
+            x1 = max(g["bounds"][2] for g in real) + margin
+            y1 = max(g["bounds"][3] for g in real) + margin
+            area = tuple(v / result.unit_scale for v in (x0, y0, x1, y1))
+            dropped = [g for g in groups if g["openings"] == 0]
+            fixed = convert(input_path, output_path, replace(cfg, area=area))
+            fixed.warnings.insert(0, (
+                f"Ho escluso {len(dropped)} gruppo/i di muri senza porte ne' finestre (di solito la pianta del tetto "
+                f"o una sezione disegnate sullo stesso layer): {_describe_groups(dropped, result.unit_scale)}. "
+                "Per includerli indica tu un'--area piu' grande."))
+            return fixed
+        note = " (c'e' gia' --area, ma include piu' di una zona)" if cfg.area is not None else ""
+        warnings.append(f"I muri formano {len(groups)} gruppi distanti{note}. Se solo uno e' la pianta (gli altri "
+                        "sono tetto, sezioni, un altro edificio disegnati sullo stesso layer) convertilo da solo "
+                        f"con la sua area: {_describe_groups(groups, result.unit_scale)}")
     if cfg.passages:
         passages = find_passages(solid, cfg, openings)
         if passages:
@@ -223,9 +248,15 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         plan.partitions = split_partitions(solid, main, union(part_layers.values()), openings)
 
     roof_report = None
-    if cfg.roof:
+    roof_items = None
+    if cfg.roof or cfg.roof_auto:
         rr = read_items(doc, cfg, area=cfg.roof_area, unit=result.unit)
-        roof = build_roof(rr.items, cfg, result.unit_scale, solid.bounds,
+        roof_items = rr.items if cfg.roof else [it for it in rr.items if it.category == "roof"
+                                               and not is_elevation_layer(it.layer)]
+        if not cfg.roof and not roof_items:
+            roof_items = None  # nothing asked, nothing drawn: no roof and no remark
+    if roof_items is not None:
+        roof = build_roof(roof_items, cfg, result.unit_scale, solid.bounds,
                           ridge_hints_from(elevations, cfg.wall_height), warnings)
         if roof is not None:
             plan.roof = roof

@@ -164,7 +164,7 @@ PLAN_CLEARANCE = 0.5  # the zone never comes closer than this to the plan
 MIN_X_OVERLAP = 0.5  # of the narrower of {zone, plan}
 
 
-def _is_elevation_layer(name: str) -> bool:
+def is_elevation_layer(name: str) -> bool:
     import re
 
     return any(t.startswith(ELEVATION_LAYER_TOKENS) for t in re.split(r"[^a-z]+", name.lower()) if t)
@@ -179,7 +179,7 @@ def find_elevation_zones(items: list[Item], plan_bounds: tuple[float, float, flo
     px0, py0, px1, py1 = plan_bounds
     boxes: list[tuple[str, tuple[float, float, float, float]]] = []
     for it in items:
-        if not _is_elevation_layer(it.layer):
+        if not is_elevation_layer(it.layer):
             continue
         geoms = [p.geom for p in it.prims if not p.geom.is_empty]
         if geoms:
