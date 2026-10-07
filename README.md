@@ -22,9 +22,12 @@ Il codice sta nel repository pubblico <https://github.com/IoAro07/Ckaude> (il ra
   qualsiasi (per esempio `C:\dwg2c4d`).
 - **Con git**: `git clone https://github.com/IoAro07/Ckaude.git`
 
-In alternativa il file `dwg2c4d-0.1.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
-dwg2c4d-0.1.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+In alternativa il file `dwg2c4d-0.2.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.2.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
 script di Cinema 4D, che stanno nella cartella del progetto.
+
+**Per aggiornare** a una versione nuova: scarica di nuovo il progetto (o `git pull`) e rifai `installa.bat`
+(`python -m pip install --upgrade .`). `python -m dwg2c4d --version` dice quale versione è installata.
 
 ### 2. Python e le librerie (una volta sola)
 
