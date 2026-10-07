@@ -447,5 +447,5 @@ Struttura: `dwgfile.py` (apertura DWG/DXF) → `reader.py` (entità → geometri
 `elevation.py`, `roof.py` (prospetti, tetto) → `table.py` (tabella delle aperture) → `model.py`, `fixtures.py`,
 `floors.py`, `mesh.py` (estrusione e infissi) → `objwriter.py`, `export.py` (OBJ/MTL, JSON per Cinema 4D) →
 `qa.py`, `render.py` (immagini di controllo, report). `proposals.py` sono le proposte di `--elenca-layer`.
-I template delle lettere (`data/glyph_templates.npz`) sono bitmap dei caratteri di Liberation Sans, FreeSans e DejaVu
-Sans, tutti con licenza libera.
+I template delle lettere (`data/glyph_templates.npz`) sono bitmap dei caratteri di Liberation Sans, FreeSans, DejaVu Sans,
+Carlito e Poppins (font con licenza libera).

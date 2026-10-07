@@ -2,8 +2,8 @@
 
 The outline segments of a glyph are filled (even-odd, so the holes of 0 6 8 A B stay empty),
 reduced to a 32x32 bitmap and compared with the bitmaps of the same characters in a few
-sans-serif fonts (``data/glyph_templates.npz``, made once from Liberation Sans, FreeSans and
-DejaVu Sans). Only numpy is needed.
+sans-serif fonts (``data/glyph_templates.npz``, made once from Liberation Sans, FreeSans, DejaVu Sans,
+Carlito and Poppins). Only numpy is needed.
 """
 
 from __future__ import annotations
