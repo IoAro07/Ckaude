@@ -8,6 +8,7 @@ import sys
 from . import __version__
 from .config import UNIT_TO_METERS, Config, LayerRules
 from .dwgfile import ConversionError, open_drawing
+from .proposals import apply_proposals, propose_layers
 from .qa import summary_lines
 from .pipeline import convert
 from .reader import declared_units, layer_summary
@@ -72,6 +73,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--pilastri")
     g.add_argument("--pavimenti", help="layer dei pavimenti (poligoni chiusi): un oggetto per poligono")
     g.add_argument("--battiscopa", help="layer dei battiscopa (linee/polilinee lungo i muri)")
+    g.add_argument("--accetta-proposte", action="store_true",
+                   help="usa le proposte di --elenca-layer (confidenza media o alta) per i layer che il nome "
+                        "non fa riconoscere; i layer che indichi tu o che il nome riconosce non cambiano")
     g.add_argument("--includi-nascosti", action="store_true", help="usa anche layer spenti/congelati")
     g.add_argument("--muri-da-blocchi", action="store_true",
                    help="leggi come muri anche i blocchi inseriti su un layer di muri "
@@ -240,6 +244,19 @@ def config_from_args(args: argparse.Namespace) -> Config:
     return cfg
 
 
+def _print_proposals(proposals) -> None:
+    if not proposals:
+        return
+    print("\nPROPOSTE per i layer non riconosciuti dal nome (non applicate):")
+    width = max(len(p.layer) for p in proposals)
+    for p in proposals:
+        what = CATEGORY_IT.get(p.category, "") if p.category else ""
+        use = f"  -> {what}" if what else ""
+        print(f"  {p.layer.ljust(width)}  {p.label} (confidenza {p.confidence}): {p.reason}{use}")
+    print("Per usarle: --accetta-proposte (solo confidenza media/alta e solo per le categorie ancora vuote), "
+          "oppure indicale tu: --muri, --porte, --finestre.")
+
+
 def _print_layers(rows: list[dict], units: str | None) -> None:
     print(f"Unita' dichiarate nel file: {units or 'nessuna'} "
           "(se le misure non tornano, forzale con --unita)\n")
@@ -265,8 +282,16 @@ def main(argv: list[str] | None = None) -> int:
         cfg.validate()
         if args.elenca_layer:
             doc = open_drawing(args.input, cfg.converter)
-            _print_layers(layer_summary(doc, cfg), declared_units(doc))
+            rows = layer_summary(doc, cfg)
+            _print_layers(rows, declared_units(doc))
+            _print_proposals(propose_layers(doc, cfg, rows))
             return 0
+        if args.accetta_proposte:
+            doc = open_drawing(args.input, cfg.converter)
+            rows = layer_summary(doc, cfg)
+            for p in apply_proposals(cfg, propose_layers(doc, cfg, rows), rows):
+                print(f"Layer '{p.layer}' usato come {CATEGORY_IT[p.category]} (proposta, confidenza {p.confidence}: "
+                      f"{p.reason})")
         report = convert(args.input, args.output, cfg)
     except (ConversionError, ValueError, OSError) as exc:
         print(f"Errore: {exc}", file=sys.stderr)

@@ -112,6 +112,14 @@ Se un layer è classificato male, indicalo tu (nomi separati da virgola, `*` com
 dwg2c4d pianta.dwg --muri "A-MURI*,TRAMEZZI" --porte "SERR_P" --finestre "SERR_F" --pilastri "STRUTT"
 ```
 
+**Layer con nomi che il programma non conosce.** `--elenca-layer` finisce con le **PROPOSTE**, ciascuna con la sua
+confidenza e il perché: i nomi tipici dicono subito arredi, quote/testi, retini, verde, prospetti, impianti; per le
+linee il programma **prova davvero** l'ipotesi: un layer che costruito come muri chiude dei locali è probabilmente il
+layer dei muri (confidenza alta con 2 o più locali), un layer i cui simboli stanno sui muri e hanno l'**arco di
+rotazione** sono le porte. Un solo candidato di muri è "il" candidato; gli altri restano a confidenza bassa.
+Le proposte **non vengono applicate da sole**: con `--accetta-proposte` si usano quelle a confidenza media o alta,
+solo per le categorie che il nome del layer o le tue opzioni non hanno già deciso (il programma lo dice a video).
+
 Tutto ciò che sta su altri layer (quote, testi, arredi, tratteggi) viene ignorato.
 I layer spenti o congelati vengono saltati (`--includi-nascosti` per usarli).
 
@@ -324,6 +332,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `-o`, `--output` | file `.obj` (default: accanto all'input) |
 | `--elenca-layer` | mostra i layer e come sono classificati, poi esce |
 | `--muri`, `--porte`, `--finestre`, `--pilastri` | layer per categoria (virgole, `*` jolly) |
+| `--accetta-proposte` | usa le proposte di `--elenca-layer` (confidenza media/alta) per i layer non riconosciuti |
 | `--includi-nascosti` | usa anche i layer spenti/congelati |
 | `--muri-da-blocchi` | leggi come muri anche i blocchi inseriti su un layer di muri |
 | `--modalita-muri` | `auto`, `solidi`, `doppia-linea`, `asse` |
