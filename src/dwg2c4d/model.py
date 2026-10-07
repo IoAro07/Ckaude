@@ -27,6 +27,9 @@ class Plan:
     openings: list[Opening] = field(default_factory=list)
     merge_tolerance: float = 0.01
     roof: Roof | None = None
+    floors: list[tuple[str, BaseGeometry]] = field(default_factory=list)  # (name, shape): one object each
+    skirting: BaseGeometry = field(default_factory=Polygon)
+    partitions: BaseGeometry = field(default_factory=Polygon)  # the thin walls, apart from the main walls
 
     @cached_property
     def solid_walls(self) -> BaseGeometry:
@@ -70,7 +73,12 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
     mesh = Mesh()
     walls = plan.solid_walls
     cutting = [o for o in plan.openings if o.keep]  # a dropped opening is closed with wall
-    mesh.add_extrusion("Muri", wall_slabs(walls, cutting, cfg.wall_height), bottom=False)
+    if plan.partitions.is_empty:
+        mesh.add_extrusion("Muri", wall_slabs(walls, cutting, cfg.wall_height), bottom=False)
+    else:
+        mesh.add_extrusion("Muri", wall_slabs(walls.difference(plan.partitions), cutting, cfg.wall_height),
+                           bottom=False)
+        mesh.add_extrusion("Tramezzi", wall_slabs(plan.partitions, cutting, cfg.wall_height), bottom=False)
 
     if not plan.columns.is_empty:
         mesh.add_extrusion("Pilastri", [Slab(0.0, cfg.wall_height, plan.columns)], bottom=False)
@@ -85,12 +93,18 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
     if plan.roof is not None:
         mesh.add_roof_solid("Tetto", plan.roof, z_base=cfg.wall_height, thickness=cfg.roof_thickness)
 
-    if cfg.floor_thickness > 0 or cfg.ceiling:
+    if not plan.skirting.is_empty:
+        mesh.add_extrusion("Battiscopa", [Slab(0.0, cfg.skirting_height, plan.skirting)], bottom=False)
+
+    by_room = cfg.floor_thickness > 0 and bool(plan.floors)
+    for name, shape in plan.floors if by_room else []:
+        mesh.add_extrusion(f"Pavimento_{name}", [Slab(-cfg.floor_thickness, 0.0, shape)])
+    if (cfg.floor_thickness > 0 and not by_room) or cfg.ceiling:
         footprint = floor_footprint(walls)
         if footprint.is_empty:
             warnings.append("Pavimento/soffitto non generati: i muri non racchiudono uno spazio chiuso.")
         else:
-            if cfg.floor_thickness > 0:
+            if cfg.floor_thickness > 0 and not by_room:
                 mesh.add_extrusion("Pavimento", [Slab(-cfg.floor_thickness, 0.0, footprint)])
             if cfg.ceiling:
                 mesh.add_extrusion(

@@ -16,7 +16,7 @@ from .mesh import Mesh
 COLORS = {
     "Muri": (0.86, 0.84, 0.80), "Pilastri": (0.75, 0.75, 0.75), "Pavimento": (0.66, 0.60, 0.54),
     "Soffitto": (0.95, 0.95, 0.95), "Tetto": (0.72, 0.40, 0.31), "Vetri": (0.50, 0.72, 0.88),
-    "Telai": (0.97, 0.97, 0.95), "Ante": (0.60, 0.42, 0.25), "Maniglie": (0.12, 0.12, 0.14),
+    "Telai": (0.97, 0.97, 0.95), "Tramezzi": (0.90, 0.88, 0.84), "Battiscopa": (0.98, 0.98, 0.97), "Ante": (0.60, 0.42, 0.25), "Maniglie": (0.12, 0.12, 0.14),
 }
 BACKGROUND = (0.96, 0.96, 0.97)
 
@@ -29,7 +29,7 @@ def mesh_triangles(mesh: Mesh, hide: tuple[str, ...] = (), clip: tuple[float, fl
     for group, faces in mesh.groups.items():
         if group in hide:
             continue
-        color = COLORS.get(group, (0.8, 0.8, 0.8))
+        color = COLORS.get(group) or COLORS.get(group.split("_", 1)[0], (0.8, 0.8, 0.8))
         for ids, _ in faces:
             pts = [verts[i] for i in ids]
             if clip is not None:

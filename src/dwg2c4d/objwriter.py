@@ -19,6 +19,8 @@ MATERIALS = {
     "Telai": ((0.92, 0.92, 0.90), 1.0),
     "Ante": ((0.55, 0.38, 0.22), 1.0),
     "Maniglie": ((0.78, 0.78, 0.80), 1.0),
+    "Tramezzi": ((0.93, 0.92, 0.89), 1.0),
+    "Battiscopa": ((0.96, 0.96, 0.95), 1.0),
 }
 
 
@@ -61,7 +63,7 @@ def write_obj(mesh: Mesh, obj_path: str | Path, out_units: str = "m", mirror: bo
 
     mtl = ["# Generato da dwg2c4d"]
     for name in mesh.groups:
-        (r, g, b), alpha = MATERIALS.get(name, ((0.8, 0.8, 0.8), 1.0))
+        (r, g, b), alpha = MATERIALS.get(name) or MATERIALS.get(name.split("_", 1)[0], ((0.8, 0.8, 0.8), 1.0))
         mtl += [
             f"newmtl {name}",
             f"Kd {r} {g} {b}",

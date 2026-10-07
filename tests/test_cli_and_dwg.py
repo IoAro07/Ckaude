@@ -23,7 +23,7 @@ def test_cli_end_to_end(tmp_path, capsys, sample_lines):
     assert "8.00 x 6.00 m" in text and "2 / 2" in text
     assert Obj(out).bbox("Muri")[1][1] == pytest.approx(3.0)
     mtl = out.with_suffix(".mtl").read_text()
-    for name in ("Muri", "Vetri", "Pavimento"):
+    for name in ("Muri", "Vetri", "Pavimento_Soggiorno"):  # the sample has a room called Soggiorno
         assert f"newmtl {name}" in mtl
     assert f"mtllib {out.with_suffix('.mtl').name}" in out.read_text()
 

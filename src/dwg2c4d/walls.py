@@ -188,13 +188,17 @@ def clean_footprint(geom: BaseGeometry, tol: float) -> BaseGeometry:
     return g.simplify(1e-4, preserve_topology=True)
 
 
-def build_walls(items: list[Item], cfg: Config, warnings: list[str]) -> BaseGeometry:
+def build_wall_layers(items: list[Item], cfg: Config, warnings: list[str]) -> dict[str, BaseGeometry]:
+    """Footprint of each wall layer on its own (layers are never mixed before they are united)."""
     by_layer: dict[str, list[Prim]] = defaultdict(list)
     for it in items:
         if it.category == "wall":
             by_layer[it.layer].extend(it.prims)
-    shapes = [_layer_footprint(prims, layer, cfg, warnings) for layer, prims in sorted(by_layer.items())]
-    return clean_footprint(union(shapes), cfg.merge_tolerance)
+    return {layer: _layer_footprint(prims, layer, cfg, warnings) for layer, prims in sorted(by_layer.items())}
+
+
+def build_walls(items: list[Item], cfg: Config, warnings: list[str]) -> BaseGeometry:
+    return clean_footprint(union(build_wall_layers(items, cfg, warnings).values()), cfg.merge_tolerance)
 
 
 def build_columns(items: list[Item], cfg: Config) -> BaseGeometry:

@@ -12,17 +12,18 @@ from .config import UNIT_TO_METERS, Config
 from .elevation import apply_elevation, read_elevation
 from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
-from .geom import polygons_of
+from .geom import union, polygons_of
 from .model import Plan, build_mesh
 from .objwriter import write_obj
 from .openings import assign_ids, build_openings
 from .reader import read_items
 from .roof import build_roof, ridge_hints_from
-from .walls import build_columns, build_walls
+from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
 from .texts import read_words
 from .passages import find_passages
+from .floors import layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
 
 
 @dataclass
@@ -84,7 +85,8 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     result = read_items(doc, cfg)
     warnings = list(result.warnings)
 
-    walls = build_walls(result.items, cfg, warnings)
+    layer_walls = build_wall_layers(result.items, cfg, warnings)
+    walls = clean_footprint(union(layer_walls.values()), cfg.merge_tolerance)
     if walls.is_empty:
         found = sorted({it.layer for it in result.items})
         raise ConversionError(
@@ -122,19 +124,16 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             plan.__dict__.pop("solid_walls", None)  # the lintels over the passages close the footprint
             solid = plan.solid_walls
 
-    words, rooms = [], []
-    text_unit = 0.01
+    words = read_words(doc, cfg, result.unit_scale) if cfg.texts else []
+    text_unit = text_scale(words)
+    rooms = find_rooms(solid, words, text_unit, warnings)
     wall_height_source = "indicata" if not cfg.wall_height_auto else "predefinita"
-    if cfg.texts:
-        words = read_words(doc, cfg, result.unit_scale)
-        text_unit = text_scale(words)
-        rooms = find_rooms(solid, words, text_unit, warnings)
-        written = wall_height_from_rooms(rooms, warnings)
-        if written is not None and cfg.wall_height_auto:
-            cfg = replace(cfg, wall_height=written, wall_height_auto=False)
-            wall_height_source = "scritta"
-            for o in openings:
-                o.z1 = min(o.z1, cfg.wall_height)
+    written = wall_height_from_rooms(rooms, warnings) if cfg.texts else None
+    if written is not None and cfg.wall_height_auto:
+        cfg = replace(cfg, wall_height=written, wall_height_auto=False)
+        wall_height_source = "scritta"
+        for o in openings:
+            o.z1 = min(o.z1, cfg.wall_height)
 
     elevations = []
     elevation_report: list[dict] = []
@@ -157,6 +156,20 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         if changed:
             plan.__dict__.pop("solid_walls", None)  # widths/kinds changed: the filled walls too
             solid = plan.solid_walls
+            rooms = find_rooms(solid, words, text_unit, [])
+
+    if cfg.floors_by_room and cfg.floor_thickness > 0:
+        regions = layer_floors(result.items)
+        if regions:
+            plan.floors = name_floors(regions, rooms)
+        elif rooms and (len(rooms) > 1 or rooms[0].named):
+            plan.floors = room_floors(rooms, openings)
+    if skirting_items(result.items):
+        plan.skirting = skirting_strips(result.items, solid, openings, cfg)
+    part_layers = {k: g for k, g in layer_walls.items() if cfg.layers.is_partition(k)}
+    if cfg.partitions_apart and part_layers and len(part_layers) < len(layer_walls):
+        main = union(g for k, g in layer_walls.items() if k not in part_layers)
+        plan.partitions = split_partitions(solid, main, union(part_layers.values()), openings)
 
     roof_report = None
     if cfg.roof:

@@ -109,7 +109,7 @@ def test_opening_symbol_not_on_a_wall_is_reported(tmp_path):
 # --- floor / ceiling ---------------------------------------------------------------------
 
 def test_floor_slab_covers_the_building_and_is_watertight(tmp_path):
-    rep = convert(build_sample(tmp_path / "a.dxf", "lines"), tmp_path / "o.obj")
+    rep = convert(build_sample(tmp_path / "a.dxf", "lines"), tmp_path / "o.obj", Config(floors_by_room=False))
     obj = Obj(rep.output)
     assert obj.volume("Pavimento") == pytest.approx(8.0 * 6.0 * 0.20, rel=0.001)
     lo, hi = obj.bbox("Pavimento")
@@ -142,7 +142,7 @@ def test_glass_panes_are_closed_boxes(tmp_path):
 
 @pytest.mark.parametrize("mirror", [False, True])
 def test_normals_agree_with_winding_and_point_outwards(tmp_path, mirror):
-    cfg = Config(mirror=mirror, ceiling=True)
+    cfg = Config(mirror=mirror, ceiling=True, floors_by_room=False)
     obj = Obj(convert(build_sample(tmp_path / "a.dxf", "lines"), tmp_path / "o.obj", cfg).output)
     assert obj.winding_matches_normals()
     # mirroring is a reflection; the writer reverses the winding to compensate, so the
@@ -334,13 +334,14 @@ def test_double_line_walls_with_drawn_jambs(tmp_path):
 def test_result_does_not_depend_on_plan_rotation(tmp_path, style):
     from ezdxf.math import Matrix44
 
-    ref = Obj(convert(build_sample(tmp_path / "a.dxf", style), tmp_path / "a.obj").output)
+    one_slab = Config(floors_by_room=False)
+    ref = Obj(convert(build_sample(tmp_path / "a.dxf", style), tmp_path / "a.obj", one_slab).output)
     doc = ezdxf.readfile(build_sample(tmp_path / "b.dxf", style))
     m = Matrix44.z_rotate(math.radians(30))
     for e in doc.modelspace():
         e.transform(m)
     doc.saveas(tmp_path / "rot.dxf")
-    rep = convert(tmp_path / "rot.dxf", tmp_path / "rot.obj")
+    rep = convert(tmp_path / "rot.dxf", tmp_path / "rot.obj", one_slab)
     assert rep.doors == 2 and rep.windows == 2
     for g in ("Muri", "Vetri", "Pavimento"):
         assert Obj(rep.output).volume(g) == pytest.approx(ref.volume(g), rel=0.005)

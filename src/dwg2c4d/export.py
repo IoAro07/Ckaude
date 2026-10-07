@@ -22,6 +22,8 @@ GROUPS = {
     "Ante": ("Infissi", "door_leaf"),
     "Maniglie": ("Infissi", "metal"),
     "Pavimento": ("Pavimenti", "floor"),
+    "Tramezzi": ("Murature", "partition"),
+    "Battiscopa": ("Battiscopa", "skirting"),
     "Soffitto": ("Soffitti", "ceiling"),
     "Tetto": ("Tetto", "roof"),
 }
@@ -29,6 +31,8 @@ MATERIALS = {
     "wall": {"name": "Muro", "color": [0.90, 0.89, 0.86], "rough": 0.85},
     "column": {"name": "Pilastro", "color": [0.78, 0.78, 0.78], "rough": 0.8},
     "glass": {"name": "Vetro", "color": [0.70, 0.85, 0.95], "rough": 0.0},
+    "partition": {"name": "Tramezzo", "color": [0.93, 0.92, 0.89], "rough": 0.85},
+    "skirting": {"name": "Battiscopa", "color": [0.96, 0.96, 0.95], "rough": 0.5},
     "floor": {"name": "Pavimento", "color": [0.60, 0.56, 0.52], "rough": 0.5},
     "ceiling": {"name": "Soffitto", "color": [0.95, 0.95, 0.95], "rough": 0.9},
     "roof": {"name": "Tetto", "color": [0.62, 0.32, 0.24], "rough": 0.7},
@@ -43,7 +47,7 @@ def to_model_dict(mesh: Mesh, name: str, origin_offset: tuple[float, float] = (0
     recorded so the CAD position can be recovered."""
     groups, objects, used = [], [], set()
     for gname, faces in mesh.groups.items():
-        null, mat = GROUPS.get(gname, (gname, "wall"))
+        null, mat = GROUPS.get(gname) or GROUPS.get(gname.split("_", 1)[0], (gname, "wall"))
         if null not in used:
             used.add(null)
             groups.append({"name": null, "label": null, "parent": name})

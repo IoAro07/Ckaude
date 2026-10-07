@@ -9,7 +9,7 @@ import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
-CATEGORIES = ("wall", "door", "window", "column", "roof")
+CATEGORIES = ("wall", "door", "window", "column", "roof", "floor", "skirting")
 
 # Drawing-unit name -> metres. Names follow the DXF $INSUNITS table.
 UNIT_TO_METERS = {
@@ -49,13 +49,17 @@ class LayerRules:
         "window": ("finestr", "window", "glaz"),
         "column": ("pilast", "colonn", "column", "pillar", "cols"),
         "roof": ("tett", "roof", "copertur"),
+        "floor": ("pavim", "floor", "solai"),
+        "skirting": ("battiscop", "skirt", "zoccol"),
     }
+    # Walls on these layers are the thin interior divisions: their own object and material.
+    _PARTITION = ("fondell", "tramezz", "partit", "divisor")
     # A layer holding elevations, furniture, dimensions... is never a plan element even if
     # its name also says "parete" (e.g. "Prospetto Parete Attrezzata").
     _VETO = ("prospett", "sezion", "section", "elevat", "arred", "furnit", "quot", "dimens",
              "text", "testi", "tett", "roof", "verde", "landscap")
     # Checked in this order: "MURI_PORTANTI" must not become a door layer.
-    _ORDER = ("door", "window", "column", "wall", "roof")
+    _ORDER = ("door", "window", "column", "skirting", "floor", "wall", "roof")
 
     @staticmethod
     def tokens(name: str) -> list[str]:
@@ -95,6 +99,9 @@ class LayerRules:
             if self.matches(cat, block_name, ignore_veto):
                 return cat
         return None
+
+    def is_partition(self, layer: str) -> bool:
+        return any(t.startswith(self._PARTITION) for t in self.tokens(layer))
 
     def vetoed(self, layer: str) -> bool:
         """Elevation / furniture / annotation layers: nothing on them is a plan element,
@@ -137,6 +144,10 @@ class Config:
     glass: bool = True
     glass_thickness: float = 0.02
     texts: bool = True  # read sizes, sills, room names and heights from the written texts
+    skirting_height: float = 0.08  # battiscopa, from the skirting layer
+    skirting_thickness: float = 0.012
+    partitions_apart: bool = True  # walls of the fondelli/tramezzi layers as their own object (Tramezzi)
+    floors_by_room: bool = True  # one floor object per room (or per polygon of the floor layer)
     passages: bool = True  # doorways drawn only as a gap between two wall ends (no door symbol)
     passage_max: float = 2.0  # metres: a wider gap between facing wall ends is open space, not a doorway
     vector_text: bool = True  # also read texts that were exploded into lines (letters drawn as lines)
@@ -182,7 +193,8 @@ class Config:
         numbers = [getattr(self, n) for n in (
             "wall_height", "door_height", "window_sill", "window_height", "wall_thickness",
             "max_wall_thickness", "floor_thickness", "ceiling_thickness", "glass_thickness",
-            "roof_thickness", "roof_default_pitch", "label_radius", "passage_max")]
+            "roof_thickness", "roof_default_pitch", "label_radius", "passage_max", "skirting_height",
+            "skirting_thickness")]
         numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset) if box_ for v in box_]
         numbers += [v for ev in self.elevations for v in ev]
         if self.roof_pitch is not None:

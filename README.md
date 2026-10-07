@@ -138,6 +138,15 @@ viene ricostruito sopra la porta (architrave) e sopra/sotto la finestra, poi tag
 del muro. Diventa un'apertura `vano` (`V01`...): architrave sopra i 2,10 m (o l'altezza scritta), imbotto e cornice,
 nessuna anta. Compare nella tabella: `MODIFICA_tieni = no` lo richiude con il muro; `--no-vani` non li cerca.
 
+**Pavimenti, battiscopa, tramezzi** (convenzione dei nomi dei layer, anche in inglese: floor, skirting):
+
+| Layer (nome contiene) | Cosa produce |
+|---|---|
+| `Pavimenti`, `floor`, `solaio` | poligoni chiusi: **un oggetto per poligono** (`Pavimento_Soggiorno`...), col nome del locale scritto sopra; se un poligono ne sta dentro un altro viene scavato (altra finitura) |
+| nessun layer di pavimenti | un oggetto per **locale chiuso dai muri**, esteso sotto le porte (nessun buco alla soglia); con un solo locale senza nome resta la lastra unica `Pavimento`. `--no-pavimento-per-locale` non separa |
+| `Battiscopa`, `skirting`, `zoccolino` | linee/polilinee: fascetta alta 8 cm, spessa 1,2 cm (`skirting_height`, `skirting_thickness` nel file di configurazione), dalla parte della stanza se la linea corre sulla faccia del muro; si ferma alle porte |
+| `Fondelli`, `Tramezzi`, `Divisori` | sono muri come gli altri, ma finiscono nell'oggetto **`Tramezzi`** (materiale a parte); `--no-tramezzi` li lascia in `Muri` |
+
 **Pilastri**: polilinee chiuse, campiture e cerchi sul layer dei pilastri, alti come i muri.
 
 **Pavimento**: riempie il contorno degli edifici che racchiudono uno spazio (porte e varchi fino a ~1,2 m
@@ -309,6 +318,8 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--no-pavimento`, `--spessore-pavimento`, `--soffitto`, `--no-vetri` | elementi aggiuntivi |
 | `--infissi` | `dettagliati` (default: telai, ante, maniglie, toppe) o `semplici` (solo vetro) |
 | `--no-testi-esplosi`, `--layer-testi` | non cercare / dove cercare le lettere disegnate con le linee |
+| `--pavimenti`, `--battiscopa` | layer dei pavimenti / dei battiscopa (virgole, `*` jolly) |
+| `--no-tramezzi`, `--no-pavimento-per-locale` | tramezzi dentro `Muri` / una sola lastra di pavimento |
 | `--no-vani`, `--vano-max` | non dedurre i vani senza simbolo / larghezza massima (m) |
 | `--no-scritte`, `--raggio-scritte` | non leggere i testi / distanza massima tra apertura e quota scritta (m) |
 | `--tabella`, `--no-tabella` | applica la tabella delle aperture corretta a mano / non scrivere `NOME_aperture.csv` |

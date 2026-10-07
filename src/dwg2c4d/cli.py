@@ -12,7 +12,8 @@ from .pipeline import convert
 from .reader import declared_units, layer_summary
 
 MODE_NAMES = {"auto": "auto", "solidi": "solid", "doppia-linea": "faces", "asse": "centerline"}
-CATEGORY_IT = {"wall": "muri", "door": "porte", "window": "finestre", "column": "pilastri"}
+CATEGORY_IT = {"wall": "muri", "door": "porte", "window": "finestre", "column": "pilastri",
+               "floor": "pavimenti", "skirting": "battiscopa", "roof": "tetto"}
 
 
 def _globs(text: str) -> list[str]:
@@ -68,6 +69,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--porte")
     g.add_argument("--finestre")
     g.add_argument("--pilastri")
+    g.add_argument("--pavimenti", help="layer dei pavimenti (poligoni chiusi): un oggetto per poligono")
+    g.add_argument("--battiscopa", help="layer dei battiscopa (linee/polilinee lungo i muri)")
     g.add_argument("--includi-nascosti", action="store_true", help="usa anche layer spenti/congelati")
     g.add_argument("--muri-da-blocchi", action="store_true",
                    help="leggi come muri anche i blocchi inseriti su un layer di muri "
@@ -127,6 +130,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--json-c4d", action="store_true",
                    help="scrivi anche NOME_model.json, da importare con uno script in Cinema 4D "
                         "(oggetti nativi, un materiale per tipo, anche Corona)")
+    g.add_argument("--no-pavimento-per-locale", action="store_true",
+                   help="una sola lastra di pavimento sotto tutto l'edificio invece di un oggetto per locale")
+    g.add_argument("--no-tramezzi", action="store_true",
+                   help="i muri dei layer fondelli/tramezzi restano nell'oggetto Muri invece di avere il loro (Tramezzi)")
     g.add_argument("--no-vani", action="store_true",
                    help="non dedurre i vani senza simbolo (due testate di muro allineate con un vuoto in mezzo)")
     g.add_argument("--vano-max", type=float, metavar="M",
@@ -155,7 +162,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
     cfg = Config.from_json(args.config) if args.config else Config()
     overrides = dict(cfg.layers.overrides)
     for cat, value in (("wall", args.muri), ("door", args.porte), ("window", args.finestre),
-                       ("column", args.pilastri), ("roof", args.layer_tetto)):
+                       ("column", args.pilastri), ("roof", args.layer_tetto),
+                       ("floor", args.pavimenti), ("skirting", args.battiscopa)):
         if value:
             overrides[cat] = _globs(value)
     cfg.layers = LayerRules(overrides)
@@ -194,6 +202,10 @@ def config_from_args(args: argparse.Namespace) -> Config:
     cfg.origin = {"centro": "center", "minimo": "min", "disegno": "drawing"}[args.origine]
     if args.json_c4d:
         cfg.c4d_json = True
+    if args.no_pavimento_per_locale:
+        cfg.floors_by_room = False
+    if args.no_tramezzi:
+        cfg.partitions_apart = False
     if args.no_vani:
         cfg.passages = False
     if args.vano_max is not None:
