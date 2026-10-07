@@ -16,7 +16,7 @@ from .geom import union, polygons_of
 from .model import Plan, build_mesh
 from .objwriter import write_obj
 from .openings import assign_ids, build_openings
-from .reader import read_items
+from .reader import storeys, read_items
 from .roof import build_roof, ridge_hints_from
 from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
@@ -89,8 +89,15 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     output_path = Path(output_path) if output_path else input_path.with_suffix(".obj")
 
     doc = open_drawing(input_path, cfg.converter)
+    found = storeys(doc)
+    if cfg.floor is not None and found and cfg.floor not in found:
+        raise ConversionError(f"Il piano {cfg.floor} non esiste: i layer nominano i piani "
+                              f"{', '.join(map(str, found))}.")
     result = read_items(doc, cfg)
     warnings = list(result.warnings)
+    if len(found) > 1 and cfg.floor is None:
+        warnings.append(f"I layer nominano {len(found)} piani ({', '.join(f'P{n}' for n in found)}): ho letto il "
+                        f"piano {found[0]}. Per un altro usa --piano N.")
 
     layer_walls = build_wall_layers(result.items, cfg, warnings)
     walls = clean_footprint(union(layer_walls.values()), cfg.merge_tolerance)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import math
+import functools
 import re
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -125,6 +126,16 @@ class LayerRules:
         return self.classify_layer(layer, ignore_veto)
 
 
+FLOOR_RE = re.compile(r"(?<![a-z])(?:p|pt|pianta|piano|floor|level|lvl)\s*[_\-.]?\s*(\d{1,2})(?![a-z0-9])", re.I)
+
+
+@functools.lru_cache(maxsize=None)
+def floor_of(layer: str) -> int | None:
+    """The storey a layer belongs to, from its name: P1_Muri, pianta2, Piano 3 muri, Floor_1... else None."""
+    m = FLOOR_RE.search(layer)
+    return int(m.group(1)) if m else None
+
+
 DEFAULT_WALL_HEIGHT = 2.70
 
 
@@ -149,6 +160,7 @@ class Config:
     ceiling_thickness: float = 0.20
     glass: bool = True
     glass_thickness: float = 0.02
+    floor: int | None = None  # which storey to read when layers are named P1_, P2_... (None: the lowest)
     texts: bool = True  # read sizes, sills, room names and heights from the written texts
     skirting_height: float = 0.08  # battiscopa, from the skirting layer
     skirting_thickness: float = 0.012

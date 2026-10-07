@@ -21,6 +21,7 @@ from ezdxf.document import Drawing
 
 from .config import Config
 from .glyphs import Matcher, fill_segments
+from .reader import layer_used
 from .texts import RawText
 
 MAX_GLYPH = 0.40  # m: a letter taller than this is not text
@@ -264,10 +265,8 @@ def read_segments(doc: Drawing, cfg: Config, scale: float) -> dict[str, np.ndarr
         layer = e.dxf.layer
         if not _is_text_layer(layer, extra):
             continue
-        if doc.layers.has_entry(layer) and not cfg.include_hidden:
-            entry = doc.layers.get(layer)
-            if entry.is_off() or entry.is_frozen():
-                continue
+        if not layer_used(doc, cfg, layer):
+            continue
         try:
             if t == "LINE":
                 s, d = e.dxf.start, e.dxf.end

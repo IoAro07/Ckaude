@@ -112,6 +112,11 @@ Se un layer è classificato male, indicalo tu (nomi separati da virgola, `*` com
 dwg2c4d pianta.dwg --muri "A-MURI*,TRAMEZZI" --porte "SERR_P" --finestre "SERR_F" --pilastri "STRUTT"
 ```
 
+**Più piani.** Se i layer portano il numero del piano nel nome (`P1_Muri`, `P1_Infissi`, `pianta2 muri`, `Piano 3`...)
+si legge **un piano alla volta**: di default il più basso (e lo dice), `--piano 2` sceglie un altro e il file si chiama
+`NOME_p2.obj`. I layer senza numero (prospetti, testi, tetto...) valgono per tutti. `--elenca-layer` elenca i piani
+trovati. I piani non vengono impilati in un unico modello: ognuno è un OBJ.
+
 **Layer con nomi che il programma non conosce.** `--elenca-layer` finisce con le **PROPOSTE**, ciascuna con la sua
 confidenza e il perché: i nomi tipici dicono subito arredi, quote/testi, retini, verde, prospetti, impianti; per le
 linee il programma **prova davvero** l'ipotesi: un layer che costruito come muri chiude dei locali è probabilmente il
@@ -332,6 +337,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `-o`, `--output` | file `.obj` (default: accanto all'input) |
 | `--elenca-layer` | mostra i layer e come sono classificati, poi esce |
 | `--muri`, `--porte`, `--finestre`, `--pilastri` | layer per categoria (virgole, `*` jolly) |
+| `--piano` | quale piano leggere se i layer sono nominati per piano (`P1_`, `pianta2`...) |
 | `--accetta-proposte` | usa le proposte di `--elenca-layer` (confidenza media/alta) per i layer non riconosciuti |
 | `--includi-nascosti` | usa anche i layer spenti/congelati |
 | `--muri-da-blocchi` | leggi come muri anche i blocchi inseriti su un layer di muri |

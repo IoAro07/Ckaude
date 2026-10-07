@@ -12,7 +12,7 @@ from shapely import affinity
 from shapely.geometry import LineString, Polygon, box
 from shapely.geometry.base import BaseGeometry
 
-from .config import INSUNITS_TO_NAME, UNIT_TO_METERS, Config
+from .config import INSUNITS_TO_NAME, UNIT_TO_METERS, Config, floor_of
 from .geom import fix, nest_polygons
 
 LINE_TYPES = {"LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", "ELLIPSE", "SPLINE"}
@@ -55,6 +55,30 @@ def guess_unit(span: float) -> str:
     if span < 8000:
         return "cm"
     return "mm"
+
+
+def storeys(doc: Drawing) -> list[int]:
+    """The storeys the layer names mention (P1_, pianta2...), sorted."""
+    cached = getattr(doc, "_dwg2c4d_storeys", None)
+    if cached is None:
+        cached = sorted({f for lay in doc.layers if (f := floor_of(lay.dxf.name)) is not None})
+        doc._dwg2c4d_storeys = cached
+    return cached
+
+
+def layer_used(doc: Drawing, cfg: Config, layer: str) -> bool:
+    """Is the layer read? Not when it is off/frozen (unless ``include_hidden``) or belongs to another storey
+    than the one chosen (``cfg.floor``, default the lowest one named in the drawing)."""
+    floor = floor_of(layer)
+    if floor is not None:
+        found = storeys(doc)
+        wanted = cfg.floor if cfg.floor is not None else (found[0] if found else None)
+        if wanted is not None and floor != wanted:
+            return False
+    if cfg.include_hidden or not doc.layers.has_entry(layer):
+        return True
+    entry = doc.layers.get(layer)
+    return not (entry.is_off() or entry.is_frozen())
 
 
 def _arc_info(pts) -> tuple | None:
@@ -153,10 +177,7 @@ class _Reader:
         self.skipped += 1
 
     def visible(self, layer: str) -> bool:
-        if self.cfg.include_hidden or not self.doc.layers.has_entry(layer):
-            return True
-        entry = self.doc.layers.get(layer)
-        return not (entry.is_off() or entry.is_frozen())
+        return layer_used(self.doc, self.cfg, layer)
 
     def prims_of(self, entities) -> list[Prim]:
         out: list[Prim] = []

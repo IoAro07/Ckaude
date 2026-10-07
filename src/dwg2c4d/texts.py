@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from ezdxf.document import Drawing
 
 from .config import Config
+from .reader import layer_used
 
 SIZE_RE = re.compile(
     r"^\s*(?:L\s*)?(\d{2,4}(?:[.,]\d+)?)\s*[x×*/\\]\s*(?:H\s*)?(\d{2,4}(?:[.,]\d+)?)"
@@ -170,10 +171,7 @@ def read_texts(doc: Drawing, cfg: Config, scale: float, area=None) -> list[RawTe
     out: list[RawText] = []
 
     def visible(layer: str) -> bool:
-        if cfg.include_hidden or not doc.layers.has_entry(layer):
-            return True
-        entry = doc.layers.get(layer)
-        return not (entry.is_off() or entry.is_frozen())
+        return layer_used(doc, cfg, layer)
 
     def walk(entities, depth: int, inherit: str | None) -> None:
         for e in entities:

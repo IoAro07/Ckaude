@@ -11,7 +11,7 @@ from .dwgfile import ConversionError, open_drawing
 from .proposals import apply_proposals, propose_layers
 from .qa import summary_lines
 from .pipeline import convert
-from .reader import declared_units, layer_summary
+from .reader import declared_units, layer_summary, storeys
 
 MODE_NAMES = {"auto": "auto", "solidi": "solid", "doppia-linea": "faces", "asse": "centerline"}
 CATEGORY_IT = {"wall": "muri", "door": "porte", "window": "finestre", "column": "pilastri",
@@ -76,6 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--accetta-proposte", action="store_true",
                    help="usa le proposte di --elenca-layer (confidenza media o alta) per i layer che il nome "
                         "non fa riconoscere; i layer che indichi tu o che il nome riconosce non cambiano")
+    g.add_argument("--piano", type=int, metavar="N",
+                   help="se i layer sono nominati per piano (P1_Muri, pianta2...) legge solo il piano N "
+                        "(default: il piu' basso); i layer senza numero valgono per tutti")
     g.add_argument("--includi-nascosti", action="store_true", help="usa anche layer spenti/congelati")
     g.add_argument("--muri-da-blocchi", action="store_true",
                    help="leggi come muri anche i blocchi inseriti su un layer di muri "
@@ -236,6 +239,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
     if args.tabella:
         cfg.table_in = args.tabella
     cfg.images = not args.no_immagini
+    if args.piano is not None:
+        cfg.floor = args.piano
     if args.no_prospetti_auto:
         cfg.elevations_auto = False
     cfg.fixtures_per_opening = not args.infissi_uniti
@@ -257,9 +262,13 @@ def _print_proposals(proposals) -> None:
           "oppure indicale tu: --muri, --porte, --finestre.")
 
 
-def _print_layers(rows: list[dict], units: str | None) -> None:
+def _print_layers(rows: list[dict], units: str | None, floors: list[int] | None = None) -> None:
     print(f"Unita' dichiarate nel file: {units or 'nessuna'} "
-          "(se le misure non tornano, forzale con --unita)\n")
+          "(se le misure non tornano, forzale con --unita)")
+    if floors:
+        print(f"Piani riconosciuti dai nomi dei layer: {', '.join(f'P{n}' for n in floors)} "
+              "(--piano N sceglie quale convertire)")
+    print()
     width = max([len(r["layer"]) for r in rows] + [5])
     print(f"{'LAYER'.ljust(width)}  USO COME   CONTENUTO")
     for r in rows:
@@ -283,7 +292,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.elenca_layer:
             doc = open_drawing(args.input, cfg.converter)
             rows = layer_summary(doc, cfg)
-            _print_layers(rows, declared_units(doc))
+            _print_layers(rows, declared_units(doc), storeys(doc))
             _print_proposals(propose_layers(doc, cfg, rows))
             return 0
         if args.accetta_proposte:
@@ -292,7 +301,13 @@ def main(argv: list[str] | None = None) -> int:
             for p in apply_proposals(cfg, propose_layers(doc, cfg, rows), rows):
                 print(f"Layer '{p.layer}' usato come {CATEGORY_IT[p.category]} (proposta, confidenza {p.confidence}: "
                       f"{p.reason})")
-        report = convert(args.input, args.output, cfg)
+        output = args.output
+        if output is None and args.piano is not None:
+            from pathlib import Path
+
+            src = Path(args.input)
+            output = src.with_name(f"{src.stem}_p{args.piano}.obj")
+        report = convert(args.input, output, cfg)
     except (ConversionError, ValueError, OSError) as exc:
         print(f"Errore: {exc}", file=sys.stderr)
         return 1
