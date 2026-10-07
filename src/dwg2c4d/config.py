@@ -100,6 +100,12 @@ class LayerRules:
                 return cat
         return None
 
+    # One layer for every opening ("Infissi", "Serramenti"): doors and windows are told apart by shape.
+    _MIXED_OPENINGS = ("infiss", "serrament")
+
+    def is_mixed_openings(self, layer: str) -> bool:
+        return "window" not in self.overrides and any(t.startswith(self._MIXED_OPENINGS) for t in self.tokens(layer))
+
     def is_partition(self, layer: str) -> bool:
         return any(t.startswith(self._PARTITION) for t in self.tokens(layer))
 

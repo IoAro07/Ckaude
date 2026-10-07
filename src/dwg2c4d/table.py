@@ -81,7 +81,7 @@ def write_table(path: str | Path, openings: list[Opening], unit_scale: float) ->
         w.writerow(COLUMNS)
         for o in sorted(openings, key=lambda o: o.id):
             src = o.src
-            origin = ", ".join(f"{k}: {src[k]}" for k in ("width", "height", "sill") if k in src)
+            origin = ", ".join(f"{k}: {src[k]}" for k in ("width", "height", "sill", "kind") if k in src)
             ante = len(o.leaves) if o.kind == "door" else (o.sashes if o.kind == "window" else "")
             w.writerow([
                 o.id, KIND_NAME[o.kind], _num(o.center[0] / unit_scale), _num(o.center[1] / unit_scale),

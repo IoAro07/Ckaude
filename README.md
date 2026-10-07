@@ -94,6 +94,10 @@ QUOTE     -          1 LINE, 1 TEXT
 
 Riconosce da solo i nomi italiani e inglesi più comuni (`MURI`, `PARETI`, `TRAMEZZI`, `A-WALL`, `PORTE`, `A-DOOR`,
 `FINESTRE`, `SERRAMENTI`, `A-GLAZ`, `PILASTRI`, `A-COLS`…). `MURI_PORTANTI` è un layer di muri, non di porte.
+Se porte e finestre stanno **sullo stesso layer** (`Infissi`, `Serramenti`) le distingue dalla forma: un simbolo con
+l'**arco di rotazione** (quarto di cerchio) è una porta, senza arco è una finestra. Lo dice nella nota dell'apertura
+(e nella tabella, `origine_misure`): se sbaglia, `MODIFICA_tipo`. Un layer chiamato `PORTE` o `FINESTRE` non viene mai
+rimesso in discussione.
 Anche un blocco chiamato `PORTA90` o `FINESTRA120` viene riconosciuto, qualunque sia il suo layer.
 
 I layer con nomi come `Prospetto…`, `Sezione…`, `Arredo…`, `Quote…`, `Testi`, `Tetto`, `Verde` non vengono mai presi per muri,

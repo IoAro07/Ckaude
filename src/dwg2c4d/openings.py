@@ -38,6 +38,7 @@ class Symbol:
     prims: list[Prim]
     block: str | None = None
     layer: str = ""
+    inferred: str = ""  # how a door/window on a mixed "Infissi" layer was told apart
 
 
 @dataclass
@@ -292,6 +293,29 @@ def _dividers(sym: Symbol, centre: tuple[float, float], u, width: float, thickne
     return [c for c in centres if abs(c) < width / 2 - 0.12]
 
 
+def _has_swing_arc(sym: Symbol) -> bool:
+    """A quarter-circle (55..125 degrees, 0.4..1.3 m radius) is a door leaf's swing; a window has none."""
+    for p in sym.prims:
+        arc = p.meta.get("arc")
+        if arc and 55.0 <= arc[3] <= 125.0 and 0.4 <= arc[2] <= 1.3:
+            return True
+    return False
+
+
+def _reclassify_mixed(by_kind: dict[str, list[Symbol]], cfg: Config) -> None:
+    """Symbols on a layer that holds every opening ("Infissi"): with a swing arc they are doors, without
+    they are windows. The symbols that turn out to be doors move to the door list."""
+    for sym in list(by_kind["window"]):
+        if not cfg.layers.is_mixed_openings(sym.layer):
+            continue
+        if _has_swing_arc(sym):
+            sym.inferred = "arco di rotazione"
+            by_kind["window"].remove(sym)
+            by_kind["door"].append(sym)
+        else:
+            sym.inferred = "nessun arco di rotazione"
+
+
 def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
                    warnings: list[str]) -> list[Opening]:
     openings: list[Opening] = []
@@ -299,13 +323,15 @@ def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
         return openings
     edges = _WallEdges(walls)
     skipped = 0
+    by_kind = {"door": _symbols(items, "door"), "window": _symbols(items, "window")}
+    _reclassify_mixed(by_kind, cfg)
     for kind in ("door", "window"):
         z0 = 0.0 if kind == "door" else cfg.window_sill
         z1 = min(cfg.door_height if kind == "door" else cfg.window_sill + cfg.window_height,
                  cfg.wall_height)
         if z1 <= z0:
             continue
-        for sym in _symbols(items, kind):
+        for sym in by_kind[kind]:
             found = _locate_opening(sym, walls, edges, cfg.max_wall_thickness)
             if found is None:
                 skipped += 1
@@ -320,6 +346,10 @@ def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
                          width=width, thickness=thick, layer=sym.layer, block=sym.block or "")
             op.rebuild(cfg)
             op.src = {"width": "geometria", "height": "default", "sill": "default"}
+            if sym.inferred:
+                op.src["kind"] = sym.inferred
+                op.notes.append(f"{'porta' if kind == 'door' else 'finestra'} riconosciuta dalla forma sul layer "
+                                f"'{sym.layer}' ({sym.inferred}): controlla (MODIFICA_tipo nella tabella)")
             if kind == "door":
                 op.leaves = _door_leaves(sym, centre, (ux, uy), (vx, vy), width)
                 if op.leaves:
