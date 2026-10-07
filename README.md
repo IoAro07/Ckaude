@@ -15,15 +15,16 @@ pianta.dwg  ──►  dwg2c4d  ──►  pianta.obj + .mtl  (+ _model.json)  �
 
 ### 1. Avere il progetto in locale
 
-Il codice sta nel repository GitHub `IoAro07/Ckaude`, sul ramo `claude/dwg-to-3d-cinema4d-0c0if5` (finché non lo
-unisci a `main`). Due modi:
+Il codice sta nel repository pubblico <https://github.com/IoAro07/Ckaude> (il ramo predefinito è
+`claude/dwg-to-3d-cinema4d-0c0if5`: non serve alcun login). Due modi:
 
-- **Scaricarlo come ZIP**: apri il repository su GitHub, scegli quel ramo, *Code → Download ZIP*, decomprimi.
-- **Con git**: `git clone --branch claude/dwg-to-3d-cinema4d-0c0if5 https://github.com/IoAro07/Ckaude.git`
+- **Scaricarlo come ZIP**: nella pagina del repository *Code → Download ZIP*, poi decomprimi in una cartella
+  qualsiasi (per esempio `C:\dwg2c4d`).
+- **Con git**: `git clone https://github.com/IoAro07/Ckaude.git`
 
-(Se il repository è privato GitHub ti chiede di accedere con il tuo account.) In alternativa puoi usare il file
-`dwg2c4d-0.1.0-py3-none-any.whl` che ti è stato consegnato: `pip install dwg2c4d-0.1.0-py3-none-any.whl` installa
-tutto senza scaricare il progetto (non include gli script `.bat` e lo script di Cinema 4D: stanno nella cartella).
+In alternativa il file `dwg2c4d-0.1.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.1.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+script di Cinema 4D, che stanno nella cartella del progetto.
 
 ### 2. Python e le librerie (una volta sola)
 

@@ -12,6 +12,8 @@ from helpers import Obj
 from dwg2c4d import Config, convert
 
 PLAN = Path(__file__).parent / "data" / "planimetria_1_ridotta.dxf"
+# The drawing is the author's own and is not published with the project: put a copy in tests/data/ to run these.
+pytestmark = pytest.mark.skipif(not PLAN.exists(), reason="manca tests/data/planimetria_1_ridotta.dxf (disegno privato)")
 
 
 @pytest.fixture(scope="module")
