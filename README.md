@@ -1,11 +1,14 @@
 # dwg2c4d — da planimetria 2D (DWG/DXF) a modello 3D per Cinema 4D
 
-Legge una pianta 2D, ne **estrude i muri**, **apre porte e finestre** (con architrave, parapetto e vetri),
-aggiunge il **pavimento** e scrive un file **OBJ + MTL** pronto da importare in Cinema 4D, con un oggetto
-per categoria (`Muri`, `Pilastri`, `Vetri`, `Pavimento`, `Soffitto`, `Tetto`) e un materiale per ciascuno.
+Legge una pianta 2D, ne **estrude i muri** (con i tramezzi a parte), **apre porte, finestre e vani** con le
+quote che trova (scritte del disegno, prospetti), costruisce **infissi dettagliati** (imbotto, cornice, telai, ante,
+maniglie, toppe), **pavimenti per locale**, **battiscopa** e, se vuoi, il **tetto**. Scrive un file **OBJ + MTL**
+per Cinema 4D, e se vuoi anche un `*_model.json` per lo script di importazione (oggetti nativi, materiali Corona).
 
 ```
-pianta.dwg  ──►  dwg2c4d  ──►  pianta.obj + pianta.mtl  ──►  Cinema 4D
+pianta.dwg  ──►  dwg2c4d  ──►  pianta.obj + .mtl  (+ _model.json)  ──►  Cinema 4D
+                           └►  pianta_aperture.csv   (porte/finestre: correggile in Excel e rilancia)
+                           └►  pianta_controllo_pianta.png, pianta_anteprima_3d.png, pianta_report.txt
 ```
 
 ## Installazione
