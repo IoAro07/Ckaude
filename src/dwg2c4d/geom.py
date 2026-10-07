@@ -37,6 +37,9 @@ def union(geoms: Iterable[BaseGeometry]) -> BaseGeometry:
     return unary_union(geoms) if geoms else Polygon()
 
 
+INSIDE = 0.75  # share of a shape's area that must lie in another one to count as nested in it
+
+
 def nest_polygons(polys: Iterable[Polygon]) -> BaseGeometry:
     """Combine closed outlines drawn as separate shapes.
 
@@ -64,9 +67,11 @@ def nest_polygons(polys: Iterable[Polygon]) -> BaseGeometry:
     tree = STRtree(unique)
     levels: dict[int, list[Polygon]] = {}
     for i, p in enumerate(unique):
-        # tree geometries that contain p (p.within(tree_geom))
-        candidates = tree.query(p, predicate="within")
-        depth = sum(1 for j in candidates if j != i and unique[j].area > p.area)
+        # A shape is inside another when (almost) all of it lies there: a partition drawn a little
+        # into the wall it meets is still an island of the room, not a hole in the wall.
+        candidates = tree.query(p, predicate="intersects")
+        depth = sum(1 for j in candidates if j != i and unique[j].area > p.area
+                    and p.intersection(unique[j]).area >= INSIDE * p.area)
         levels.setdefault(depth, []).append(p)
     # Apply the levels outermost first: solid (even depth) is added, hole (odd depth) is cut
     # out, an island inside a hole is added back, and so on.

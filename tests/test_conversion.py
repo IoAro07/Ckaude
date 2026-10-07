@@ -572,3 +572,15 @@ def test_wall_direction_averages_edges_that_point_the_opposite_way():
     wall = Polygon([(0, 0), (10, 0), (10, 0.2), (0, 0.2 + 1e-12)])
     (ux, uy), *_ = _WallEdges(wall).directions_near(Point(5, 0.1).buffer(0.5))
     assert abs(ux) > 0.9999 and abs(uy) < 0.01
+
+
+def test_a_partition_drawn_a_little_into_the_wall_is_still_a_partition():
+    from shapely.geometry import box
+
+    from dwg2c4d.geom import nest_polygons
+
+    ring = [box(0, 0, 10, 6), box(0.3, 0.3, 9.7, 5.7)]
+    stub = box(5.0, 0.29, 5.1, 3.0)  # 1 cm into the south wall, the rest inside the room
+    walls = nest_polygons(ring + [stub])
+    assert walls.area == pytest.approx(60 - 5.4 * 9.4 + 0.1 * (3.0 - 0.3) + 0.0, abs=1e-6)
+    assert walls.buffer(-0.01).contains(box(5.02, 1.0, 5.08, 2.0))

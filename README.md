@@ -133,6 +133,11 @@ viene ricostruito sopra la porta (architrave) e sopra/sotto la finestra, poi tag
 | Soffitto (solaio sopra i muri) | non creato | `--soffitto` |
 | Vetri delle finestre (lastra da 2 cm) | creati | `--no-vetri` |
 
+**Vani senza simbolo**: due testate di muro libere, una di fronte all'altra e allineate, con un vuoto tra 0,5 m e
+`--vano-max` (default 2 m) e senza nessuna porta/finestra in mezzo, sono un passaggio disegnato solo come interruzione
+del muro. Diventa un'apertura `vano` (`V01`...): architrave sopra i 2,10 m (o l'altezza scritta), imbotto e cornice,
+nessuna anta. Compare nella tabella: `MODIFICA_tieni = no` lo richiude con il muro; `--no-vani` non li cerca.
+
 **Pilastri**: polilinee chiuse, campiture e cerchi sul layer dei pilastri, alti come i muri.
 
 **Pavimento**: riempie il contorno degli edifici che racchiudono uno spazio (porte e varchi fino a ~1,2 m
@@ -304,6 +309,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--no-pavimento`, `--spessore-pavimento`, `--soffitto`, `--no-vetri` | elementi aggiuntivi |
 | `--infissi` | `dettagliati` (default: telai, ante, maniglie, toppe) o `semplici` (solo vetro) |
 | `--no-testi-esplosi`, `--layer-testi` | non cercare / dove cercare le lettere disegnate con le linee |
+| `--no-vani`, `--vano-max` | non dedurre i vani senza simbolo / larghezza massima (m) |
 | `--no-scritte`, `--raggio-scritte` | non leggere i testi / distanza massima tra apertura e quota scritta (m) |
 | `--tabella`, `--no-tabella` | applica la tabella delle aperture corretta a mano / non scrivere `NOME_aperture.csv` |
 | `--unita` | unità del disegno: `mm`, `cm`, `m`, `in`, `ft` (default: lette dal file) |

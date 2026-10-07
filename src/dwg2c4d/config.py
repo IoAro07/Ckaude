@@ -137,6 +137,8 @@ class Config:
     glass: bool = True
     glass_thickness: float = 0.02
     texts: bool = True  # read sizes, sills, room names and heights from the written texts
+    passages: bool = True  # doorways drawn only as a gap between two wall ends (no door symbol)
+    passage_max: float = 2.0  # metres: a wider gap between facing wall ends is open space, not a doorway
     vector_text: bool = True  # also read texts that were exploded into lines (letters drawn as lines)
     text_layers: list[str] = field(default_factory=list)  # extra layers (globs) that may hold exploded texts
     label_radius: float = 1.2  # metres: how far from an opening its written size may be
@@ -180,7 +182,7 @@ class Config:
         numbers = [getattr(self, n) for n in (
             "wall_height", "door_height", "window_sill", "window_height", "wall_thickness",
             "max_wall_thickness", "floor_thickness", "ceiling_thickness", "glass_thickness",
-            "roof_thickness", "roof_default_pitch", "label_radius")]
+            "roof_thickness", "roof_default_pitch", "label_radius", "passage_max")]
         numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset) if box_ for v in box_]
         numbers += [v for ev in self.elevations for v in ev]
         if self.roof_pitch is not None:

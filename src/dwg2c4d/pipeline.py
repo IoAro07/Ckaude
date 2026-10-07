@@ -15,13 +15,14 @@ from .dwgfile import ConversionError, open_drawing
 from .geom import polygons_of
 from .model import Plan, build_mesh
 from .objwriter import write_obj
-from .openings import build_openings
+from .openings import assign_ids, build_openings
 from .reader import read_items
 from .roof import build_roof, ridge_hints_from
 from .walls import build_columns, build_walls
 from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
 from .texts import read_words
+from .passages import find_passages
 
 
 @dataclass
@@ -34,6 +35,7 @@ class ConversionReport:
     wall_pieces: int
     doors: int
     windows: int
+    passages: int
     columns: int
     faces: int
     groups: list[str]
@@ -112,6 +114,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         )
     plan = Plan(walls=walls, columns=columns, openings=openings, merge_tolerance=cfg.merge_tolerance)
     solid = plan.solid_walls
+    if cfg.passages:
+        passages = find_passages(solid, cfg, openings)
+        if passages:
+            openings.extend(passages)
+            assign_ids(openings)
+            plan.__dict__.pop("solid_walls", None)  # the lintels over the passages close the footprint
+            solid = plan.solid_walls
 
     words, rooms = [], []
     text_unit = 0.01
@@ -187,6 +196,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         wall_area_m2=solid.area,
         wall_pieces=len(polygons_of(solid)),
         doors=sum(o.kind == "door" for o in openings),
+        passages=sum(o.kind == "passage" for o in openings),
         windows=sum(o.kind == "window" for o in openings),
         columns=len(polygons_of(columns)),
         faces=mesh.face_count,

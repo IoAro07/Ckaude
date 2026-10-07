@@ -127,6 +127,10 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--json-c4d", action="store_true",
                    help="scrivi anche NOME_model.json, da importare con uno script in Cinema 4D "
                         "(oggetti nativi, un materiale per tipo, anche Corona)")
+    g.add_argument("--no-vani", action="store_true",
+                   help="non dedurre i vani senza simbolo (due testate di muro allineate con un vuoto in mezzo)")
+    g.add_argument("--vano-max", type=float, metavar="M",
+                   help="larghezza massima di un vano dedotto dai muri, in metri (default 2)")
     g.add_argument("--no-scritte", action="store_true",
                    help="non leggere i testi del disegno (quote delle aperture, nomi e altezze dei locali)")
     g.add_argument("--no-testi-esplosi", action="store_true",
@@ -190,6 +194,10 @@ def config_from_args(args: argparse.Namespace) -> Config:
     cfg.origin = {"centro": "center", "minimo": "min", "disegno": "drawing"}[args.origine]
     if args.json_c4d:
         cfg.c4d_json = True
+    if args.no_vani:
+        cfg.passages = False
+    if args.vano_max is not None:
+        cfg.passage_max = args.vano_max
     if args.no_scritte:
         cfg.texts = False
     if args.no_testi_esplosi:
@@ -254,6 +262,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Ingombro muri      : {w:.2f} x {h:.2f} m")
     print(f"  Muri               : {report.wall_pieces} corpi, {report.wall_area_m2:.1f} m2 in pianta")
     print(f"  Porte / finestre   : {report.doors} / {report.windows}")
+    if report.passages:
+        print(f"  Vani senza simbolo : {report.passages} (dedotti dai muri: verifica nella tabella)")
     src = {"scritta": "dalla scritta 'h' nei locali", "indicata": "indicata", "predefinita": "predefinita"}
     print(f"  Altezza muri       : {report.wall_height:g} m ({src[report.wall_height_source]})")
     if report.labels:
