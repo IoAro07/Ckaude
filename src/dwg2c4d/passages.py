@@ -13,12 +13,13 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from .config import Config
 from .geom import oriented_rect, polygons_of, union
 from .openings import Opening
+from .model import building_footprint
 
 MIN_GAP = 0.5  # m
 MIN_END = 0.04  # m: shorter edges are noise
@@ -122,4 +123,28 @@ def find_passages(walls: BaseGeometry, cfg: Config, openings: list[Opening]) -> 
         op.notes.append("vano senza simbolo dedotto da due testate di muro allineate: controlla "
                         "(MODIFICA_tieni = no lo richiude)")
         found.append(op)
+    if cfg.shape_openings and found:
+        found = [_outside_window(op, building_footprint(union([walls] + [o.fill for o in found])), cfg) for op in found]
     return found
+
+
+def _outside_window(op: Opening, footprint: BaseGeometry, cfg: Config) -> Opening:
+    """A gap in a wall that has the outside on one side and the rooms on the other is a window (or a glazed door) the
+    drawing shows only as a break in the wall lines: the same opening, with a sill and a glass pane."""
+    ux, uy = op.axis
+    vx, vy = -uy, ux
+    reach = op.thickness / 2.0 + 0.3
+    cx, cy = op.center
+    ahead = not footprint.covers(Point(cx + vx * reach, cy + vy * reach))
+    behind = not footprint.covers(Point(cx - vx * reach, cy - vy * reach))
+    if ahead == behind:
+        return op  # inside, or a free-standing wall: a doorway
+    win = Opening("window", Polygon(), Polygon(), cfg.window_sill,
+                  min(cfg.window_sill + cfg.window_height, cfg.wall_height), None, axis=op.axis, center=op.center,
+                  width=op.width, thickness=op.thickness)
+    win.rebuild(cfg)
+    win.src = {"width": "muri", "height": "default", "sill": "default", "kind": "varco nel muro esterno",
+               "sashes": "nessuna linea di taglio: un'anta"}
+    win.notes.append("finestra dedotta da un varco nel muro esterno, senza nessun simbolo: controlla il tipo, "
+                     "il davanzale e le ante nella tabella (MODIFICA_*)")
+    return win

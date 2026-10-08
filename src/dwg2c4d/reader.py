@@ -17,6 +17,8 @@ from .geom import fix, nest_polygons
 
 LINE_TYPES = {"LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE", "ELLIPSE", "SPLINE"}
 MAX_BLOCK_DEPTH = 8
+SWING_RADIUS = (0.55, 1.40)  # m: the arc a door leaf sweeps (a quarter circle, drawn on any layer)
+SWING_SPAN = (70.0, 110.0)  # degrees
 
 
 @dataclass
@@ -170,14 +172,29 @@ class _Reader:
         self.ignore_veto = ignore_veto
         self.keep_other = keep_other
         self.items: list[Item] = []
+        self.arcs: list[Item] = []  # arcs on layers that are no category: maybe the swing of a door
+        self.shape_arcs = cfg.shape_openings and not ignore_veto and not keep_other  # not in the elevations
         self.skipped = 0
         self.wall_layer_blocks = 0
+        self._block_cat: dict[tuple[str, str], str | None] = {}
+        self._by_layer: dict[str, tuple[bool, str | None, bool]] = {}  # layer -> (visible, category, vetoed)
 
     def _count_skipped(self) -> None:
         self.skipped += 1
 
+    def layer_info(self, layer: str) -> tuple[bool, str | None, bool]:
+        """(read?, category by the layer name, vetoed?): worked out once per layer, not once per entity."""
+        info = self._by_layer.get(layer)
+        if info is None:
+            rules = self.cfg.layers
+            visible = layer_used(self.doc, self.cfg, layer)
+            info = (visible, rules.classify_layer(layer, self.ignore_veto) if visible else None,
+                    rules.vetoed(layer) if visible else False)
+            self._by_layer[layer] = info
+        return info
+
     def visible(self, layer: str) -> bool:
-        return layer_used(self.doc, self.cfg, layer)
+        return self.layer_info(layer)[0]
 
     def prims_of(self, entities) -> list[Prim]:
         out: list[Prim] = []
@@ -199,7 +216,9 @@ class _Reader:
                 continue
             if t == "INSERT":
                 block = e.dxf.name
-                cat = rules.classify(layer, block, self.ignore_veto)
+                if (layer, block) not in self._block_cat:
+                    self._block_cat[(layer, block)] = rules.classify(layer, block, self.ignore_veto)
+                cat = self._block_cat[(layer, block)]
                 try:
                     virtual = list(e.virtual_entities())
                 except Exception:
@@ -219,7 +238,11 @@ class _Reader:
                     # e.g. a whole plan inserted as one block: classify inner entities
                     self.walk(virtual, depth + 1)
                 continue
-            cat = rules.classify_layer(layer, self.ignore_veto)
+            _, cat, vetoed = self.layer_info(layer)
+            if self.shape_arcs and t == "ARC" and cat in (None, "wall") and not vetoed:
+                prims = [p for p in self.prims_of([e]) if p.meta.get("arc")]
+                if prims:  # maybe the swing of a door: decided later, when the walls are known
+                    self.arcs.append(Item(layer, None, "door", prims))
             if not cat:
                 if not (self.keep_other and t in LINE_TYPES):
                     continue
@@ -279,6 +302,26 @@ def read_items(doc: Drawing, cfg: Config, area=_ALL, ignore_veto: bool = False,
                 cx, cy, r, span, (mx, my) = arc
                 p.meta["arc"] = (cx * scale, cy * scale, r * scale, span, (mx * scale, my * scale))
         kept.append(it)
+
+    for it in reader.arcs:  # swing arcs found by their shape, on layers whose names say nothing
+        prims = []
+        for p in it.prims:
+            cx, cy, r, span, (mx, my) = p.meta["arc"]
+            r *= scale
+            if not (SWING_RADIUS[0] <= r <= SWING_RADIUS[1] and SWING_SPAN[0] <= span <= SWING_SPAN[1]):
+                continue
+            if window is not None and not window.intersects(affinity.scale(p.geom, scale, scale, origin=(0, 0))):
+                continue
+            p.geom = affinity.scale(p.geom, scale, scale, origin=(0, 0))
+            p.meta = {"arc": (cx * scale, cy * scale, r, span, (mx * scale, my * scale)), "shape_door": True}
+            prims.append(p)
+            # The leaf, open and shut: the two radii close the arc into the sector a door symbol draws, whose
+            # shape (not the arc's chord) tells which way the wall runs.
+            c = (cx * scale, cy * scale)
+            ends = (p.geom.coords[0], p.geom.coords[-1])
+            prims.extend(Prim(LineString([c, e]), "line", {"shape_door": True}) for e in ends)
+        if prims:
+            kept.append(Item(it.layer, None, "door", prims))
 
     if reader.wall_layer_blocks:
         warnings.append(

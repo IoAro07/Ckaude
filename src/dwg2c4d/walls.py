@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 
+import numpy as np
 import shapely
 from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
@@ -128,6 +129,137 @@ def faces_from_lines(lines: list[LineString], max_t: float) -> list[Polygon]:
     return [p for p in polygonize(network) if p.area > 1e-6 and thinness(p) <= max_t]
 
 
+PAIR_MIN_T = 0.04  # m: two parallel lines closer than this are one line drawn twice, not two faces of a wall
+PAIR_MIN_LENGTH = 0.25  # m: shorter pieces (arcs flattened to segments, ticks, jambs) never make a wall by themselves
+PAIR_MIN_OVERLAP = 0.15  # m: two parallel lines must face each other along at least this much
+PAIR_ANGLE = math.radians(1.0)  # two lines whose directions differ less than this are parallel
+PAIR_MAX_PAIRS = 3_000_000  # more candidate pairs than this: the drawing is not made of wall lines, skip it
+SPECK_AREA = 0.6  # m2: a lone body smaller than this is a piece of furniture or a symbol, not a wall...
+SPECK_SIZE = 1.0  # ... if it is also shorter than this in both directions (m)
+
+
+def _straight_pieces(lines: list[BaseGeometry]) -> np.ndarray:
+    """(n, 4) array x0, y0, x1, y1 of every straight piece of the given lines, longer than PAIR_MIN_LENGTH."""
+    out = []
+    for g in lines:
+        for part in getattr(g, "geoms", [g]):
+            if part.geom_type == "Polygon":
+                part = part.exterior
+            if part.geom_type not in ("LineString", "LinearRing"):
+                continue
+            c = np.asarray(part.coords)[:, :2]
+            if len(c) >= 2:
+                out.append(np.hstack([c[:-1], c[1:]]))
+    if not out:
+        return np.zeros((0, 4))
+    seg = np.vstack(out)
+    return seg[np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1]) >= PAIR_MIN_LENGTH]
+
+
+def _pair_candidates(seg: np.ndarray, theta: np.ndarray, max_t: float) -> tuple[np.ndarray, np.ndarray] | None:
+    """Index pairs (i, j) of nearly parallel pieces whose midpoints may be closer than ``max_t`` across their
+    direction. Pieces are binned by direction (1 degree); inside a bin and its neighbour they are sorted across
+    the direction, so only those within reach are compared. None when there are too many pairs."""
+    mx, my = (seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2
+    length = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
+    bins = np.round(np.degrees(theta)).astype(int) % 180
+    out_i: list[np.ndarray] = []
+    out_j: list[np.ndarray] = []
+    total = 0
+    for b in np.unique(bins):
+        own = np.flatnonzero(bins == b)
+        cand = np.flatnonzero((bins == b) | (bins == (b + 1) % 180))
+        centre = math.radians(float(b))
+        d = -mx * math.sin(centre) + my * math.cos(centre)
+        margin = 0.5 * float(length[cand].max()) * math.sin(math.radians(2.0)) + 0.02
+        reach = max_t + margin
+        cand = cand[np.argsort(d[cand])]
+        dc = d[cand]
+        lo = np.searchsorted(dc, d[own] - reach, side="left")
+        hi = np.searchsorted(dc, d[own] + reach, side="right")
+        counts = hi - lo
+        total += int(counts.sum())
+        if total > PAIR_MAX_PAIRS:
+            return None
+        if counts.sum() == 0:
+            continue
+        i = np.repeat(own, counts)
+        pos = np.arange(counts.sum()) - np.repeat(np.cumsum(counts) - counts, counts) + np.repeat(lo, counts)
+        j = cand[pos]
+        keep = (i != j) & ~((bins[j] == b) & (j < i))  # a pair inside one bin once
+        out_i.append(i[keep])
+        out_j.append(j[keep])
+    if not out_i:
+        return np.zeros(0, dtype=int), np.zeros(0, dtype=int)
+    return np.concatenate(out_i), np.concatenate(out_j)
+
+
+def faces_from_pairs(lines: list[BaseGeometry], max_t: float) -> list[Polygon]:
+    """Walls drawn as two parallel lines whose ends are not joined: the strip between every two parallel lines that
+    face each other (closer than ``max_t``, farther than PAIR_MIN_T, overlapping along PAIR_MIN_OVERLAP at least).
+    ``faces_from_lines`` needs closed outlines; this does not, so a wall that stops at a window or a door still
+    counts, but so does anything else made of two near parallel lines (a bookcase, a table): the caller removes
+    what is too small to be a wall."""
+    seg = _straight_pieces(lines)
+    if len(seg) < 2:
+        return []
+    theta = np.arctan2(seg[:, 3] - seg[:, 1], seg[:, 2] - seg[:, 0]) % math.pi
+    found = _pair_candidates(seg, theta, max_t)
+    if found is None or len(found[0]) == 0:
+        return []
+    ia, ib = found
+    ux, uy = np.cos(theta), np.sin(theta)
+    nx, ny = -uy, ux
+    mx, my = (seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2
+    # The angle between the two (mod pi), and the perpendicular distance of b's midpoint from a's line.
+    dtheta = np.abs((theta[ib] - theta[ia] + math.pi / 2) % math.pi - math.pi / 2)
+    t = np.abs((mx[ib] - mx[ia]) * nx[ia] + (my[ib] - my[ia]) * ny[ia])
+    ok = (dtheta <= PAIR_ANGLE) & (t >= PAIR_MIN_T) & (t <= max_t)
+    ia, ib = ia[ok], ib[ok]
+    if len(ia) == 0:
+        return []
+    ax, ay = ux[ia], uy[ia]
+    a0 = seg[ia, 0] * ax + seg[ia, 1] * ay
+    a1 = seg[ia, 2] * ax + seg[ia, 3] * ay
+    b0 = seg[ib, 0] * ax + seg[ib, 1] * ay
+    b1 = seg[ib, 2] * ax + seg[ib, 3] * ay
+    lo = np.maximum(np.minimum(a0, a1), np.minimum(b0, b1))
+    hi = np.minimum(np.maximum(a0, a1), np.maximum(b0, b1))
+    good = hi - lo >= PAIR_MIN_OVERLAP
+    if not good.any():
+        return []
+    ia, ib, lo, hi = ia[good], ib[good], lo[good], hi[good]
+    ax, ay = ux[ia], uy[ia]
+    nxa, nya = -ay, ax
+    off_a = mx[ia] * nxa + my[ia] * nya  # across a's direction: where a's line and b's line are
+    off_b = mx[ib] * nxa + my[ib] * nya
+    cor = np.empty((len(ia), 5, 2))
+    for k, (along, off) in enumerate(((lo, off_a), (hi, off_a), (hi, off_b), (lo, off_b), (lo, off_a))):
+        cor[:, k, 0] = along * ax + off * nxa
+        cor[:, k, 1] = along * ay + off * nya
+    polys = shapely.polygons(cor)
+    return [p for p in polys if p is not None and not p.is_empty and p.area > 1e-6]
+
+
+def drop_specks(footprint: BaseGeometry) -> BaseGeometry:
+    """Remove the small lone bodies (furniture drawn with two parallel lines, symbols) from a footprint built from
+    parallel line pairs. A body that touches another one, or that is a long strip, stays."""
+    parts = polygons_of(footprint)
+    if len(parts) < 2:
+        return footprint
+    tree = STRtree(parts)
+    kept = []
+    for i, p in enumerate(parts):
+        x0, y0, x1, y1 = p.bounds
+        small = p.area < SPECK_AREA and max(x1 - x0, y1 - y0) < SPECK_SIZE
+        if small:
+            near = [j for j in tree.query(p.buffer(0.05), predicate="intersects") if j != i]
+            if not near:
+                continue
+        kept.append(p)
+    return union(kept) if kept else Polygon()
+
+
 def _centerline(lines: list[BaseGeometry], thickness: float) -> BaseGeometry:
     # Flat caps would leave notches at corners; square caps close them.
     return union(l.buffer(thickness / 2.0, cap_style="square", join_style="mitre") for l in lines)
@@ -153,6 +285,7 @@ def _layer_footprint(prims: list[Prim], layer: str, cfg: Config, warnings: list[
 
     # auto
     parts: list[BaseGeometry] = []
+    paired = layer in cfg.pair_layers  # a layer chosen by the shape of its lines: double-line walls with open ends count
     ring_shape = nest_polygons(rings)
     if not ring_shape.is_empty:
         loops = []
@@ -161,13 +294,21 @@ def _layer_footprint(prims: list[Prim], layer: str, cfg: Config, warnings: list[
                 loops.append(poly)  # a room / centerline loop, not a wall outline
             else:
                 parts.append(poly)
-        if loops:
+        if loops and paired:
+            warnings.append(f"Layer {layer}: {len(loops)} contorni chiusi troppo larghi per essere muri "
+                            f"(arredi, locali) sono stati ignorati.")
+        elif loops:
             warnings.append(
                 f"Layer {layer}: {len(loops)} contorni chiusi troppo larghi per essere muri "
                 f"sono stati trattati come assi (spessore {cfg.wall_thickness:g} m)."
             )
             parts.append(_centerline([b for l in loops for b in _boundaries(l)], cfg.wall_thickness))
     parts.extend(fills)
+    if paired:
+        parts.extend(faces_from_pairs(lines + [b for r in rings for b in _boundaries(r)], cfg.max_wall_thickness))
+        if lines:
+            parts.extend(faces_from_lines(lines, cfg.max_wall_thickness))
+        return drop_specks(union(parts))
     if lines:
         faces = faces_from_lines(lines, cfg.max_wall_thickness)
         if faces:

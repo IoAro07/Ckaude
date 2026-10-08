@@ -39,6 +39,7 @@ class Symbol:
     block: str | None = None
     layer: str = ""
     inferred: str = ""  # how a door/window on a mixed "Infissi" layer was told apart
+    by_shape: bool = False  # a swing arc found on a layer that says nothing: it counts only if its hinge is at a wall
 
 
 @dataclass
@@ -105,8 +106,9 @@ def _symbols(items: list[Item], kind: str) -> list[Symbol]:
         grown = union(g.buffer(CLUSTER_TOL) for g, _, _ in loose)
         for cl in getattr(grown, "geoms", [grown]):
             members = [(g, p, lay) for g, p, lay in loose if cl.intersects(g)]
-            symbols.append(Symbol(union([g for g, _, _ in members]), [p for _, p, _ in members], None,
-                                  members[0][2] if members else ""))
+            prims = [p for _, p, _ in members]
+            symbols.append(Symbol(union([g for g, _, _ in members]), prims, None, members[0][2] if members else "",
+                                  by_shape=all(p.meta.get("shape_door") for p in prims)))
     return symbols
 
 
@@ -245,6 +247,21 @@ def _locate_opening(sym: Symbol, walls: BaseGeometry, edges: _WallEdges,
     return fallback
 
 
+HINGE_AT_WALL = 0.30  # m: the centre of a door's swing arc is this close to the wall (at the jamb), at most
+ARC_OFF_WALL = 0.08  # m: the middle of a door's swing arc is at least this far from the wall (a curved wall is not)
+
+
+def _is_swing(sym: Symbol, walls: BaseGeometry) -> bool:
+    """The arc of a door turns about its hinge, which sits in the wall at the side of the opening, and sweeps the
+    room: the arc itself is off the wall (the arc of a rounded wall corner lies on it)."""
+    for p in sym.prims:
+        arc = p.meta.get("arc")
+        if arc and walls.distance(Point(arc[0], arc[1])) <= HINGE_AT_WALL \
+                and walls.distance(Point(arc[4])) >= ARC_OFF_WALL:
+            return True
+    return False
+
+
 def _door_leaves(sym: Symbol, centre: tuple[float, float], u, v, width: float) -> list[dict]:
     """Door leaves from the swing arcs of the symbol: the arc's centre is the hinge, its radius the
     leaf width, which face it sweeps to tells the swing. Small arcs (handles) are ignored."""
@@ -326,6 +343,7 @@ def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
     skipped = 0
     by_kind = {"door": _symbols(items, "door"), "window": _symbols(items, "window")}
     _reclassify_mixed(by_kind, cfg)
+    by_kind["door"].sort(key=lambda sym: sym.by_shape)  # the doors the layers name first: a shape door never doubles one
     for kind in ("door", "window"):
         z0 = 0.0 if kind == "door" else cfg.window_sill
         z1 = min(cfg.door_height if kind == "door" else cfg.window_sill + cfg.window_height,
@@ -333,6 +351,9 @@ def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
         if z1 <= z0:
             continue
         for sym in by_kind[kind]:
+            if sym.by_shape and (not _is_swing(sym, walls)
+                                 or any(sym.geom.convex_hull.distance(o.fill) <= 0.15 for o in openings)):
+                continue  # a curved piece of furniture, a washbasin, a door already found: nothing to report
             found = _locate_opening(sym, walls, edges, cfg.max_wall_thickness)
             if found is None:
                 skipped += 1
@@ -347,7 +368,12 @@ def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
                          width=width, thickness=thick, layer=sym.layer, block=sym.block or "")
             op.rebuild(cfg)
             op.src = {"width": "geometria", "height": "default", "sill": "default"}
-            if sym.inferred:
+            if sym.by_shape:
+                sym.inferred = "arco di rotazione"
+                op.src["kind"] = "forma"
+                op.notes.append(f"porta riconosciuta dal solo arco di rotazione (layer '{sym.layer}'): "
+                                "controlla (MODIFICA_tipo nella tabella)")
+            elif sym.inferred:
                 op.src["kind"] = sym.inferred
                 op.notes.append(f"{'porta' if kind == 'door' else 'finestra'} riconosciuta dalla forma sul layer "
                                 f"'{sym.layer}' ({sym.inferred}): controlla (MODIFICA_tipo nella tabella)")

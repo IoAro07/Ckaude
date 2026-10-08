@@ -157,6 +157,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="dettagliati (default): imbotto, cornice, telai, ante, maniglie, toppe; "
                         "semplici: solo una lastra di vetro per finestra")
 
+    g = p.add_argument_group("riconoscimento automatico del disegno (quando i layer non dicono cosa sono le cose)")
+    g.add_argument("--no-analisi", action="store_true",
+                   help="non analizzare il foglio: unita', viste (pianta, prospetti, sezioni), layer dei muri si "
+                        "decidono solo dai nomi dei layer e dalle opzioni")
+    g.add_argument("--vista", type=int, metavar="N",
+                   help="converti la vista N del foglio (i numeri sono nell'immagine NOME_viste.png) invece di "
+                        "quella scelta dal programma")
+
     g = p.add_argument_group("giardino (superfici e oggetti fuori dalla casa)")
     g.add_argument("--no-giardino", action="store_true",
                    help="non costruire il giardino (pavimentazione, prato, acqua, piscina, siepi, alberi...)")
@@ -297,6 +305,9 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.write_garden_table = False
     in_config = _config_value(args.config, "garden")  # --config {"garden": false} turns it off, as --no-giardino
     cfg.garden = False if args.no_giardino else (True if in_config is None else bool(in_config))
+    cfg.auto = not args.no_analisi
+    if args.vista is not None:
+        cfg.view = args.vista
     if args.tabella_giardino:
         cfg.garden_table_in = args.tabella_giardino
     return cfg
@@ -352,6 +363,7 @@ def main(argv: list[str] | None = None) -> int:
             doc = open_drawing(args.input, cfg.converter)
             rows = layer_summary(doc, cfg)
             for p in apply_proposals(cfg, propose_layers(doc, cfg, rows), rows):
+                cfg.proposed.append(p.category)
                 print(f"Layer '{p.layer}' usato come {CATEGORY_IT[p.category]} (proposta, confidenza {p.confidence}: "
                       f"{p.reason})")
         output = args.output
@@ -375,7 +387,8 @@ def main(argv: list[str] | None = None) -> int:
     if report.garden_table_path:
         print(f"Creato {report.garden_table_path}  (tabella del giardino: correggi le colonne MODIFICA_* "
               f"e rilancia con --tabella-giardino)")
-    for path, what in ((report.overlay_path, "pianta con le aperture riconosciute: controllala"),
+    for path, what in ((report.views_path, "il foglio come l'ho capito: viste numerate (--vista N per sceglierne un'altra)"),
+                       (report.overlay_path, "pianta con le aperture riconosciute: controllala"),
                        (report.preview_path, "anteprima 3D"), (report.report_path, "riepilogo e note")):
         if path:
             print(f"Creato {path}  ({what})")

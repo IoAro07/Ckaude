@@ -1,11 +1,12 @@
 # dwg2c4d — da planimetria 2D (DWG/DXF) a modello 3D per Cinema 4D
 
-**Versione 0.4.0** (8 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
+**Versione 0.5.0** (8 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
 
 Legge una pianta 2D, ne **estrude i muri** (con i tramezzi a parte), **apre porte, finestre e vani** con le
 quote che trova (scritte del disegno, prospetti), costruisce **infissi dettagliati** (imbotto, cornice, telai, ante,
 maniglie, toppe), **pavimenti per locale**, **battiscopa**, il **tetto** e il **giardino** (pavimentazione, prato,
-piscina scavata, siepi, alberi, cespugli, arredi esterni). Scrive un file **OBJ + MTL**
+piscina scavata, siepi, alberi, cespugli, arredi esterni). Se i layer del disegno sono disordinati **capisce il
+foglio dalla geometria** (unità, viste, muri, porte: vedi *Disegni con i layer disordinati*). Scrive un file **OBJ + MTL**
 per Cinema 4D, e se vuoi anche un `*_model.json` per lo script di importazione (oggetti nativi, materiali Corona).
 
 ```
@@ -26,14 +27,14 @@ Il codice sta nel repository pubblico <https://github.com/IoAro07/Ckaude> (il ra
   qualsiasi (per esempio `C:\dwg2c4d`).
 - **Con git**: `git clone https://github.com/IoAro07/Ckaude.git`
 
-In alternativa il file `dwg2c4d-0.4.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
-dwg2c4d-0.4.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+In alternativa il file `dwg2c4d-0.5.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.5.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
 script di Cinema 4D, che stanno nella cartella del progetto.
 
 **Per aggiornare** a una versione nuova: scarica di nuovo il progetto in una **cartella nuova** (o `git pull`) e rifai
 `installa.bat`. I file `converti.bat` ed `elenca_layer.bat` usano comunque sempre il codice della cartella in cui stanno
 (`src`), anche se in Python è rimasta installata una copia vecchia. Quando parte, `converti.bat` stampa la riga
-`dwg2c4d 0.4.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
+`dwg2c4d 0.5.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
 usando una cartella vecchia. `python -m dwg2c4d --version` fa lo stesso da terminale.
 
 *Perché la cartella nuova*: pip lascia dentro il progetto una cartella `build`; uno ZIP non porta il fuso orario, quindi
@@ -444,6 +445,45 @@ un varco più largo di 2 m (e non lo chiudi) la casa non risulta chiusa e un ret
 Le zone dei prospetti (layer `Prospetto…`) non sono giardino; se disegni un prospetto molto vicino alla pianta controlla
 l'immagine di controllo. Più piscine a meno di 30 cm una dall'altra non sono trattate (le vasche si sovrapporrebbero).
 
+## Disegni con i layer disordinati: l'analisi del foglio
+
+Un disegno ricevuto da altri ha spesso layer che non dicono nulla (`Linee`, `0`, `Polilinee`...), le unità sbagliate
+e, sullo stesso foglio, pianta, prospetti, sezioni e planimetria generale. Da riga di comando, prima di leggere i
+layer, il programma **guarda il foglio** come lo guarderebbe una persona (`--no-analisi` lo salta):
+
+1. **Le unità** dai numeri: la mediana delle quote, la misura degli archi di 90° (una porta ha il raggio di 0,6-1,4 m),
+   la grandezza del disegno. L'intestazione del file conta meno di tutto: un file che dichiara millimetri ma ha le
+   quote in centimetri viene letto in centimetri, e lo scrive tra gli avvisi.
+2. **Le viste del foglio**: i gruppi di disegno separati da spazio vuoto, con il titolo che hanno vicino
+   (`PIANTA`, `PROSPETTO SUD`, `SEZIONE A-A`, `PIANTA COPERTURA`, `PLANIMETRIA GENERALE`...). Una vista senza
+   titolo è riconosciuta dalla forma. Il risultato è l'immagine **`NOME_viste.png`** con le viste numerate e il tipo
+   che gli ho dato: controllala.
+3. **La pianta da convertire**: la vista più grande che non sia la planimetria generale (il lotto intorno alla casa)
+   né la copia di un'altra. Se il foglio ha due piante (piani diversi, stato di fatto e di progetto) ne converte
+   una e dice quale: per un'altra `--vista N`, con il numero dell'immagine.
+4. **I muri**, quando i nomi dei layer non bastano: per ogni layer che ha linee lunghe o campiture dentro la pianta
+   guarda se ha *la forma dei muri*, cioè corpi sottili che chiudono dei locali anche se porte e finestre li
+   interrompono. Due linee parallele a distanza da muro (4-60 cm) sono un muro anche con le estremità aperte; i
+   contorni chiusi larghi (un divano, un letto) e i corpetti isolati più piccoli di 1 m (uno sgabello) si ignorano.
+   Il layer scelto e il perché sono nel report: `Muri: nella pianta 'Linee' ha la forma dei muri...`. Se i nomi
+   indicano già buoni muri, un altro layer si aggiunge solo se li migliora molto.
+5. **Le porte dall'arco di rotazione**: un quarto di cerchio con raggio 0,55-1,40 m che ruota attorno a una testata
+   di muro è una porta, su qualunque layer sia disegnato (l'arco di una parete curva o di un'anta d'armadio in mezzo
+   a una stanza no). Larghezza, cerniera e verso di apertura vengono dall'arco. **Un varco in un muro esterno senza
+   nessun simbolo diventa una finestra** (davanzale e altezza predefiniti), uno interno un vano.
+
+Tutto ciò che è dedotto così porta una nota nella tabella `NOME_aperture.csv` e nel report (*riconosciuta dalla
+forma*): correggila con le colonne `MODIFICA_*`. **Quello che indichi tu vince sempre**: `--unita`, `--muri`,
+`--area`, `--vista` non vengono toccati dall'analisi.
+
+Sono **euristiche**, non un riconoscimento di immagini: funzionano quando il disegno è leggibile (linee dritte,
+muri a doppia linea, porte con l'arco) e sbagliano su quello che una persona capirebbe solo dal contesto. Se il
+risultato non è buono, guarda in ordine `NOME_viste.png`, `NOME_controllo_pianta.png` e le note del report; poi indica
+a mano la vista (`--vista`), i layer (`--muri`) o l'area (`--area`).
+
+I prospetti trovati dall'analisi servono ancora **solo se sono in proiezione sulla pianta** (vedi sopra): quelli
+affiancati o ruotati sono riconosciuti e numerati nell'immagine delle viste, ma le loro altezze non vengono ancora usate.
+
 ## Importare in Cinema 4D
 
 Ci sono due modi. Il secondo è consigliato se usi Corona.
@@ -496,6 +536,8 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--elenca-layer` | mostra i layer e come sono classificati, poi esce |
 | `--muri`, `--porte`, `--finestre`, `--pilastri` | layer per categoria (virgole, `*` jolly) |
 | `--piano` | quale piano leggere se i layer sono nominati per piano (`P1_`, `pianta2`...) |
+| `--no-analisi` | non analizzare il foglio (unità, viste, muri, porte dalla geometria): si usano solo i nomi dei layer e le opzioni |
+| `--vista` | converti la vista N del foglio (i numeri sono in `NOME_viste.png`) invece di quella scelta |
 | `--accetta-proposte` | usa le proposte di `--elenca-layer` (confidenza media/alta) per i layer non riconosciuti |
 | `--includi-nascosti` | usa anche i layer spenti/congelati |
 | `--muri-da-blocchi` | leggi come muri anche i blocchi inseriti su un layer di muri |
@@ -573,7 +615,8 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
   all'incirca allo stesso punto (entro `--spessore-max`). Disegni con linee molto sconnesse possono richiedere un
   po' di pulizia nel CAD (o la modalità `solidi`/`asse`).
 - Le finestre devono stare su un layer proprio: se le linee del serramento sono sul layer dei muri, il muro viene
-  spezzato lì e non si riconosce l'apertura.
+  spezzato lì: l'analisi del foglio le vede come un varco nel muro (una finestra se il muro è esterno), senza
+  imbotto né telaio dal disegno.
 - Gli spazi stretti (stanzini sotto i ~1 m di lato) possono essere scambiati per muro pieno in modalità
   `doppia-linea`; abbassa `--spessore-max` se succede.
 - I blocchi (anche annidati) sono letti; i riferimenti esterni (xref) no: incorporali nel disegno prima di salvare.
@@ -596,6 +639,8 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 | Il giardino non compare o manca un pezzo | Se nel riepilogo non c'è la riga `Giardino:`, non ha trovato nulla: leggi gli avvisi e guarda l'immagine `*_controllo_pianta.png`. Le campiture devono stare a meno di 3 m dalla casa o dal resto del giardino; altrimenti `--area-giardino`. I retini nei prospetti, dentro i muri o lontani si ignorano di proposito. |
 | Il prato è pavimentazione (o l'acqua no) | Il colore del retino non è verde/azzurro: dai al layer un nome che lo dica (`Prato`, `Pavimentazione`, `Piscina`) o cambia il colore o il nome del retino (`GRASS`). |
 | Un albero/una siepe manca o ha l'altezza sbagliata | Il blocco deve chiamarsi `Albero…`/`Siepe…`/`Cespuglio…` (o stare su un layer `Verde`/`Giardino`) e stare fuori dai muri; l'altezza si corregge nella tabella `NOME_giardino.csv` (`MODIFICA_altezza`). |
+| Ha convertito la pianta sbagliata del foglio | Guarda `NOME_viste.png`: i numeri sono quelli di `--vista N`. |
+| I muri sono i layer sbagliati | Il report dice quale layer ha scelto e perché (`Muri: nella pianta...`): indica i tuoi con `--muri`, o salta l'analisi con `--no-analisi`. |
 | Pianta specchiata in Cinema 4D | `--specchia`, oppure *Flip Z* nelle opzioni d'importazione. |
 | `Impossibile leggere il file DWG` | Installa ODA File Converter o LibreDWG, oppure salva il DWG come DXF. |
 
@@ -614,6 +659,7 @@ Struttura: `dwgfile.py` (apertura DWG/DXF) → `reader.py` (entità → geometri
 `passages.py` (muri, porte, finestre, vani) → `texts.py`, `vtext.py`, `glyphs.py`, `labels.py` (scritte, locali) →
 `elevation.py`, `roof.py` (prospetti, tetto) → `table.py` (tabella delle aperture) → `model.py`, `fixtures.py`,
 `floors.py`, `mesh.py` (estrusione e infissi) → `objwriter.py`, `export.py` (OBJ/MTL, JSON per Cinema 4D) →
-`qa.py`, `render.py` (immagini di controllo, report). `proposals.py` sono le proposte di `--elenca-layer`.
+`qa.py`, `render.py` (immagini di controllo, report). `proposals.py` sono le proposte di `--elenca-layer`; `autodetect.py` è l'analisi del foglio (unità, viste, muri e
+porte dalla forma).
 I template delle lettere (`data/glyph_templates.npz`) sono bitmap dei caratteri di Liberation Sans, FreeSans, DejaVu Sans,
 Carlito e Poppins (font con licenza libera).

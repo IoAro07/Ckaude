@@ -7,6 +7,10 @@ Questa guida dice **cosa disegnare, come chiamare i layer e dove mettere i prosp
 Il principio: **un layer = una cosa**, nominato con le parole che il programma riconosce, disegnato **in scala 1:1**
 nelle unità giuste. Il resto (quote, nomi dei locali, altezze) lo puoi scrivere come testo vicino all'elemento.
 
+Se il disegno **non è tuo** e i layer sono disordinati, non serve sistemarlo prima: da riga di comando il programma
+guarda il foglio (unità, viste, muri, porte; vedi nel [README](README.md) *Disegni con i layer disordinati*) e dice
+cosa ha capito. Ma più il disegno segue questa guida, più il risultato è esatto: l'analisi è un ripiego.
+
 ---
 
 ## 1. Le dieci regole che contano di più

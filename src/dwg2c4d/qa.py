@@ -23,6 +23,15 @@ def summary_lines(report) -> list[str]:
     if report.origin_offset != (0.0, 0.0):
         out.append(f"  Origine            : modello spostato di ({report.origin_offset[0]:.2f}, "
                    f"{report.origin_offset[1]:.2f}) m rispetto al disegno")
+    a = getattr(report, "analysis", None)
+    if a is not None and len(a.views) > 1:
+        from collections import Counter
+
+        from .autodetect import _KIND_IT
+
+        kinds = ", ".join(f"{n} {_KIND_IT.get(k, k)}" for k, n in Counter(v.kind for v in a.views).most_common())
+        chosen = f"convertita la vista {a.plan.id}" if a.plan is not None else "nessuna pianta riconosciuta"
+        out.append(f"  Foglio             : {len(a.views)} viste ({kinds}); {chosen}")
     out.append(f"  Ingombro muri      : {w:.2f} x {h:.2f} m")
     out.append(f"  Muri               : {report.wall_pieces} corpi, {report.wall_area_m2:.1f} m2 in pianta")
     out.append(f"  Porte / finestre   : {report.doors} / {report.windows}")

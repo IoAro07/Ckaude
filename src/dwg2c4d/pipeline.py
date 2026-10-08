@@ -8,6 +8,7 @@ from pathlib import Path
 
 from shapely.geometry.base import BaseGeometry
 
+from .autodetect import analyze, apply_analysis, write_views_image
 from .config import UNIT_TO_METERS, Config
 from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer, read_elevation
 from .export import to_model_dict, write_json
@@ -16,7 +17,7 @@ from .geom import union, polygons_of
 from .model import Plan, build_mesh, building_footprint, facing_sign, floor_footprint
 from .objwriter import write_obj
 from .openings import assign_ids, build_openings
-from .reader import storeys, read_items
+from .reader import layer_used, storeys, read_items
 from .roof import build_roof, ridge_hints_from
 from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
@@ -63,6 +64,8 @@ class ConversionReport:
     roof: dict | None = None  # pitch_deg, pitch_source, ridge_height, faces
     garden: object | None = None  # the Garden: ground, pools, plants, furniture
     garden_table_path: Path | None = None
+    analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
+    views_path: Path | None = None
 
 
 def _extent(geom: BaseGeometry) -> tuple[float, float]:
@@ -120,19 +123,28 @@ def _describe_groups(groups: list[dict], unit_scale: float) -> str:
 
 
 def convert(input_path: str | Path, output_path: str | Path | None = None,
-            cfg: Config | None = None) -> ConversionReport:
+            cfg: Config | None = None, _doc=None) -> ConversionReport:
+    """``_doc``: the drawing already opened (a second pass over the same file does not read it again)."""
     cfg = cfg or Config()
     cfg.validate()
     input_path = Path(input_path)
     output_path = Path(output_path) if output_path else input_path.with_suffix(".obj")
 
-    doc = open_drawing(input_path, cfg.converter)
+    doc = _doc if _doc is not None else open_drawing(input_path, cfg.converter)
+    analysis_failed = ""
+    if cfg.auto:  # the sheet first: the unit, which view is the plan, which layers are the walls
+        try:
+            analysis = analyze(doc, lambda layer: layer_used(doc, cfg, layer), cfg.view)
+            cfg, _ = apply_analysis(doc, cfg, analysis)
+        except Exception as exc:  # the analysis is a help: when it fails the layer names and the options decide
+            analysis_failed = f"Analisi del foglio non riuscita ({type(exc).__name__}: {exc}): uso i nomi dei layer."
+            cfg = replace(cfg, auto=False)
     found = storeys(doc)
     if cfg.floor is not None and found and cfg.floor not in found:
         raise ConversionError(f"Il piano {cfg.floor} non esiste: i layer nominano i piani "
                               f"{', '.join(map(str, found))}.")
     result = read_items(doc, cfg)
-    warnings = list(result.warnings)
+    warnings = ([analysis_failed] if analysis_failed else []) + list(cfg.analysis_notes) + list(result.warnings)
     if len(found) > 1 and cfg.floor is None:
         warnings.append(f"I layer nominano {len(found)} piani ({', '.join(f'P{n}' for n in found)}): ho letto il "
                         f"piano {found[0]}. Per un altro usa --piano N.")
@@ -155,7 +167,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if not (3.0 <= span <= 300.0) and cfg.units is None and not result.unit_guessed:
         alt = _better_unit(span, result.unit)
         if alt:
-            fixed = convert(input_path, output_path, replace(cfg, units=alt))
+            fixed = convert(input_path, output_path, replace(cfg, units=alt), _doc=doc)
             fixed.warnings.insert(0, (
                 f"Il file dichiara '{result.unit}' ma cosi' l'edificio misurerebbe {span:.2f} m: "
                 f"le misure sono compatibili con '{alt}', che ho usato. Forza l'unita' con --unita se non va bene."))
@@ -171,7 +183,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     groups = _wall_groups(solid, openings)
     if groups:
         real = [g for g in groups if g["openings"] > 0]
-        if cfg.area is None and 0 < len(real) < len(groups):
+        if (cfg.area is None or cfg.area_auto) and 0 < len(real) < len(groups):
             # Only some groups have doors/windows: the others are a roof plan, a section... drawn on the same
             # layer. Read the drawing again cropped to the groups that are plans.
             margin = 1.0
@@ -184,7 +196,8 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             skip = [tuple((v + d) / result.unit_scale for v, d in zip(g["bounds"], (-0.5, -0.5, 0.5, 0.5)))
                     for g in dropped]  # a roof plan or a section is not the garden either
             fixed = convert(input_path, output_path,
-                            replace(cfg, area=area, area_auto=True, garden_exclude=[*cfg.garden_exclude, *skip]))
+                            replace(cfg, area=area, area_auto=True, garden_exclude=[*cfg.garden_exclude, *skip]),
+                            _doc=doc)
             fixed.warnings.insert(0, (
                 f"Ho escluso {len(dropped)} gruppo/i di muri senza porte ne' finestre (di solito la pianta del tetto "
                 f"o una sezione disegnate sullo stesso layer): {_describe_groups(dropped, result.unit_scale)}. "
@@ -345,9 +358,16 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         room_objects=rooms,
         garden=garden,
         garden_table_path=garden_table_path,
+        analysis=cfg.analysis,
     )
     created = [output_path.name, output_path.with_suffix(".mtl").name]
     created += [p.name for p in (json_path, table_path, garden_table_path) if p]
+    if cfg.images and cfg.analysis is not None and len(cfg.analysis.views) > 1:
+        try:
+            report.views_path = write_views_image(cfg.analysis, output_path.with_name(output_path.stem + "_viste.png"))
+            created.append(report.views_path.name)
+        except Exception as exc:  # a picture must never stop the conversion
+            report.images_note = f"immagine delle viste non creata: {exc}"
     if cfg.images:
         report.preview_path = preview_3d(mesh, output_path.with_name(output_path.stem + "_anteprima_3d.png"))
         created.append(report.preview_path.name)

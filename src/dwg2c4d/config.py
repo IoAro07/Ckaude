@@ -230,6 +230,16 @@ class Config:
     area_auto: bool = False  # internal: ``area`` was set by the program (to leave out a roof plan), not by the user
     garden_exclude: list[tuple[float, float, float, float]] = field(default_factory=list)  # internal: drawing units
 
+    # Reading a drawing whose layers do not say what things are (the library leaves it off, the command line turns it on):
+    # the unit the numbers are really in, which view of the sheet is the plan, which layers hold the walls.
+    auto: bool = False
+    view: int | None = None  # the view of the sheet to convert (the numbers of NOME_viste.png); default: the plan found
+    proposed: list[str] = field(default_factory=list)  # internal: categories whose layers came from the proposals
+    analysis: object | None = field(default=None, repr=False)  # internal: the autodetect.Analysis already made
+    analysis_notes: list[str] = field(default_factory=list, repr=False)  # internal: what it decided
+    pair_layers: tuple[str, ...] = ()  # internal: wall layers chosen by their shape: two parallel lines make a wall
+    shape_openings: bool = False  # internal: openings by their shape: a swing arc at a wall is a door, a gap in an outside wall a window
+
     # Input / output.
     units: str | None = None  # force drawing units: mm, cm, m, in, ft
     out_units: str = "m"
@@ -314,6 +324,8 @@ class Config:
             if len(ev) not in (4, 5) or not (ev[2] > ev[0] and ev[3] > ev[1]):
                 raise ValueError("prospetto: servono xmin,ymin,xmax,ymax (con max > min) "
                                  "ed eventualmente la quota Y del pavimento finito")
+        if self.view is not None and self.view < 1:
+            raise ValueError("la vista va indicata con il suo numero, da 1 in poi")
         if self.roof_pitch is not None and not (1.0 <= self.roof_pitch <= 80.0):
             raise ValueError("pendenza del tetto: tra 1 e 80 gradi")
         if self.roof_thickness <= 0:

@@ -4,6 +4,22 @@ La versione in uso la dice `python -m dwg2c4d --version` (e la prima riga di `co
 deve coincidere con quella di `pyproject.toml` e con la riga in testa al [README](README.md). Dopo ogni aggiornamento
 decomprimi il progetto in una **cartella nuova** e controlla che la versione sia quella attesa.
 
+## [0.5.0] — 2026-10-08
+
+**L'analisi del foglio**: lo strumento capisce disegni con i layer disordinati guardando la geometria.
+
+- **Unità** dai numeri (mediana delle quote, archi di porta, dimensione): l'intestazione del file è il voto più debole.
+- **Viste del foglio** (pianta, copertura, prospetti, sezione, planimetria generale) separate dallo spazio vuoto e
+  dai titoli, o dalla forma; immagine `NOME_viste.png`; la pianta da convertire è la più grande che non sia il lotto
+  né una copia; `--vista N` per sceglierne un'altra.
+- **Muri senza layer dei muri**: si sceglie il layer (o i layer) le cui linee hanno la forma dei muri, compresi i
+  muri a due linee parallele con le estremità aperte; arredi chiusi e corpetti isolati sono ignorati.
+- **Porte dall'arco di rotazione** su qualunque layer; i varchi in un muro esterno senza simbolo diventano finestre.
+- `--no-analisi` la salta. Quello che indica l'utente (`--unita`, `--muri`, `--area`) non viene mai cambiato.
+- Più veloce: i layer sono classificati una volta sola, non a ogni entità, e il disegno non viene riletto nel
+  secondo passaggio (file grandi: da ~100 s a ~60 s).
+- Non ancora: le altezze dai prospetti che non sono in proiezione sulla pianta (affiancati o ruotati).
+
 ## [0.4.0] — 2026-10-08
 
 Il **giardino**: tutto ciò che sta fuori dai muri.
