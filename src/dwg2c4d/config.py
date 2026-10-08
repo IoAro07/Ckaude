@@ -75,7 +75,8 @@ class LayerRules:
     _GARDEN_ANY = ("giardin", "garden", "verde", "green", "landscap", "estern", "outdoor", "exterior", "sistemazion")
     # a layer with one of these is an elevation, a section, a text...: never garden
     _NOT_GARDEN = ("prospett", "sezion", "section", "elevat", "quot", "dimens", "text", "testi", "tett", "roof",
-                   "luci", "prese", "interrutt", "elettr", "impiant", "immagin", "riferiment")
+                   "luci", "prese", "interrutt", "elettr", "impiant", "immagin", "riferiment",
+                   "intern", "interior", "indoor", "interrat", "piano")
 
     @staticmethod
     def tokens(name: str) -> list[str]:
@@ -85,11 +86,12 @@ class LayerRules:
         """What a layer holds of the garden: water | lawn | paving | plants | furniture | garden (outside, in
         general) | None. Meant for layers that are no plan element (it does not look at walls, doors...)."""
         toks = self.tokens(layer)
-        if not toks or any(t.startswith(self._NOT_GARDEN) for t in toks):
-            return None
+        if not toks or "int" in toks or any(t.startswith(self._NOT_GARDEN) for t in toks):
+            return None  # ("int": "Pavimentazione_int" is the floor of the rooms)
+        floor_word = any(t.startswith(("pavim", "floor", "solai")) for t in toks)
         for kind, prefixes in self._GARDEN:
             if any(t.startswith(prefixes) for t in toks):
-                return kind
+                return "paving" if floor_word and kind in ("water", "lawn") else kind  # "Pavimento piscina": its coping
         outside = any(t.startswith(self._GARDEN_ANY) for t in toks)
         if any(t.startswith(("arred", "furnit", "mobil")) for t in toks):
             return "furniture" if outside else None

@@ -205,7 +205,8 @@ Quello che sta **fuori dai muri** diventa terreno, piscina, siepi, alberi e arre
   **nome del layer** (`Prato`, `Pavimentazione`, `Terrazza`, `Piscina`…), il **nome del retino** (`GRASS`…) e il **colore**:
   **verde = prato, azzurro = acqua, qualunque altro colore = pavimentazione**, bianco = ignorato. Se i colori dei tuoi
   retini sono diversi, metti i pezzi su layer con il nome giusto.
-* **Disegna le campiture nell'ordine in cui si coprono**: quello disegnato dopo sta sopra. Un retino con un buco (un
+* **Disegna le campiture nell'ordine in cui si coprono**: vale l'ordine che AutoCAD mostra (quello sopra copre quello
+  sotto, anche dopo un `DRAWORDER`). Una campitura a sfumatura vale per il suo primo colore. Un retino con un buco (un
   tavolo, un cespuglio) va bene: il buco prende ciò che lo circonda.
 * **La piscina**: una campitura azzurra per l'acqua. Se la pavimentazione attorno ha un buco **un po' più grande
   dell'acqua** (fino a 80 cm), quello è il bordo vasca; altrimenti la vasca ha le pareti di 15 cm. Profondità 1,5 m

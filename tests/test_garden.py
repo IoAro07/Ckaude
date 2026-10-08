@@ -193,8 +193,7 @@ def test_the_layer_name_decides_before_the_colour(tmp_path):
     assert obj.volume("Pavimentazione") / 0.2 == pytest.approx(40.0, rel=0.01)
     assert obj.volume("Prato") / 0.2 == pytest.approx(30.0, rel=0.01)
     # the paving of the garden is no floor of a room
-    assert not any(g.startswith("Pavimento_") and "esterno" in g.lower() for g in obj.groups)
-    assert set(obj.groups) & {"Pavimento"} <= {"Pavimento"}
+    assert not [g for g in obj.groups if g.startswith("Pavimento_")]  # no floor of a room made of the garden's paving
 
 
 def test_pattern_names_decide_before_the_colour(tmp_path):
@@ -233,12 +232,14 @@ def test_what_is_far_from_the_house_or_drawn_in_an_elevation_is_not_the_garden(t
     hatch(msp, rect(100, -2000, 400, -1800), GREEN)  # inside the elevation
     rep = run(doc, tmp_path, elevations=[zone])
     assert rep.garden.area("paving") == pytest.approx(30.0, rel=0.01) and rep.garden.area("lawn") == pytest.approx(40.0, rel=0.01)
-    box_ = (0, 2900, 600, 3600)  # explicitly excluded (the program does it for the roof plan it left out)
     hatch(msp, rect(0, 600, 500, 900), GREY)  # touching the north wall: it is garden...
     assert run(doc, tmp_path, "b").garden.area("paving") == pytest.approx(30.0 + 5.0 * 3.0, rel=0.01)
     assert run(doc, tmp_path, "c", garden_exclude=[(0, 600, 500, 900)]).garden.area("paving") \
         == pytest.approx(30.0, rel=0.01)
-    assert box_  # (kept for the next reader: drawing units, xmin, ymin, xmax, ymax)
+    # a hatch only partly inside the excluded box (drawing units: xmin, ymin, xmax, ymax) is not left out
+    hatch(msp, rect(0, 900, 800, 1000), GREY)
+    assert run(doc, tmp_path, "d", garden_exclude=[(0, 600, 500, 1000)]).garden.area("paving") \
+        == pytest.approx(30.0 + 8.0 * 1.0, rel=0.01)
 
 
 def test_garden_area_option_limits_the_garden(tmp_path):
@@ -313,7 +314,7 @@ def test_objects_become_standins_with_ids_sizes_and_heights(tmp_path):
     assert height_of(obj, "Arredo_E01") == pytest.approx(0.35, abs=1e-6)
     assert top_of(obj, "Chioma_A01") == pytest.approx(-0.05 + 4.5, abs=1e-6)  # on the lawn: 5 cm lower than the paving
     assert top_of(obj, "Arredo_E01") == pytest.approx(0.35, abs=1e-6)  # on the paving
-    assert rep.garden.objects and "Giardino" in " ".join(rep.warnings + ["Giardino"])
+    assert len(rep.garden.objects) == 4
 
 
 def test_a_block_inside_the_building_or_for_an_elevation_is_no_garden_object(tmp_path):
@@ -382,7 +383,9 @@ def test_garden_table_is_written_and_applied(tmp_path):
         if row["id"] == "E01":
             cells[head.index("MODIFICA_tieni")] = "no"
         edited.append(";".join(cells))
-    edited.append(";".join(["Z99"] + [""] * (len(head) - 1 - 1) + ["50"]).replace(";50", ";50"))
+    unknown = [""] * len(head)
+    unknown[0], unknown[head.index("MODIFICA_altezza")] = "Z99", "50"  # an id that does not exist: reported, ignored
+    edited.append(";".join(unknown))
     table = tmp_path / "edited.csv"
     table.write_text("\n".join([text[0], *edited]) + "\n", encoding="utf-8-sig")
     rep2 = run(doc, tmp_path, "o2", garden_table_in=str(table))
@@ -394,6 +397,7 @@ def test_garden_table_is_written_and_applied(tmp_path):
     assert "Arredo_E01" not in obj.groups and "Siepe_S01" in obj.groups
     assert height_of(obj, "Siepe_S01") == pytest.approx(1.5)
     assert "Chioma_C01" in obj.groups  # the shrub is a tree now
+    assert any("Z99" in w for w in rep2.warnings)
     # the table that was applied is never overwritten
     rep3 = run(doc, tmp_path, "o2", garden_table_in=str(rep2.garden_table_path))
     assert rep3.garden_table_path.name == "o2_giardino_nuova.csv"
@@ -524,3 +528,119 @@ def test_config_validation_of_the_garden_values():
             Config(**bad).validate()
     cfg = Config.from_dict({"garden": True, "garden_area": [0, 0, 100, 100], "pool_depth": 2})
     assert cfg.garden and cfg.garden_area == (0.0, 0.0, 100.0, 100.0)
+
+
+# --- regressions found by the review ---------------------------------------------------------------
+
+def test_a_block_with_a_base_point_is_placed_by_its_geometry(tmp_path):
+    doc, msp = garden_plan(tmp_path, with_objects=False)
+    tree = doc.blocks.new("Albero", base_point=(50, 50))
+    tree.add_lwpolyline(rect(-100, -100, 100, 100), close=True)
+    msp.add_blockref("Albero", (300, -250), dxfattribs={"layer": "Verde"})
+    (obj_,) = run(doc, tmp_path).garden.objects
+    assert (obj_.cx, obj_.cy) == pytest.approx((2.5, -3.0))  # the base point 50, 50 sits on the insertion point
+
+
+def test_gradient_hatches_have_the_colour_of_their_gradient(tmp_path):
+    doc, msp = building()
+    doc.layers.add("Retini")
+    green = msp.add_hatch(dxfattribs={"layer": "Retini"})
+    green.paths.add_polyline_path(rect(-200, -500, 600, 0), is_closed=True)
+    green.set_gradient((0, 160, 0), (0, 80, 0))
+    blue = msp.add_hatch(dxfattribs={"layer": "Retini"})
+    blue.paths.add_polyline_path(rect(100, -400, 400, -100), is_closed=True)
+    blue.set_gradient((60, 120, 220), (30, 60, 160))
+    rep = run(doc, tmp_path)
+    assert len(rep.garden.pools) == 1  # the blue gradient is the water ...
+    assert rep.garden.area("lawn") == pytest.approx(40.0 - 3.3 * 3.3, rel=0.03)  # ... the green one the lawn around its shell
+
+
+def test_pattern_names_are_read_by_whole_words():
+    from shapely.geometry import Polygon
+
+    from dwg2c4d.garden import _fill_kind, _Fill
+
+    def kind(pattern, rgb=GREY):
+        return _fill_kind(_Fill(0, "L", None, pattern, rgb, Polygon()))
+
+    assert kind("TERRA") == "soil" and kind("AR-WATER") == "water" and kind("GRASS1") == "lawn"
+    assert kind("TERRACOTTA") == "paving" and kind("TERRAZZO") == "paving" and kind("WATERPROOF") == "paving"
+
+
+def test_the_draw_order_table_of_the_drawing_decides_what_is_on_top(tmp_path):
+    doc, msp = building()
+    doc.layers.add("Retini")
+    lawn = hatch(msp, rect(-200, -500, 600, 0), GREEN)
+    paving = hatch(msp, rect(200, -300, 400, -100), GREY)  # drawn later, so on top ...
+    msp.set_redraw_order([(lawn.dxf.handle, "FFFF"), (paving.dxf.handle, "1")])  # ... unless DRAWORDER says otherwise
+    rep = run(doc, tmp_path)
+    assert rep.garden.area("paving") == 0.0 and rep.garden.area("lawn") == pytest.approx(40.0, rel=0.01)
+
+
+def test_arrays_and_wrapper_blocks_hold_garden_objects(tmp_path):
+    doc, msp = garden_plan(tmp_path, with_objects=False)
+    block(doc, "Siepe", rect(0, -40, 100, 0))
+    row = msp.add_blockref("Siepe", (-100, -450), dxfattribs={"layer": "Verde", "row_count": 1, "column_count": 3,
+                                                               "row_spacing": 0, "column_spacing": 150})
+    assert row.mcount == 3
+    wrapper = doc.blocks.new("Siepi nord")  # a block that only holds another reference
+    wrapper.add_blockref("Siepe", (0, 0))
+    msp.add_blockref("Siepi nord", (500, -450), dxfattribs={"layer": "Verde"})
+    xs = sorted(round(o.cx, 2) for o in run(doc, tmp_path).garden.objects if o.kind == "hedge")
+    assert xs == pytest.approx([-0.5, 1.0, 2.5, 5.5])  # three of the array, one of the wrapper (50 cm = half a hedge)
+
+
+def test_outlines_on_a_water_layer_are_one_pool_not_a_moat(tmp_path):
+    doc, msp = building()
+    doc.layers.add("Piscina")
+    hatch(msp, rect(-200, -600, 1200, 0), GREY)
+    msp.add_lwpolyline(rect(300, -500, 900, -100), close=True, dxfattribs={"layer": "Piscina"})  # the coping line
+    msp.add_lwpolyline(rect(340, -460, 860, -140), close=True, dxfattribs={"layer": "Piscina"})  # the water line
+    rep = run(doc, tmp_path)
+    assert len(rep.garden.pools) == 1 and rep.garden.pools[0].area == pytest.approx(6.0 * 4.0, rel=0.01)
+
+
+def test_what_is_in_an_elevation_core_is_not_garden_but_the_roof_margin_is(tmp_path):
+    doc, msp = garden_plan(tmp_path, with_pool=False, with_objects=False)
+    # a south elevation drawn close below the plan: its zone stretches 4 m towards the plan for the roof lines, and
+    # that stretch reaches into the garden (y -500..0); the garden there is still garden
+    south_elevation(msp, ground_y=-1500)
+    msp.add_lwpolyline(rect(-100, -1500, 1100, -700), close=True, dxfattribs={"layer": "Prospetto Sud"})
+    hatch(msp, rect(100, -1450, 300, -1350), GREEN)  # inside the elevation itself: not garden
+    rep = run(doc, tmp_path)
+    assert rep.elevations and rep.garden.area("lawn") == pytest.approx(40.0, rel=0.01)
+
+
+def test_floor_layers_of_the_rooms_stay_floors_and_the_coping_is_paving():
+    rules = LayerRules()
+    for name in ("Pavimentazione interna", "PAVIMENTAZIONE_INT", "Pavimentazione piano interrato"):
+        assert rules.classify_layer(name) == "floor" and rules.garden_kind(name) is None, name
+    assert rules.garden_kind("Pavimento piscina") == "paving" and rules.classify_layer("Pavimento piscina") is None
+
+
+def test_config_can_switch_the_garden_off_and_a_walls_layer_named_esterno_is_still_walls(tmp_path):
+    doc, _ = garden_plan(tmp_path)
+    path = save(doc, tmp_path)
+    cfg_file = tmp_path / "c.json"
+    cfg_file.write_text(json.dumps({"garden": False}), encoding="utf-8")
+    out = tmp_path / "x.obj"
+    assert main([str(path), "-o", str(out), "--no-immagini", "--config", str(cfg_file)]) == 0
+    assert "Prato" not in Obj(out).groups
+    out2 = tmp_path / "y.obj"
+    assert main([str(path), "-o", str(out2), "--no-immagini"]) == 0 and "Prato" in Obj(out2).groups
+    # the walls of a drawing on a layer called "Esterno" (only lines): the layer is still proposed as the walls
+    from builders import T, _rect
+
+    import ezdxf
+
+    doc2 = ezdxf.new("R2018", setup=True)
+    doc2.units = 5
+    doc2.layers.add("Esterno")
+    msp2 = doc2.modelspace()
+    _rect(msp2, 0, 0, W, D, "Esterno")
+    _rect(msp2, T, T, W - T, D - T, "Esterno")
+    path2 = tmp_path / "e.dxf"
+    doc2.saveas(path2)
+    out3 = tmp_path / "z.obj"
+    assert main([str(path2), "-o", str(out3), "--no-immagini", "--accetta-proposte"]) == 0
+    assert "Muri_interno" in Obj(out3).groups or "Muri" in Obj(out3).groups

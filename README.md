@@ -24,14 +24,14 @@ Il codice sta nel repository pubblico <https://github.com/IoAro07/Ckaude> (il ra
   qualsiasi (per esempio `C:\dwg2c4d`).
 - **Con git**: `git clone https://github.com/IoAro07/Ckaude.git`
 
-In alternativa il file `dwg2c4d-0.3.2-py3-none-any.whl` (se te l'hanno consegnato): `pip install
-dwg2c4d-0.3.2-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+In alternativa il file `dwg2c4d-0.4.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.4.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
 script di Cinema 4D, che stanno nella cartella del progetto.
 
 **Per aggiornare** a una versione nuova: scarica di nuovo il progetto in una **cartella nuova** (o `git pull`) e rifai
 `installa.bat`. I file `converti.bat` ed `elenca_layer.bat` usano comunque sempre il codice della cartella in cui stanno
 (`src`), anche se in Python è rimasta installata una copia vecchia. Quando parte, `converti.bat` stampa la riga
-`dwg2c4d 0.3.2  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
+`dwg2c4d 0.4.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
 usando una cartella vecchia. `python -m dwg2c4d --version` fa lo stesso da terminale.
 
 *Perché la cartella nuova*: pip lascia dentro il progetto una cartella `build`; uno ZIP non porta il fuso orario, quindi
@@ -376,8 +376,10 @@ terreno. Cosa sia lo decide, nell'ordine: il **nome del layer**, il **nome del r
 | `Piscina`, `Pool`, `Acqua`, `Vasca`, `Laghetto` | acqua |
 | `Giardino`, `Verde`, `Esterno`, `Sistemazioni esterne`, `Landscape` | generico: colore e retino decidono |
 
-Le campiture vengono messe **nell'ordine di disegno** (quello che è disegnato dopo copre quello che sta sotto), quindi
-non si sovrappongono mai. Ne esce un oggetto per tipo: `Pavimentazione` (quota 0, a filo del pavimento di casa), `Prato` e
+Le campiture vengono messe **nell'ordine in cui AutoCAD le mostra** (quello che sta sopra copre quello che sta sotto,
+anche se l'hai spostato con `DRAWORDER`/`HATCHTOBACK`), quindi non si sovrappongono mai. Una campitura a **sfumatura** vale
+per il suo primo colore. Le polilinee chiuse su un layer d'acqua (`Piscina`) sono tutte acqua (la linea del bordo e quella
+dell'acqua non fanno un "fossato"); su un layer di prato o pavimentazione un contorno dentro un altro è un buco. Ne esce un oggetto per tipo: `Pavimentazione` (quota 0, a filo del pavimento di casa), `Prato` e
 `Terreno` (5 cm più bassi: `Config.garden_lawn_drop`), `Bordi` (le strisce più sottili di 35 cm: cordoli, muretti,
 disegnati a campitura), tutti spessi 20 cm sotto la loro quota (`garden_thickness`). Gli spazi stretti tra un pezzo e l'altro
 si riempiono di terreno; un buco che resta scoperto in mezzo a un pezzo (dove sta un cespuglio, un tavolo) prende ciò che lo
@@ -396,7 +398,9 @@ diventano **segnaposto** della dimensione del blocco, ciascuno con la sua sigla 
 | `Siepe`, `Hedge` | siepe | scatola | `S01`… | 1,2 m |
 | `Albero`, `Tree`, `Pino`, `Palma`… | albero | tronco + chioma (ellissoide) | `A01`… | 4,5 m |
 | `Cespuglio`, `Shrub`, `Arbusto`, `Vaso`… | cespuglio | ellissoide | `C01`… | 0,9 m |
-| `Sdraio`, `Tavolo`, `Sedia`, `Panchina`, `Ombrellone`… (o altro, su un layer del giardino) | arredo | scatola | `E01`… | 0,35–2,3 m a seconda del nome, altrimenti 0,5 |
+| `Sdraio`, `Tavolo`, `Sedia`, `Panchina`, `Ombrellone`… | arredo | scatola | `E01`… | 0,35–2,6 m a seconda del nome, altrimenti 0,5 |
+| qualunque altro nome, su un layer `Verde`/`Giardino`/`Esterno`/`Arredo esterno` | arredo | scatola | `E01`… | 0,5 m |
+| qualunque altro nome, su un layer `Alberi`/`Siepi`/`Cespugli` | cespuglio | ellissoide | `C01`… | 0,9 m |
 
 Le sigle seguono l'ordine di lettura (dall'alto a sinistra). Il **gruppo di ogni oggetto ha l'asse al centro della base**,
 come gli infissi (X lungo la lunghezza, Y in alto): nel JSON è un null `A01`, `S01`… sotto `Alberi`, `Siepi`, `Cespugli`,
@@ -420,7 +424,10 @@ dell'altezza. Compila le colonne `MODIFICA_*` e rilancia con `--tabella-giardino
 | `MODIFICA_tieni` | `no` = l'oggetto non viene costruito |
 
 Ordine di priorità delle altezze: **tabella > prospetto > predefinite**. La tabella non si sovrascrive mai
-(`NOME_giardino_nuova.csv` se il nome coincide); `--no-tabella` non scrive né questa né quella delle aperture.
+(`NOME_giardino_nuova.csv` se il nome coincide). Rilanciando **senza** `--tabella-giardino` il file `NOME_giardino.csv`
+viene riscritto da capo e le correzioni si perdono: salvale in un file con un altro nome e applicalo con l'opzione.
+Le sigle seguono l'ordine di lettura, quindi cambiano se cambiano il disegno o le opzioni (`--area-giardino`): rileggi
+la tabella nuova prima di riapplicare una vecchia. `--no-tabella` non scrive né questa né quella delle aperture.
 
 **Nel file di Cinema 4D** il terreno sta sotto il null `Giardino`, la piscina sotto `Piscina`, ognuno con un materiale
 (`Pavimentazione esterna`, `Prato`, `Terreno`, `Bordi e cordoli`, `Vasca piscina`, `Acqua`, `Tronco`, `Chioma`, `Siepe`,
@@ -429,8 +436,11 @@ com'è stato capito, con le sigle degli oggetti.
 
 **Limiti del giardino.** Il terreno è piano (il disegno è 2D) e le forme delle piante sono segnaposto, non vegetazione;
 muretti e recinzioni disegnati come linee non vengono costruiti (solo quelli a campitura sottile diventano `Bordi`, piatti);
-un'altra campitura azzurra fuori casa (un laghetto sì, una fontana no) è comunque acqua; le campiture di un colore
-insolito sono pavimentazione (si cambia con il nome del layer). I retini di una casa senza giardino non producono nulla.
+ogni campitura azzurra di almeno 1 m2 fuori casa è una piscina (anche un laghetto); le campiture di un colore insolito sono
+pavimentazione (si cambia con il nome del layer). I retini di una casa senza giardino non producono nulla. Se i muri hanno
+un varco più largo di 2 m (e non lo chiudi) la casa non risulta chiusa e un retino interno potrebbe finire nel giardino.
+Le zone dei prospetti (layer `Prospetto…`) non sono giardino; se disegni un prospetto molto vicino alla pianta controlla
+l'immagine di controllo. Più piscine a meno di 30 cm una dall'altra non sono trattate (le vasche si sovrapporrebbero).
 
 ## Importare in Cinema 4D
 
@@ -500,7 +510,7 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--no-tramezzi`, `--no-pavimento-per-locale` | tramezzi dentro `Muri` / una sola lastra di pavimento |
 | `--no-vani`, `--vano-max` | non dedurre i vani senza simbolo / larghezza massima (m) |
 | `--no-scritte`, `--raggio-scritte` | non leggere i testi / distanza massima tra apertura e quota scritta (m) |
-| `--tabella`, `--no-tabella` | applica la tabella delle aperture corretta a mano / non scrivere `NOME_aperture.csv` |
+| `--tabella`, `--no-tabella` | applica la tabella delle aperture corretta a mano / non scrivere `NOME_aperture.csv` né `NOME_giardino.csv` |
 | `--unita` | unità del disegno: `mm`, `cm`, `m`, `in`, `ft` (default: lette dal file) |
 | `--unita-output` | unità dell'OBJ: `m` (default), `cm`, `mm` |
 | `--area` | converti solo questa zona del disegno |
@@ -511,7 +521,8 @@ La mesh non ha coordinate UV: usa una proiezione *Cubica* sul materiale.
 | `--no-giardino` | non costruire il giardino (terreno, piscina, siepi, alberi, arredi esterni) |
 | `--area-giardino` | dove è il giardino (coordinate del disegno); default: lo trova attorno alla casa |
 | `--tabella-giardino` | applica la tabella del giardino corretta a mano (`NOME_giardino.csv`, colonne `MODIFICA_*`) |
-| `--profondita-piscina`, `--altezza-alberi`, `--altezza-siepi`, `--altezza-cespugli` | in metri, se il prospetto non le dà |
+| `--profondita-piscina` | profondità della piscina in metri (default 1,5; maggiore di 0,2) |
+| `--altezza-alberi`, `--altezza-siepi`, `--altezza-cespugli` | altezze in metri, se il prospetto non le dà (4,5 / 1,2 / 0,9) |
 | `--origine` | `centro` (default), `minimo`, `disegno`: dove sta lo zero del modello |
 | `--json-c4d` | scrivi anche `NOME_model.json` per lo script di importazione di Cinema 4D |
 | `--specchia` | specchia la pianta |
@@ -580,7 +591,7 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 | Le lettere esplose sono lette male | Correggi nella tabella (`MODIFICA_*`); `--no-testi-esplosi` le ignora. |
 | Un vano compare dove non c'è | Nella tabella `MODIFICA_tieni = no`, oppure `--no-vani`. |
 | Una porta/finestra non compare | Il simbolo non tocca il muro (avviso nel riepilogo) o è su un layer non riconosciuto. |
-| Il giardino non compare o manca un pezzo | Guarda `Giardino:` nel riepilogo e l'immagine `*_controllo_pianta.png`. Le campiture devono stare a meno di 3 m dalla casa o dal resto del giardino; altrimenti `--area-giardino`. I retini nei prospetti, dentro i muri o lontani si ignorano di proposito. |
+| Il giardino non compare o manca un pezzo | Se nel riepilogo non c'è la riga `Giardino:`, non ha trovato nulla: leggi gli avvisi e guarda l'immagine `*_controllo_pianta.png`. Le campiture devono stare a meno di 3 m dalla casa o dal resto del giardino; altrimenti `--area-giardino`. I retini nei prospetti, dentro i muri o lontani si ignorano di proposito. |
 | Il prato è pavimentazione (o l'acqua no) | Il colore del retino non è verde/azzurro: dai al layer un nome che lo dica (`Prato`, `Pavimentazione`, `Piscina`) o cambia il colore o il nome del retino (`GRASS`). |
 | Un albero/una siepe manca o ha l'altezza sbagliata | Il blocco deve chiamarsi `Albero…`/`Siepe…`/`Cespuglio…` (o stare su un layer `Verde`/`Giardino`) e stare fuori dai muri; l'altezza si corregge nella tabella `NOME_giardino.csv` (`MODIFICA_altezza`). |
 | Pianta specchiata in Cinema 4D | `--specchia`, oppure *Flip Z* nelle opzioni d'importazione. |

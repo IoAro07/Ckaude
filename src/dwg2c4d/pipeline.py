@@ -13,7 +13,7 @@ from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer
 from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
-from .model import Plan, build_mesh, building_footprint, facing_sign
+from .model import Plan, build_mesh, building_footprint, facing_sign, floor_footprint
 from .objwriter import write_obj
 from .openings import assign_ids, build_openings
 from .reader import storeys, read_items
@@ -216,10 +216,12 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     elevations = []
     elevation_report: list[dict] = []
     specs = [(spec, "") for spec in cfg.elevations]
+    garden_zones = [tuple(spec[:4]) for spec in cfg.elevations]  # what is an elevation, for the garden to leave out
     if not specs and cfg.elevations_auto:
         everything = read_items(doc, cfg, area=None, ignore_veto=True, keep_other=True, unit=result.unit)
-        specs = [(zone, layers) for layers, zone in find_elevation_zones(everything.items, solid.bounds,
-                                                                      result.unit_scale)]
+        found_zones = find_elevation_zones(everything.items, solid.bounds, result.unit_scale, cores=True)
+        specs = [(zone, layers) for layers, zone, _ in found_zones]
+        garden_zones = [core for _, _, core in found_zones]
     for i, (spec, found_on) in enumerate(specs):
         er = read_items(doc, cfg, area=tuple(spec[:4]), ignore_veto=True, keep_other=True,
                         unit=result.unit)
@@ -278,10 +280,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         o.face_sign = facing_sign(o, footprint)
     garden = None
     if cfg.garden:
-        garden = build_garden(doc, cfg, result.unit_scale, footprint, [tuple(spec[:4]) for spec, _ in specs], warnings)
-        if garden is not None and cfg.garden_table_in:
-            changed = apply_garden_table(garden, read_garden_table(cfg.garden_table_in), cfg, warnings)
-            if not changed:
+        # the walls may have a gap (a doorway wider than a passage): what the floor bridges is inside as well
+        outside_of = union([footprint, floor_footprint(solid)])
+        garden = build_garden(doc, cfg, result.unit_scale, outside_of, garden_zones, warnings)
+        if cfg.garden_table_in:
+            if garden is None:
+                warnings.append("Tabella del giardino indicata, ma non ho trovato nessun giardino a cui applicarla.")
+            elif not apply_garden_table(garden, read_garden_table(cfg.garden_table_in), cfg, warnings):
                 warnings.append("Tabella del giardino: nessuna riga con celle MODIFICA_* compilate da applicare.")
         plan.garden = garden
     mesh = build_mesh(plan, cfg, warnings)

@@ -86,7 +86,11 @@ def propose_layers(doc, cfg: Config, rows: list[dict]) -> list[Proposal]:
 
     for row in unknown:
         layer, counts = row["layer"], row["entities"]
-        hint = GARDEN_LABELS.get(row.get("garden") or "") or _name_hint(layer)
+        garden = row.get("garden")
+        lines = sum(n for k, n in counts.items() if k in ("LINE", "LWPOLYLINE", "ARC", "POLYLINE", "CIRCLE"))
+        # "Esterno" says only "outside": drawn with lines and nothing else it may be the walls, so it is tried as such
+        maybe_walls = garden == "garden" and lines >= 2 and not any(k in counts for k in ("HATCH", "INSERT"))
+        hint = None if maybe_walls else (GARDEN_LABELS.get(garden or "") or _name_hint(layer))
         if hint:
             out.append(Proposal(layer, None, hint, "alta", "dal nome del layer"))
         elif _only(counts, ("TEXT", "MTEXT", "DIMENSION", "LEADER", "MULTILEADER", "ATTRIB")):

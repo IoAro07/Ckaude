@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import colorsys
 import math
+import re
 import statistics
 from dataclasses import dataclass, field
 
@@ -65,8 +66,8 @@ _FURNITURE_HEIGHT = (("sdraio", 0.35), ("lettin", 0.35), ("lounger", 0.35), ("su
                      ("ombrellon", 2.30), ("umbrella", 2.30), ("tavolino", 0.45), ("tavolo", 0.75), ("table", 0.75),
                      ("sedia", 0.85), ("chair", 0.85), ("panca", 0.45), ("panchin", 0.45), ("bench", 0.45),
                      ("barbecue", 0.90), ("bbq", 0.90), ("gazebo", 2.60), ("pergol", 2.60))
-_PATTERN_KINDS = (("grass", "lawn"), ("erba", "lawn"), ("prato", "lawn"), ("turf", "lawn"), ("water", "water"),
-                  ("acqua", "water"), ("earth", "soil"), ("terra", "soil"))
+_PATTERN_WORDS = {"terra": "soil", "terreno": "soil", "earth": "soil", "soil": "soil", "water": "water", "acqua": "water"}
+_PATTERN_PREFIXES = (("grass", "lawn"), ("erba", "lawn"), ("prato", "lawn"), ("turf", "lawn"))
 _ELEVATION_WORDS = ("prospett", "sezion", "elevat")
 
 
@@ -141,6 +142,8 @@ class _Block:
 def _rgb_of(doc, e) -> tuple[int, int, int] | None:
     """The colour a hatch is drawn with (its own, else its layer's); ACI 7 is the black/white of the screen."""
     try:
+        if e.dxftype() == "HATCH" and getattr(e, "has_gradient_data", False) and e.gradient is not None:
+            return tuple(e.gradient.color1)  # a gradient fill has no colour of its own: its first colour says it
         true = e.dxf.get("true_color", None)
         if true is not None:
             return tuple(ezcolors.int2rgb(true))
@@ -175,10 +178,12 @@ def kind_from_colour(rgb: tuple[int, int, int] | None) -> str | None:
 def _fill_kind(f: _Fill) -> str | None:
     if f.layer_kind in ("lawn", "paving", "water"):
         return f.layer_kind
-    pattern = f.pattern.lower()
-    for word, kind in _PATTERN_KINDS:
-        if word in pattern:
-            return kind
+    for word in re.split(r"[^a-z]+", f.pattern.lower()):  # whole words: TERRACOTTA, TERRAZZO are no soil
+        if word in _PATTERN_WORDS:
+            return _PATTERN_WORDS[word]
+        for prefix, kind in _PATTERN_PREFIXES:
+            if word.startswith(prefix):
+                return kind
     return kind_from_colour(f.rgb)
 
 
@@ -220,7 +225,7 @@ def _skippable(cfg: Config, layer: str, layer_kind: str | None) -> bool:
 
 
 def _block_box(doc, name: str, dist: float, cache: dict):
-    """The outline of a block in its own coordinates (x0, y0, x1, y1), the base point at the origin."""
+    """The outline of a block in its own coordinates (x0, y0, x1, y1)."""
     if name in cache:
         return cache[name]
     outline = None
@@ -237,9 +242,7 @@ def _block_box(doc, name: str, dist: float, cache: dict):
                 continue
         if bounds:
             x0s, y0s, x1s, y1s = zip(*bounds)
-            base = block.block.dxf.get("base_point", Vec3())
-            bx, by = base.x, base.y
-            outline = (min(x0s) - bx, min(y0s) - by, max(x1s) - bx, max(y1s) - by)
+            outline = (min(x0s), min(y0s), max(x1s), max(y1s))  # the reference's matrix applies the base point
     cache[name] = outline
     return outline
 
@@ -261,9 +264,49 @@ def _place(e, outline) -> tuple[float, float, float, float, float, float, float]
     return (sum(p.x for p in c) / 4.0, sum(p.y for p in c) / 4.0, angle, length, width, max(ys), min(ys))
 
 
+def _ordered(msp) -> list:
+    """The entities in the order they are drawn: the sort table of the drawing (DRAWORDER, HATCHTOBACK) when it has
+    one, else the order of the file."""
+    try:
+        if any(True for _ in msp.get_redraw_order()):
+            return list(msp.entities_in_redraw_order())
+    except Exception:
+        pass
+    return list(msp)
+
+
+def _is_container(doc, name: str) -> bool:
+    """A block that is only a wrapper: an anonymous one (arrays, groups) or one that holds other references."""
+    if name.startswith("*"):
+        return True
+    try:
+        return any(e.dxftype() == "INSERT" for e in doc.blocks.get(name))
+    except Exception:
+        return False
+
+
+def _expand(doc, cfg: Config, entities, depth: int = 0):
+    """The entities with the arrays (MINSERT) opened and the wrapper blocks (a garden, a whole plan drawn inside a
+    block) replaced by what they hold; a plant itself stays one block."""
+    for e in entities:
+        if e.dxftype() == "INSERT":
+            try:
+                if e.mcount > 1:
+                    yield from _expand(doc, cfg, e.multi_insert(), depth)
+                    continue
+                lk = cfg.layers.garden_kind(e.dxf.layer)
+                if depth < 3 and block_kind(e.dxf.name, lk, True) is None and _is_container(doc, e.dxf.name):
+                    yield from _expand(doc, cfg, e.virtual_entities(), depth + 1)
+                    continue
+            except Exception:
+                continue
+        yield e
+
+
 def _scan(doc, cfg: Config, dist: float, zones, skip, user_window):
     """Hatches / outlines and blocks of the garden, in drawing units: (fills, blocks, fills drawn in an
-    elevation, blocks drawn in an elevation)."""
+    elevation, blocks drawn in an elevation). ``zones``: where the elevations are; ``skip``: boxes whose
+    contents (a roof plan left out) are not the garden unless they are on a layer that says they are."""
     rules = cfg.layers
     fills: list[_Fill] = []
     blocks: list[_Block] = []
@@ -272,15 +315,36 @@ def _scan(doc, cfg: Config, dist: float, zones, skip, user_window):
     rings: dict[str, tuple[int, list[Polygon], str]] = {}
     cache: dict = {}
     window = box(*user_window) if user_window else None
-    for order, e in enumerate(doc.modelspace()):
+
+    def skipped(x0: float, y0: float, x1: float, y1: float, lk) -> bool:
+        return lk is None and any(b[0] <= x0 and b[1] <= y0 and x1 <= b[2] and y1 <= b[3] for b in skip)
+
+    for order, e in enumerate(_expand(doc, cfg, _ordered(doc.modelspace()))):
         t = e.dxftype()
         layer = e.dxf.layer
         if not layer_used(doc, cfg, layer) or rules.classify_layer(layer) is not None:
             continue  # off, or a layer of the plan (walls, doors, floors...)
         lk = rules.garden_kind(layer)
-        if _skippable(cfg, layer, lk):
-            continue
+        other = _skippable(cfg, layer, lk)  # an elevation, a text...: only an elevation's plants are of use (heights)
         try:
+            if t == "INSERT":
+                in_zone = _inside(zones, e.dxf.insert.x, e.dxf.insert.y)
+                kind = block_kind(e.dxf.name, lk, in_zone)
+                if kind is None or (other and not in_zone):
+                    continue
+                outline = _block_box(doc, e.dxf.name, dist, cache)
+                if outline is None:
+                    continue
+                cx, cy, angle, length, width, top, bottom = _place(e, outline)
+                r = max(length, width) / 2.0
+                if window is not None and not window.intersects(box(cx - r, cy - r, cx + r, cy + r)):
+                    continue
+                blk = _Block(order, layer, lk, e.dxf.name, kind, cx, cy, angle, length, width, top, bottom)
+                if in_zone:
+                    e_blocks.append(blk)
+                elif not skipped(cx, cy, cx, cy, lk):
+                    blocks.append(blk)
+                continue
             if t == "HATCH":
                 loops = []
                 for sub in ezpath.from_hatch(e):
@@ -288,27 +352,8 @@ def _scan(doc, cfg: Config, dist: float, zones, skip, user_window):
                     if len(pts) >= 3:
                         loops.append(Polygon(pts))
                 shape = nest_polygons(loops)
-                if shape.is_empty:
-                    continue
                 fill = _Fill(order, layer, lk, e.dxf.get("pattern_name", "") or "", _rgb_of(doc, e), shape)
-            elif t == "INSERT":
-                in_elevation = _inside(zones, e.dxf.insert.x, e.dxf.insert.y)
-                kind = block_kind(e.dxf.name, lk, in_elevation)
-                if kind is None:
-                    continue
-                outline = _block_box(doc, e.dxf.name, dist, cache)
-                if outline is None:
-                    continue
-                cx, cy, angle, length, width, top, bottom = _place(e, outline)
-                if window is not None and not window.intersects(Point(cx, cy)):
-                    continue
-                blk = _Block(order, layer, lk, e.dxf.name, kind, cx, cy, angle, length, width, top, bottom)
-                if in_elevation:
-                    e_blocks.append(blk)
-                elif not _inside(skip, cx, cy):
-                    blocks.append(blk)
-                continue
-            elif t in LINE_TYPES and lk in ("lawn", "paving", "water"):
+            elif t in LINE_TYPES and lk in ("lawn", "paving", "water") and not other:
                 polys = [p.geom for p in _entity_prims(e, dist) if p.kind == "ring"]
                 if polys:
                     rings.setdefault(layer, (order, [], lk))[1].extend(polys)
@@ -317,16 +362,20 @@ def _scan(doc, cfg: Config, dist: float, zones, skip, user_window):
                 continue
         except Exception:
             continue
-        x0, y0, x1, y1 = fill.geom.bounds
-        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-        if window is not None and not window.intersects(box(*fill.geom.bounds)):
+        if fill.geom.is_empty:
             continue
-        if _inside(zones, cx, cy):
+        x0, y0, x1, y1 = fill.geom.bounds
+        in_zone = _inside(zones, (x0 + x1) / 2.0, (y0 + y1) / 2.0)
+        if (other and not in_zone) or (window is not None and not window.intersects(box(x0, y0, x1, y1))):
+            continue
+        if in_zone:
             e_fills.append(fill)
-        elif not _inside(skip, cx, cy):
+        elif not skipped(x0, y0, x1, y1, lk):
             fills.append(fill)
     for layer, (order, polys, lk) in rings.items():
-        shape = nest_polygons(polys)
+        # outlines on a water layer are all water (a coping line and a water line are two pools' worth of the same
+        # pool, not a moat); on a lawn or paving layer an outline inside another is a hole
+        shape = union(fix(p) for p in polys) if lk == "water" else nest_polygons(polys)
         if not shape.is_empty and (window is None or window.intersects(box(*shape.bounds))):
             fills.append(_Fill(order, layer, lk, "", None, shape))
     return fills, blocks, e_fills, e_blocks
@@ -348,9 +397,11 @@ def _tidy(geom: BaseGeometry) -> BaseGeometry:
     if geom.is_empty:
         return geom
     # (2 mm short of the way back: two parts that only touched at a point stay apart, no pinched vertical edges)
-    geom = fix(geom).buffer(-SLIVER, join_style="mitre").buffer(SLIVER - 0.002, join_style="mitre")
+    geom = fix(geom)
+    opened = geom.buffer(-SLIVER, join_style="mitre").buffer(SLIVER - 0.002, join_style="mitre")
+    opened = opened.intersection(geom)  # the opening can close a narrow hole (a pool in a paving): never more than was
     # a centimetre of tolerance: the wiggles of a hatch outline (a leaf pattern) make necks that the mesh welds shut
-    return union(p.simplify(SIMPLIFY, preserve_topology=True) for p in polygons_of(geom) if p.area >= MIN_SURFACE)
+    return union(p.simplify(SIMPLIFY, preserve_topology=True) for p in polygons_of(opened) if p.area >= MIN_SURFACE)
 
 
 def _find_window(fills: list[_Fill], footprint: BaseGeometry, user_window) -> tuple[list[_Fill], BaseGeometry]:
@@ -380,7 +431,7 @@ def pool_shell(pool: BaseGeometry, cover: dict[str, BaseGeometry], cfg: Config) 
     shell = pool.buffer(cfg.pool_wall)
     ground = union(cover[k] for k in KINDS)
     holes = [Polygon(r) for poly in polygons_of(ground) for r in poly.interiors]
-    reach = pool.buffer(COPING_MAX)
+    reach = pool.buffer(COPING_MAX, join_style="mitre")
     near = [h for h in holes if h.buffer(0.02).contains(pool) and reach.contains(h)]
     return union([shell, min(near, key=lambda h: h.area)]) if near else shell
 
@@ -426,6 +477,7 @@ def _fill_holes(ground: dict[str, BaseGeometry], shells: BaseGeometry, footprint
                 edge = piece.buffer(0.05)
                 best = max(KINDS, key=lambda k: ground[k].boundary.intersection(edge).length)
                 if ground[best].boundary.intersection(edge).length > 0:
+                    best = "soil" if best == "edge" else best  # a pit inside a kerb is earth, not more kerb
                     ground[best] = _tidy(ground[best].union(piece))
 
 
@@ -513,7 +565,8 @@ def build_garden(doc, cfg: Config, unit_scale: float, footprint: BaseGeometry, z
     dist = cfg.arc_tolerance / unit_scale
     user_window = cfg.garden_area or (cfg.area if cfg.area and not cfg.area_auto else None)
     fills, blocks, e_fills, e_blocks = _scan(doc, cfg, dist, [tuple(z[:4]) for z in zones],
-                                             [tuple(b) for b in cfg.garden_exclude], user_window)
+                                             [] if user_window else [tuple(b) for b in cfg.garden_exclude],
+                                             user_window)
     for f in (*fills, *e_fills):
         f.geom = _scaled(f.geom, unit_scale)
     for b in (*blocks, *e_blocks):
@@ -521,7 +574,12 @@ def build_garden(doc, cfg: Config, unit_scale: float, footprint: BaseGeometry, z
                                                             (b.cx, b.cy, b.length, b.width, b.top, b.bottom))
     wanted = tuple(v * unit_scale for v in user_window) if user_window else None
     fills = [f for f in fills if f.geom.difference(footprint).area >= MIN_SURFACE]
+    near = len(fills)
     fills, window = _find_window(fills, footprint, wanted)
+    if near > len(fills):
+        warnings.append(f"Giardino: {near - len(fills)} campiture fuori dai muri sono a piu' di {GAP:g} m dalla casa e "
+                        "dal resto del giardino e le ho ignorate (retini della pianta del tetto, di un altro disegno?). "
+                        "Se sono giardino indica dove con --area-giardino.")
     ground, pools, shells = build_ground(fills, footprint, cfg)
     garden = Garden(ground, pools, shells, [], window.bounds)
     garden.objects = _objects(blocks, e_blocks, e_fills, footprint, window, ground, cfg)

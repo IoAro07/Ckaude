@@ -4,4 +4,4 @@ from .config import Config
 from .pipeline import ConversionReport, convert
 
 __all__ = ["Config", "ConversionReport", "convert"]
-__version__ = "0.3.2"
+__version__ = "0.4.0"

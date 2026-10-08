@@ -27,6 +27,19 @@ def _where() -> str:
     return str(Path(__file__).resolve().parent)
 
 
+def _config_value(path: str | None, key: str):
+    """The value of ``key`` in the JSON configuration file, None when there is none or the key is absent."""
+    if not path:
+        return None
+    import json
+    from pathlib import Path
+
+    try:
+        return json.loads(Path(path).read_text(encoding="utf-8")).get(key)
+    except (OSError, ValueError, AttributeError):
+        return None
+
+
 def _globs(text: str) -> list[str]:
     return [t.strip() for t in text.split(",") if t.strip()]
 
@@ -152,7 +165,8 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--tabella-giardino", metavar="FILE.csv",
                    help="applica la tabella del giardino corretta a mano (colonne MODIFICA_*), scritta da una "
                         "conversione precedente come NOME_giardino.csv")
-    g.add_argument("--profondita-piscina", type=float, metavar="M", help="profondita' della piscina (default 1,5)")
+    g.add_argument("--profondita-piscina", type=float, metavar="M",
+                   help="profondita' della piscina, maggiore di 0,2 m (default 1,5)")
     g.add_argument("--altezza-alberi", type=float, metavar="M",
                    help="altezza degli alberi se il prospetto non la da' (default 4,5)")
     g.add_argument("--altezza-siepi", type=float, metavar="M",
@@ -197,7 +211,7 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--no-immagini", action="store_true",
                    help="non scrive NOME_controllo_pianta.png e NOME_anteprima_3d.png")
     g.add_argument("--no-tabella", action="store_true",
-                   help="non scrive NOME_aperture.csv")
+                   help="non scrive le tabelle NOME_aperture.csv e NOME_giardino.csv")
     g.add_argument("--specchia", action="store_true",
                    help="specchia la pianta (se in Cinema 4D risulta capovolta)")
     g.add_argument("--converter", help="percorso di ODAFileConverter o dwg2dxf")
@@ -281,7 +295,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
     if args.no_tabella:
         cfg.write_table = False
         cfg.write_garden_table = False
-    cfg.garden = not args.no_giardino
+    in_config = _config_value(args.config, "garden")  # --config {"garden": false} turns it off, as --no-giardino
+    cfg.garden = False if args.no_giardino else (True if in_config is None else bool(in_config))
     if args.tabella_giardino:
         cfg.garden_table_in = args.tabella_giardino
     return cfg

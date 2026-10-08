@@ -171,11 +171,13 @@ def is_elevation_layer(name: str) -> bool:
 
 
 def find_elevation_zones(items: list[Item], plan_bounds: tuple[float, float, float, float],
-                         unit_scale: float) -> list[tuple[str, tuple[float, float, float, float]]]:
+                         unit_scale: float, cores: bool = False) -> list[tuple]:
     """Facade elevations found by their layer name ("Prospetto ..."): [(layer names, zone)] with the zone in
     drawing units. A zone counts when it lies wholly below or above the plan, shares the plan's x range
     (elevations are projected straight from the plan) and holds door/window symbols: an interior
-    elevation (a kitchen wall, a wardrobe) has none and is left out."""
+    elevation (a kitchen wall, a wardrobe) has none and is left out.
+    With ``cores`` each entry also has the *core* of the zone: the extent of the drawn layers plus the margin,
+    without the stretch towards the plan where the roof lines are looked for ([(layers, zone, core)])."""
     px0, py0, px1, py1 = plan_bounds
     boxes: list[tuple[str, tuple[float, float, float, float]]] = []
     for it in items:
@@ -202,6 +204,7 @@ def find_elevation_zones(items: list[Item], plan_bounds: tuple[float, float, flo
         if not (y1 < py0 or y0 > py1):
             continue  # beside or over the plan: not an elevation projected from it
         x0, x1 = x0 - ZONE_MARGIN, x1 + ZONE_MARGIN
+        core = (x0 / unit_scale, (y0 - ZONE_MARGIN) / unit_scale, x1 / unit_scale, (y1 + ZONE_MARGIN) / unit_scale)
         # the roof of a facade rises above the drawn layer, towards the plan: look further that way
         y0, y1 = (y0 - ZONE_MARGIN, min(y1 + ROOF_RISE, py0 - PLAN_CLEARANCE)) if y1 < py0 else \
             (max(y0 - ROOF_RISE, py1 + PLAN_CLEARANCE), y1 + ZONE_MARGIN)
@@ -211,5 +214,6 @@ def find_elevation_zones(items: list[Item], plan_bounds: tuple[float, float, flo
         inside = [b for b in symbols if x0 <= b[0] and b[2] <= x1 and y0 <= b[1] and b[3] <= y1]
         if not inside:
             continue
-        out.append((", ".join(sorted(layers)), (x0 / unit_scale, y0 / unit_scale, x1 / unit_scale, y1 / unit_scale)))
+        zone = (x0 / unit_scale, y0 / unit_scale, x1 / unit_scale, y1 / unit_scale)
+        out.append((", ".join(sorted(layers)), zone, core) if cores else (", ".join(sorted(layers)), zone))
     return sorted(out, key=lambda z: z[1][1])
