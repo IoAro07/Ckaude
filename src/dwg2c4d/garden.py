@@ -468,6 +468,7 @@ def _fill_holes(ground: dict[str, BaseGeometry], shells: BaseGeometry, footprint
     """A hole in the ground that is not the building or a pool is ground the hatch leaves bare (where a bush, a
     table, a pergola stands): it gets what surrounds it, the kind it shares most of its outline with."""
     solid = union([*ground.values(), shells])
+    added: dict[str, list[BaseGeometry]] = {}
     for poly in polygons_of(solid):
         for ring in poly.interiors:
             hole = Polygon(ring).difference(footprint).difference(solid)  # what is left bare, not what is in it
@@ -478,7 +479,9 @@ def _fill_holes(ground: dict[str, BaseGeometry], shells: BaseGeometry, footprint
                 best = max(KINDS, key=lambda k: ground[k].boundary.intersection(edge).length)
                 if ground[best].boundary.intersection(edge).length > 0:
                     best = "soil" if best == "edge" else best  # a pit inside a kerb is earth, not more kerb
-                    ground[best] = _tidy(ground[best].union(piece))
+                    added.setdefault(best, []).append(piece)
+    for kind, pieces in added.items():  # all at once: tidying the ground between two pieces would leave a gap
+        ground[kind] = _tidy(ground[kind].union(union(pieces)))
 
 
 # --- the objects ------------------------------------------------------------------------------

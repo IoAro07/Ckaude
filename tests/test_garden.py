@@ -644,3 +644,15 @@ def test_config_can_switch_the_garden_off_and_a_walls_layer_named_esterno_is_sti
     out3 = tmp_path / "z.obj"
     assert main([str(path2), "-o", str(out3), "--no-immagini", "--accetta-proposte"]) == 0
     assert "Muri_interno" in Obj(out3).groups or "Muri" in Obj(out3).groups
+
+
+def test_several_bare_holes_are_all_filled_without_leaving_rings(tmp_path):
+    from shapely.geometry import Point, Polygon, box
+
+    from dwg2c4d import garden as G
+
+    lawn = box(0, 0, 8, 5).difference(Point(2, 2.5).buffer(0.45, 16)).difference(box(5, 1, 6.5, 1.5))
+    ground, _, _ = G.build_ground([G._Fill(0, "L", "lawn", "", None, lawn)], Polygon(), Config(garden=True))
+    pieces = G.polygons_of(ground["lawn"])
+    assert len(pieces) == 1 and not list(pieces[0].interiors)  # one piece, no hole, no island inside a hole
+    assert ground["lawn"].area == pytest.approx(40.0, rel=0.01)
