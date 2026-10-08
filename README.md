@@ -1,5 +1,7 @@
 # dwg2c4d — da planimetria 2D (DWG/DXF) a modello 3D per Cinema 4D
 
+**Versione 0.4.0** (8 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
+
 Legge una pianta 2D, ne **estrude i muri** (con i tramezzi a parte), **apre porte, finestre e vani** con le
 quote che trova (scritte del disegno, prospetti), costruisce **infissi dettagliati** (imbotto, cornice, telai, ante,
 maniglie, toppe), **pavimenti per locale**, **battiscopa**, il **tetto** e il **giardino** (pavimentazione, prato,
@@ -117,7 +119,7 @@ dwg2c4d pianta.dwg --elenca-layer
 3. Converti:
 
 ```bash
-dwg2c4d pianta.dwg -o casa.obj --muri "0" --unita cm --area 72400,48300,74600,49350
+dwg2c4d pianta.dwg -o casa.obj --muri "0" --unita cm --area 0,0,1500,900
 ```
 
 4. Leggi il riepilogo e gli avvisi, importa in Cinema 4D.
@@ -280,8 +282,8 @@ spezzano le falde. Se ci sono due contorni annidati (gronda e linea del muro) il
 Con il solo contorno viene una falda unica, con un avviso. Un tetto disegnato solo come campitura usa il suo bordo.
 
 ```bash
-dwg2c4d pianta.dwg -o casa.obj --muri "0" --unita cm --area=72400,48300,74600,49350 \
-    --prospetto=72400,46900,75150,47470 --tetto --area-tetto=72400,49700,74100,50750
+dwg2c4d pianta.dwg -o casa.obj --muri "0" --unita cm --area=0,0,1500,900 \
+    --prospetto=0,-1500,1500,-800 --tetto --area-tetto=0,1000,1500,1900
 ```
 
 > Attenzione: se il primo numero di un valore è negativo scrivi `--area=-200,-200,…` con il segno uguale
