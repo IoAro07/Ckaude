@@ -253,13 +253,17 @@ def test_a_title_between_two_views_names_the_one_that_has_no_title_yet():
     def title(text, x, y):
         return {"text": text, "x": x, "y": y, "height": 35.0, "kind": "elevation", "layer": "0"}
 
-    upper, lower = View(1, (0, 0, 1000, 500), 100), View(2, (0, 1000, 1000, 1500), 100)  # 5 m apart
-    clear, between = title("PROSPETTO 1", 500, -100), title("PROSPETTO 2", 500, 750)  # 1 m under the upper one; in the middle
-    _assign_titles([upper, lower], [clear, between], [], S)
-    assert [t["text"] for t in upper.title_items] == ["PROSPETTO 1"] and [t["text"] for t in lower.title_items] == ["PROSPETTO 2"]
-    alone = View(1, (0, 0, 1000, 500), 100), View(2, (0, 1000, 1000, 1500), 100)
-    _assign_titles(list(alone), [between], [], S)  # nothing says which: the nearest (the first of two equals)
-    assert len(alone[0].title_items) + len(alone[1].title_items) == 1
+    def sheet(*names):
+        views = [View(1, (0, 0, 1000, 500), 100), View(2, (0, 1000, 1000, 1500), 100)]  # a pair of views 5 m apart...
+        views += [View(3, (5000, 0, 6000, 500), 100), View(4, (5000, 2000, 6000, 2500), 100)]  # ... and two far away
+        titles = [title("PROSPETTO 3", 5500, 600), title("PROSPETTO 4", 5500, 2600)]  # 1 m above their views: the habit
+        titles += [title(n, x, y) for n, x, y in names]
+        _assign_titles(views, titles, [], S)
+        return {v.id: [t["text"] for t in v.title_items] for v in views}
+
+    between = ("PROSPETTO 2", 500, 750)  # 2.5 m from each: by the habit it names the lower view...
+    assert sheet(between)[1] == ["PROSPETTO 2"]
+    assert sheet(("PROSPETTO 1", 500, 250), between)[2] == ["PROSPETTO 2"]  # ... but that one has its title: the other
 
 
 def test_a_title_inside_a_view_names_that_view():
