@@ -43,8 +43,11 @@ SYMBOL_MAX = (6.8, 4.2)  # m: widest and tallest door or window (a sectional doo
 SYMBOL_MIN = (0.35, 0.35)  # m: smallest door or window (a cellar light)
 RECT_FILL = 0.97  # a face is a rectangle if it fills this share of its bounding box
 ARCH_FILL = 0.80  # ... an arch if it fills at least this much of it (a semicircle on a square: 0.93)
+CLIP_FILL = 0.85  # a polygon filling this much of its box, with straight sides and ...
+CLIP_CORNERS = 6  # ... no more corners than this, is a rectangle with a corner or two cut off
 ARCH_BASE = 0.95  # an arch is as wide as its box in the lowest third ...
-ARCH_TOP = 0.8  # ... and narrower than this share of it at the apex
+ARCH_TOP = 0.8  # ... and narrower than this share of it at the apex, which is in the middle (a stair cuts a corner)
+ARCH_CENTRED = 0.1  # the apex is this close to the middle of the box, as a share of its width
 NEST_TOL = 0.015  # m: a rectangle this close to the edges of another one lies inside it
 FRAME_BAND = 0.30  # m: a frame is no wider than this around what it holds (more: it is a bay of the wall)
 MERGE_GAP = 0.12  # m: leaves this close are one symbol (the halves of a door, the panels of an entrance)
@@ -59,6 +62,9 @@ GLAZED_MIN = 2  # a leaf divided in at least this many panes is a sash; a plain 
 CAP_GAP = 0.05  # m: the faces of an arch's head start this close to the top of the frame ...
 CAP_RISE = 0.55  # ... rise no more than this share of its width and together span it
 CAP_CURVE = 0.01  # m: a curved side keeps at least 5 corners when simplified this much; a gable keeps 3
+CAP_FILL = 0.55  # the faces of an arch's head fill this share of the box they span (a segment of a circle: 0.67 to 0.79)
+CAP_MIDDLE = 0.1  # the head rises at least this share of the width in the middle ...
+CAP_SIDES = 0.5  # ... and at a quarter of the width at least this share of that
 FLOOR_DOORS = 1 / 3  # doors at one level count for the floor if they are at least this share of the doors at the busiest
 JAMB_SHARE = 0.25  # a plain piece beside the sashes narrower than this share of the width left is a jamb or a pier
 MAX_ASPECT = 3.5  # a symbol wider than this (width / height) is a strip: fascia, canopy, step ...
@@ -77,6 +83,7 @@ FIGURE_WIDTH = 1.0  # m: at most this wide
 FIGURE_FOOT = 0.10  # m: the insertion point of such a block is this close to its bottom, the feet
 
 SKY = 60.0  # m: how far above a symbol the drawing is searched for a roof
+ROOF_SPAN = 2.0  # m: a roof, an eave or the top of a wall runs at least this far sideways; the cap of a chimney does not
 MARK_RE = re.compile(r"(?<![\w.,])([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")  # "+0,00" "- 0.40" "+-0.00"
 MARK_MAX = 30.0  # m: a level mark is no more than this above or below the floor
 MARK_REACH = 3.2  # text heights: the line a level mark labels lies at most this far below the text
@@ -237,11 +244,14 @@ def _is_arch(poly: Polygon, w: float, h: float) -> bool:
     top = poly.intersection(box(x0 - 1, y1 - 0.06 * h, x1 + 1, y1))
     if low.is_empty or top.is_empty:
         return False
-    return low.bounds[2] - low.bounds[0] >= ARCH_BASE * w and top.bounds[2] - top.bounds[0] <= ARCH_TOP * w
+    t0, t1 = top.bounds[0], top.bounds[2]
+    return low.bounds[2] - low.bounds[0] >= ARCH_BASE * w and t1 - t0 <= ARCH_TOP * w \
+        and abs((t0 + t1) / 2 - (x0 + x1) / 2) <= ARCH_CENTRED * w
 
 
-def _box_of(poly: Polygon) -> _Box | None:
-    """The rectangle or arch of this outline, if it is one of a size a leaf can have."""
+def _box_of(poly: Polygon, drawn: bool) -> _Box | None:
+    """The rectangle or arch of this outline, if it is one of a size a leaf can have. ``drawn``: the outline is a closed
+    polyline of the drawing, not a face between lines (which a railing or a stair in front cuts anywhere)."""
     x0, y0, x1, y1 = poly.bounds
     w, h = x1 - x0, y1 - y0
     if min(w, h) < PART_MIN or w > SYMBOL_MAX[0] or h > SYMBOL_MAX[1]:
@@ -252,26 +262,33 @@ def _box_of(poly: Polygon) -> _Box | None:
         return _Box(x0, y0, x1, y1)
     if fill >= ARCH_FILL and _is_arch(outline, w, h):
         return _Box(x0, y0, x1, y1, arched=True)
+    if drawn and fill >= CLIP_FILL and len(outline.simplify(CAP_CURVE).exterior.coords) <= CLIP_CORNERS + 1:
+        return _Box(x0, y0, x1, y1)  # a leaf trimmed by the roof or the wall behind it: a corner or two cut off
     return None
 
 
-def _heads(lw: _Linework) -> list[tuple[float, float, float, float]]:
-    """Boxes of the faces that are not rectangles and have a curved side: the segments between an arc and its chord."""
+Head = tuple[float, float, float, float, Polygon]  # x0, y0, x1, y1 and the shape of a face with a curved side
+
+
+def _heads(lw: _Linework) -> list[Head]:
+    """The faces that are not rectangles and have a curved side: the segments between an arc and its chord."""
     heads = []
     for f in lw.faces:
         x0, y0, x1, y1 = f.bounds
         outline = Polygon(f.exterior)
         if x1 - x0 >= PART_MIN / 2 and y1 - y0 > 0 and outline.area < RECT_FILL * (x1 - x0) * (y1 - y0) \
                 and len(outline.simplify(CAP_CURVE).exterior.coords) > 5:
-            heads.append((x0, y0, x1, y1))
+            heads.append((x0, y0, x1, y1, outline))
     return heads
 
 
-def _apex(x0: float, x1: float, top: float, heads: list[tuple[float, float, float, float]]) -> float | None:
+def _apex(x0: float, x1: float, top: float, heads: list[Head]) -> float | None:
     """The apex of the arched head over a frame spanning x0..x1 whose top is ``top``: curved faces that start at the
-    top of the frame, rise no more than CAP_RISE of its width, and together run from one top corner to the other."""
+    top of the frame, rise no more than CAP_RISE of its width, together run from one top corner to the other and fill
+    a cap that is highest in the middle (not the scattered loops of a vine along a beam)."""
+    width = x1 - x0
     mine = sorted(h for h in heads if h[0] >= x0 - ALIGN_TOL and h[2] <= x1 + ALIGN_TOL and abs(h[1] - top) <= CAP_GAP
-                  and h[3] - h[1] <= CAP_RISE * (x1 - x0))
+                  and h[3] - h[1] <= CAP_RISE * width)
     if not mine or mine[0][0] > x0 + ALIGN_TOL:
         return None
     reach = mine[0][2]
@@ -279,7 +296,20 @@ def _apex(x0: float, x1: float, top: float, heads: list[tuple[float, float, floa
         if h[0] > reach + ALIGN_TOL:
             break
         reach = max(reach, h[2])
-    return max(h[3] for h in mine) if reach >= x1 - ALIGN_TOL else None
+    if reach < x1 - ALIGN_TOL:
+        return None
+    cap = unary_union([h[4] for h in mine])
+    apex = cap.bounds[3]
+
+    def rise(f: float) -> float:
+        """How high the cap stands over the frame at this share of its width."""
+        cut = cap.intersection(LineString([(x0 + f * width, top - CAP_GAP), (x0 + f * width, apex + CAP_GAP)]))
+        return cut.bounds[3] - top if not cut.is_empty else 0.0
+
+    middle = rise(0.5)
+    if cap.area < CAP_FILL * width * (apex - top) or middle < CAP_MIDDLE * width:
+        return None
+    return apex if min(rise(0.25), rise(0.75)) >= CAP_SIDES * middle else None
 
 
 def _is_dimension(b: _Box, arrows: list[tuple[float, float]]) -> bool:
@@ -288,11 +318,11 @@ def _is_dimension(b: _Box, arrows: list[tuple[float, float]]) -> bool:
     return sum(any(abs(x - cx) <= ARROW_TOL and abs(y - cy) <= ARROW_TOL for x, y in arrows) for cx, cy in corners) >= 2
 
 
-def _boxes(lw: _Linework, heads: list[tuple[float, float, float, float]]) -> list[_Box]:
+def _boxes(lw: _Linework, heads: list[Head]) -> list[_Box]:
     """Rectangles and arches of the drawing, from the faces of its linework and from its closed outlines."""
     found: dict[tuple, _Box] = {}
-    for poly in lw.faces + lw.outlines:
-        b = _box_of(poly)
+    for poly, drawn in [(g, True) for g in lw.outlines] + [(g, False) for g in lw.faces]:  # an outline is whole where
+        b = _box_of(poly, drawn)  # a line in front cuts the face it encloses
         if b is not None and not _is_dimension(b, lw.arrows):
             b.free = _bare_corners(b.x0, b.y0, b.x1, b.y1, lw.nodes)
             b.headed = not _is_strip(b) and _apex(b.x0, b.x1, b.y1, heads) is not None
@@ -466,7 +496,7 @@ def _describe(g: _Group) -> None:
         g.pane = (min(k.x0 for k in kids), min(k.y0 for k in kids), max(k.x1 for k in kids), max(k.y1 for k in kids))
 
 
-def _arches(groups: list[_Group], heads: list[tuple[float, float, float, float]]) -> None:
+def _arches(groups: list[_Group], heads: list[Head]) -> None:
     """An arched head is drawn over the frame as faces that are not rectangles (the segments between the arc and the
     springing line). The apex is the top of the symbol."""
     for g in groups:
@@ -752,7 +782,11 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
             continue
         says = [n.sym.kind for n in taken[i] if not n.mixed]
         kind = ("door" if "door" in says else "window") if says else s.kind
-        out.append(FoundSymbol(kind, s.x0, s.x1, s.y0, s.y1, "layer+forma", s.arched, s.pane, s.full_x))
+        x0, x1, full = s.x0, s.x1, s.full_x
+        n0, n1 = min(n.sym.x0 for n in taken[i]), max(n.sym.x1 for n in taken[i])
+        if n0 - x0 > FRAME_BAND or x1 - n1 > FRAME_BAND:  # the shape adds a leaf the layer does not call part of the window
+            x0, x1, full = n0, n1, (x0, x1) if full is None else full
+        out.append(FoundSymbol(kind, x0, x1, s.y0, s.y1, "layer+forma", s.arched, s.pane, full))
     for n in alone:
         if n.mixed:
             n.sym.kind = _kind(n.sym.y0, n.sym.y1 - n.sym.y0, floor, levels)
@@ -763,11 +797,12 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
 
 
 def _roofed(groups: list[_Group], lw: _Linework) -> list[_Group]:
-    """The symbols with something above them: a roof, an eave, the top of the wall. What stands in the open sky above
-    the roof (a chimney pot) is no opening."""
-    if not lw.lines:
+    """The symbols with a roof, an eave or the top of the wall above them: a line as long as a roof, not the cap of a
+    chimney. What stands in the open sky above the roof (a chimney pot, a stack) is no opening."""
+    long_lines = [g for g in lw.lines if g.bounds[2] - g.bounds[0] >= ROOF_SPAN]
+    if not long_lines:
         return []
-    tree = STRtree(lw.lines)
+    tree = STRtree(long_lines)
     return [g for g in groups
             if len(tree.query(LineString([((g.x0 + g.x1) / 2, g.y1 + 0.02), ((g.x0 + g.x1) / 2, g.y1 + SKY)]),
                               predicate="intersects"))]
