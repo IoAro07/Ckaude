@@ -995,10 +995,10 @@ def _side(box: tuple, bbox: tuple) -> str:
 
 def _assign_titles(views: list[View], titles: list[dict], frames: list[dict], scale: float) -> None:
     """Each title names the view nearest to it (the frame it is written in counts, not the text alone), within
-    TITLE_REACH, but never a view whose content says it cannot be. Where two views are about as near, the habit of the
-    sheet decides: the titles that are clearly near one view (and outside it) say whether this sheet puts them above or
-    below their drawings. A title written inside a view belongs to it. A frame within LINK of the view it names is a
-    part of it."""
+    TITLE_REACH, but never a view whose content says it cannot be. Where two views are about as near, the one that has
+    no title yet is named, and when both are alike the habit of the sheet decides: the titles that are clearly near one
+    view (and outside it) say whether this sheet puts them above or below their drawings. A title written inside a view
+    belongs to it. A frame within LINK of the view it names is a part of it."""
     from collections import Counter
 
     box_of = {id(f["title"]): f["box"] for f in frames}
@@ -1012,11 +1012,11 @@ def _assign_titles(views: list[View], titles: list[dict], frames: list[dict], sc
     sure = Counter(_side(box, near[0][2].bbox) for _, box, near in options
                    if near and near[0][0] > 0 and (len(near) == 1 or near[1][0] - near[0][0] > tie))
     habit = sure.most_common(1)[0][0] if sure else None
-    for t, box, near in options:
-        if not near:
-            continue
-        close = [o for o in near if o[0] - near[0][0] <= (0 if near[0][0] == 0 else tie)]  # in a view: that view
-        d, _, v = next((o for o in close if _side(box, o[2].bbox) == habit), close[0])
+    chosen = [(t, box, [o for o in near if o[0] - near[0][0] <= (0 if near[0][0] == 0 else tie)])  # in a view: that view
+              for t, box, near in options if near]
+    for t, box, close in sorted(chosen, key=lambda c: len(c[2]) > 1):  # the titles that are clearly near one view first
+        free = [o for o in close if not o[2].title_items] or close  # a title between two views names the one with no title
+        d, _, v = next((o for o in free if _side(box, o[2].bbox) == habit), free[0])
         v.title_items.append(t)
         if d <= LINK / scale and id(t) in box_of:
             v.bbox = (min(v.bbox[0], box[0]), min(v.bbox[1], box[1]), max(v.bbox[2], box[2]), max(v.bbox[3], box[3]))

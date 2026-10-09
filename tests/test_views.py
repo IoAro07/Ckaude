@@ -247,6 +247,21 @@ def test_where_two_views_are_as_near_the_habit_of_the_sheet_decides(above):
     assert (y0 < 5) if above else (y0 > 5)  # above: it names the lower facade of the pair; below: the upper one
 
 
+def test_a_title_between_two_views_names_the_one_that_has_no_title_yet():
+    from dwg2c4d.autodetect import _assign_titles
+
+    def title(text, x, y):
+        return {"text": text, "x": x, "y": y, "height": 35.0, "kind": "elevation", "layer": "0"}
+
+    upper, lower = View(1, (0, 0, 1000, 500), 100), View(2, (0, 1000, 1000, 1500), 100)  # 5 m apart
+    clear, between = title("PROSPETTO 1", 500, -100), title("PROSPETTO 2", 500, 750)  # 1 m under the upper one; in the middle
+    _assign_titles([upper, lower], [clear, between], [], S)
+    assert [t["text"] for t in upper.title_items] == ["PROSPETTO 1"] and [t["text"] for t in lower.title_items] == ["PROSPETTO 2"]
+    alone = View(1, (0, 0, 1000, 500), 100), View(2, (0, 1000, 1000, 1500), 100)
+    _assign_titles(list(alone), [between], [], S)  # nothing says which: the nearest (the first of two equals)
+    assert len(alone[0].title_items) + len(alone[1].title_items) == 1
+
+
 def test_a_title_inside_a_view_names_that_view():
     doc, msp = new_sheet()
     add_plan(msp, 0, 0)
