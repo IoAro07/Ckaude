@@ -52,7 +52,7 @@ ARCH_TOP = 0.8  # ... and narrower than this share of it at the apex, which is i
 ARCH_CENTRED = 0.1  # the apex is this close to the middle of the box, as a share of its width
 NEST_TOL = 0.015  # m: a rectangle this close to the edges of another one lies inside it
 FRAME_BAND = 0.30  # m: a frame is no wider than this around what it holds (more: it is a bay of the wall)
-MERGE_GAP = 0.12  # m: leaves this close are one symbol (the halves of a door, the panels of an entrance)
+MERGE_GAP = 0.20  # m: leaves this close are one symbol (the halves of a door, the panels of an entrance)
 ALIGN_TOL = 0.10  # m: leaves of one symbol line up at the top or at the bottom (or at both sides), within this
 NODE_TOL = 0.005  # m: lines ending this close to a corner meet there
 MIN_FREE_CORNERS = 2  # a real opening is outlined by its own lines: at least this many of its 4 corners are bare
@@ -583,24 +583,26 @@ def _marks(texts: list[RawText]) -> list[_Mark]:
 
 
 def _horizontals(lines: list[LineString], min_len: float) -> list[tuple[float, float, float]]:
-    """(y, x0, x1) of the horizontal pieces of the lines, collinear pieces joined."""
+    """(y, x0, x1) of the horizontal pieces of the lines, collinear pieces joined (those within a few millimetres of
+    one another in height are on one row, at the mean of their heights)."""
     rows: dict[int, list[list[float]]] = {}
     for ls in lines:
         c = np.asarray(ls.coords)
         for k in np.flatnonzero(np.abs(np.diff(c[:, 1])) < HORIZONTAL_TOL):
-            rows.setdefault(round((c[k, 1] + c[k + 1, 1]) / 2 / ROW_TOL), []).append(
-                [min(c[k, 0], c[k + 1, 0]), max(c[k, 0], c[k + 1, 0])])
+            y = (c[k, 1] + c[k + 1, 1]) / 2
+            rows.setdefault(round(y / ROW_TOL), []).append([min(c[k, 0], c[k + 1, 0]), max(c[k, 0], c[k + 1, 0]), y])
     out = []
-    for key, spans in rows.items():
+    for spans in rows.values():
         spans.sort()
-        cur = spans[0]
-        for a, b in spans[1:] + [[math.inf, math.inf]]:
-            if a <= cur[1] + JOIN_GAP:
-                cur[1] = max(cur[1], b)
+        x0, x1, ys = spans[0][0], spans[0][1], [spans[0][2]]
+        for a, b, y in spans[1:] + [[math.inf, math.inf, 0.0]]:
+            if a <= x1 + JOIN_GAP:
+                x1 = max(x1, b)
+                ys.append(y)
                 continue
-            if cur[1] - cur[0] >= min_len:
-                out.append((key * ROW_TOL, float(cur[0]), float(cur[1])))
-            cur = [a, b]
+            if x1 - x0 >= min_len:
+                out.append((float(np.mean(ys)), float(x0), float(x1)))
+            x0, x1, ys = a, b, [y]
     return sorted(out)
 
 

@@ -560,3 +560,16 @@ def test_the_sheet_is_read_once_for_all_the_views_of_a_drawing(monkeypatch):
     assert len(calls) == 1 and len(first.symbols) == 1 and len(second.symbols) == 1
     read_view_symbols(doc, Config(units="cm"), AREA, "m", 1.0)  # other settings: read again
     assert len(calls) == 2
+
+
+def test_the_sashes_of_a_tall_window_with_a_transom_rail_are_one_window():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 3.8, 1.7)  # the lower sash and, above a 0.18 m rail, the upper one
+    _lines(msp, 3, 1.88, 3.8, 2.6)
+    _lines(msp, 8, 1.0, 8.8, 1.7)  # the windows of the next one stay apart: 0.6 m of wall between
+    _lines(msp, 8, 2.3, 8.8, 3.0)
+    res = _read(doc)
+    tall = _find(res, "window", 3.4)
+    assert (tall.y0, tall.y1) == pytest.approx((1.0, 2.6), abs=0.01)
+    assert len([s for s in res.symbols if abs((s.x0 + s.x1) / 2 - 8.4) < 0.05]) == 2
