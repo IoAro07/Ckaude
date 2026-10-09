@@ -429,6 +429,52 @@ def test_two_copies_of_a_plan_one_of_them_turned_are_copies():
     assert views[0].copy_of is None and views[1].copy_of == views[0].id
 
 
+def _turned_copy(msp, at, turns=1, shift=(0, 0), **plan):
+    """A plan drawn at ``at`` and then turned ``turns`` quarters about the origin and shifted by ``shift``: what a
+    draughtsman does to put a plan into the site."""
+    before = len(msp)
+    add_plan(msp, *at, **plan)
+    move = Matrix44.chain(Matrix44.z_rotate(math.radians(90 * turns)), Matrix44.translate(shift[0], shift[1], 0))
+    for e in list(msp)[before:]:
+        e.transform(move)
+
+
+def test_a_plan_copied_into_the_site_has_the_exact_box_of_the_plan_and_is_its_copy():
+    doc, msp = new_sheet()
+    _site(msp, None)
+    add_plan(msp, 12000, 0)  # the plan on the sheet
+    _turned_copy(msp, (0, 0), turns=1, shift=(5500, 1500))  # ... and the same plan turned a quarter, in the site
+    views = views_of(doc)
+    site = next(v for v in views if v.kind == "site")
+    plan = next(v for v in views if v.parent is None and v.kind == "plan")
+    house = next(v for v in views if v.parent == site.id)
+    assert house.kind == "plan" and house.copy_of == plan.id and plan.copy_of is None
+    x0, y0, x1, y1 = box_m(house)  # the plan, 14 x 9 m, turned: 9 x 14 m, its corner (0, 0) goes to (55, 15)
+    assert (x0, y0, x1, y1) == pytest.approx((46.0, 15.0, 55.0, 29.0), abs=0.6)  # the doors alone would say less
+
+
+def test_words_in_the_same_places_in_two_different_plans_do_not_make_them_copies():
+    doc, msp = new_sheet()
+    for k, x in enumerate((0, 2000)):
+        add_plan(msp, x, 0, furniture=0, doors=5 if k == 0 else 0)  # the same labels and the same outer walls...
+        if k:
+            for j in range(12):  # ... but another plan inside
+                msp.add_line((x + 300 + j * 90, 100), (x + 300 + j * 90, 800))
+                msp.add_line((x + 100, 100 + j * 55), (x + 550, 100 + j * 55))
+        add_title(msp, ("PIANTA PIANO TERRA", "PIANTA PIANO PRIMO")[k], x, 1050)
+    views = views_of(doc)
+    assert [v.kind for v in views] == ["plan", "plan"] and all(v.copy_of is None for v in views)
+
+
+def test_two_plans_of_a_sheet_that_repeat_each_other_are_copies_even_with_titles():
+    doc, msp = new_sheet()
+    for k, x in enumerate((0, 2000)):
+        add_plan(msp, x, 0)
+        add_title(msp, ("PIANTA PIANO TERRA", "PIANTA PIANO TERRA - COPIA")[k], x, 1050)
+    first, second = views_of(doc)
+    assert first.copy_of is None and second.copy_of == first.id and second.kind == "plan"
+
+
 def test_the_plan_to_convert_is_the_biggest_that_is_not_a_site_a_copy_or_a_part_of_a_bigger_view():
     def v(id_, cells, kind="plan", **kw):
         return View(id_, (0, 0, 1, 1), cells, kind=kind, doors=kw.pop("doors", 3), **kw)
