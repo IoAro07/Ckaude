@@ -115,8 +115,9 @@ RAIL_TOP = 0.8  # ... and a line along the top, this share of its width at least
 BAR_MERGE = 0.03  # m: lines this close are one bar (a bar drawn as two lines)
 SKY = 60.0  # m: how far above a symbol the drawing is searched for a roof
 ROOF_SPAN = 2.0  # m: a roof, an eave or a wall top runs at least this far sideways; the cap of a chimney does not
-# "+0,00" "- 0.40" "+-0.00"
-MARK_RE = re.compile(r"(?<![\w.,])([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")
+# "+0,00" "- 0.40" "+-0.00" "P.F.+0,00": not the end of a number ("2.5-3.0")
+MARK_RE = re.compile(r"(?<![\w,])(?<!\d\.)([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")
+PLUS_MINUS_RE = re.compile(r"%%[pP]")  # how a TEXT of a DXF file stores the plus-minus sign (MTEXT is converted already)
 MARK_MAX = 30.0  # m: a level mark is no more than this above or below the floor
 MARK_REACH = 3.2  # text heights: the line a level mark labels lies at most this far below the text
 MARK_SIDE = 0.5  # m: ... and no further than this beyond the ends of the text, sideways
@@ -666,14 +667,14 @@ class _Mark:
 
 
 def _marks(texts: list[RawText]) -> list[_Mark]:
-    """Level marks written in the view: "+0,00", "P.P.F. +0.00", "+ 3.20", "- 0.40 (297.40)"."""
+    """Level marks written in the view: "+0,00", "P.P.F. +0.00", "%%p0,00", "+ 3.20", "- 0.40 (297.40)"."""
     out = []
     for t in texts:
         if abs(math.sin(math.radians(t.angle))) > 0.1:
             continue
         n = len(t.lines)
         for i, line in enumerate(t.lines):
-            m = MARK_RE.search(line)
+            m = MARK_RE.search(PLUS_MINUS_RE.sub("\u00b1", line))
             if not m:
                 continue
             value = float(f"{m.group(2)}.{m.group(3)}")

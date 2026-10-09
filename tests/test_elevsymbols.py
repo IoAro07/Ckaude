@@ -979,3 +979,28 @@ def test_four_narrow_planks_are_one_door_not_a_window_between_shutters():
     _barred(msp, 14, 0, 14.8, 2.6, 0.2)  # planks 0.2 m wide: the two outer ones are strips, not shutters
     door = _find(_read(doc), "door", 14.4)
     assert (door.x0, door.x1) == pytest.approx((14.0, 14.8), abs=0.01) and door.full_x is None
+
+
+# --- level marks as a TEXT stores them ------------------------------------------------------------------------------
+
+def _floor_by_mark(text):
+    """The floor read from a text on a tick line 0.5 m above the ground line, with no door in the view."""
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.3, 4.0, 2.3)
+    msp.add_line((21.0, 0.5), (23.5, 0.5))
+    msp.add_text(text, dxfattribs={"height": 0.2, "insert": (21.2, 0.55)})
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 8.0), "m", 1.0)
+    return res.floor, res.floor_source
+
+
+@pytest.mark.parametrize("text", ["%%p0,00", "%%P0.00", "±0,00", "P.F.+0,00", "P.P.F. +0.00"])
+def test_a_level_mark_in_a_text_is_read_whichever_way_it_is_written(text):
+    floor, source = _floor_by_mark(text)
+    assert floor == pytest.approx(0.5, abs=0.01) and source == "quota +0,00"
+
+
+@pytest.mark.parametrize("text", ["2.5-3.0", "2.5.-3.0"])
+def test_the_end_of_a_number_is_no_level_mark(text):
+    floor, source = _floor_by_mark(text)  # a range of sizes, not a level
+    assert floor == pytest.approx(0.0, abs=0.01) and source == "linea di terra"
