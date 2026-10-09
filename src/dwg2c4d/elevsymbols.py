@@ -60,6 +60,7 @@ ARCH_CENTRED = 0.1  # the apex is this close to the middle of the box, as a shar
 NEST_TOL = 0.015  # m: a rectangle this close to the edges of another one lies inside it
 FRAME_BAND = 0.30  # m: a frame is no wider than this around what it holds (more: it is a bay of the wall)
 MERGE_GAP = 0.20  # m: leaves this close are one symbol (the halves of a door, the panels of an entrance)
+TILING_MIN = 0.5  # the leaves of a symbol fill at least this share of the box they span
 ALIGN_TOL = 0.10  # m: leaves of one symbol line up at the top or at the bottom (or at both sides), within this
 NODE_TOL = 0.005  # m: lines ending this close to a corner meet there
 GRID_STEP = 0.001  # m: horizontal and vertical lines are put on this grid before their faces are made
@@ -536,6 +537,8 @@ def _joins(a: _Group, b: _Group, nodes: Nodes) -> bool:
     w, h = max(a.x1, b.x1) - min(a.x0, b.x0), max(a.y1, b.y1) - min(a.y0, b.y0)
     if w > SYMBOL_MAX[0] or h > SYMBOL_MAX[1]:
         return False
+    if sum(m.w * m.h for m in a.members + b.members) < TILING_MIN * w * h:
+        return False  # leaves fill the symbol they make: a loose cluster of boxes (a stair, a section) is not one
     if (len(b.members) > 1 and _within(a, b)) or (len(a.members) > 1 and _within(b, a)):
         return True  # a pane cut in two by a line in front of it
     gx = max(a.x0, b.x0) - min(a.x1, b.x1)

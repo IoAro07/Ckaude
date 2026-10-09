@@ -819,3 +819,72 @@ def test_four_sashes_with_their_glass_hatched_are_one_window_not_a_window_betwee
     _lines(msp, 8, 0, 9, 2.1)
     win = _find(_read(doc), "window", 3.9)
     assert (win.x0, win.x1) == pytest.approx((3.0, 4.8), abs=0.01) and win.full_x is None
+
+
+# --- blocks whose lines are on layer 0 -----------------------------------------------------------------------------
+
+def _block_of_lines(doc, name, w, h):
+    """A block whose rectangle is drawn on layer 0 (which inside a block means: the layer of the reference)."""
+    block = doc.blocks.new(name)
+    for a, b in (((0, 0), (w, 0)), ((w, 0), (w, h)), ((w, h), (0, h)), ((0, h), (0, 0))):
+        block.add_line(a, b, dxfattribs={"layer": "0"})
+
+
+def test_a_window_made_as_a_block_of_layer_zero_lines_is_found():
+    doc, msp = _doc()
+    _facade(msp)
+    doc.layers.add("Quote")
+    _block_of_lines(doc, "BLK120", 1.2, 1.4)
+    msp.add_blockref("BLK120", (3, 1), dxfattribs={"layer": "0"})
+    msp.add_blockref("BLK120", (8, 1), dxfattribs={"layer": "Quote"})
+    _lines(msp, 14, 0, 15, 2.1)
+    res = _read(doc)
+    assert sorted(round(s.x0, 1) for s in res.symbols) == [3.0, 8.0, 14.0]
+
+
+def test_the_level_mark_of_a_block_of_layer_zero_lines_gives_the_floor():
+    doc, msp = _doc()
+    doc.layers.add("Quote")
+    msp.add_line((0, 0.4), (0, 5))
+    msp.add_line((20, 0.4), (20, 5))
+    msp.add_line((-0.5, 5), (20.5, 5))
+    _lines(msp, 3, 1.7, 4.2, 3.0)
+    block = doc.blocks.new("QUOTA")  # the tick and the text of a level mark, on layer 0 inside the block
+    block.add_line((-0.3, 0), (1.0, 0), dxfattribs={"layer": "0"})
+    block.add_text("+0,00", dxfattribs={"height": 0.2, "insert": (0.0, 0.05), "layer": "0"})
+    msp.add_blockref("QUOTA", (21.0, 0.4), dxfattribs={"layer": "Quote"})
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 8.0), "m", 1.0)
+    assert res.floor == pytest.approx(0.4, abs=0.01) and res.floor_source == "quota +0,00"
+
+
+def test_a_plan_still_reads_no_layer_zero_of_a_block():
+    doc, msp = _doc()
+    doc.layers.add("Layer1")
+    leaf = doc.blocks.new("LEAF")  # a door leaf with its swing arc on layer 0, in a block on a layer with no meaning
+    leaf.add_arc((0, 0), 0.9, 0, 90, dxfattribs={"layer": "0"})
+    msp.add_blockref("LEAF", (14, 0), dxfattribs={"layer": "Layer1"})
+    assert read_items(doc, Config(shape_openings=True), area=None, unit="m").items == []
+
+
+def test_layer_zero_of_a_block_is_read_only_for_the_elevations_and_follows_the_layer_of_its_reference():
+    doc, msp = _doc()
+    doc.layers.add("Quote")
+    doc.layers.add("Spenta").off()
+    _block_of_lines(doc, "BLK", 1.2, 1.4)
+    msp.add_blockref("BLK", (3, 1), dxfattribs={"layer": "Quote"})
+    msp.add_blockref("BLK", (8, 1), dxfattribs={"layer": "Spenta"})  # its reference is on a layer that is switched off
+    wanted = read_items(doc, Config(), area=None, ignore_veto=True, keep_other=True, unit="m")
+    assert [(it.category, it.layer) for it in wanted.items] == [("other", "Quote")] * 4
+
+
+def test_a_loose_cluster_of_boxes_is_not_one_opening_and_does_not_swallow_the_window_inside_it():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 4.0, 0.5, 6.5, 1.3)  # a step, whose top goes on past its end ...
+    msp.add_line((3.0, 1.3), (4.0, 1.3))
+    _lines(msp, 6.5, 0.5, 7.2, 3.8)  # ... and a pier beside it: they touch, but leave most of the box they span empty
+    _lines(msp, 4.8, 2.0, 5.8, 3.0)  # a window in the wall above the step
+    res = _read(doc)
+    win = _find(res, "window", 5.3)
+    assert (win.x0, win.x1, win.y0, win.y1) == pytest.approx((4.8, 5.8, 2.0, 3.0), abs=0.01)
+    assert all(s.x1 - s.x0 < 3.0 for s in res.symbols)
