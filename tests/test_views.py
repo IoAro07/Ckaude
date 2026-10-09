@@ -151,6 +151,55 @@ def test_a_tail_of_the_ground_line_does_not_stretch_the_view():
     assert v.size_m(S)[0] < 24
 
 
+def add_hall(msp, w, d, windows=True):
+    """A big plain building: double walls of long lines (each 12 m or more), windows on the two long walls and three doors on
+    the east wall; nothing inside, so the walls run for metres with no drawing near them."""
+    for off in (0, 30):
+        ring = [(off, off), (w - off, off), (w - off, d - off), (off, d - off), (off, off)]
+        for a, b in zip(ring, ring[1:]):
+            msp.add_line(a, b)
+    for k in range(int(w // 500) if windows else 0):
+        for y in (0, d - 30):
+            msp.add_lwpolyline([(250 + k * 500, y), (370 + k * 500, y), (370 + k * 500, y + 30), (250 + k * 500, y + 30)], close=True)
+    for k in range(3):
+        msp.add_arc((w - 30, 200 + k * 300), 90, 90, 180)
+        msp.add_line((w - 30, 200 + k * 300), (w - 120, 200 + k * 300))
+
+
+@pytest.mark.parametrize("w, d", [(3000, 900), (3000, 1500), (3000, 2000), (5000, 1500), (4000, 2500)])
+def test_a_big_plain_hall_is_one_plan_with_the_box_of_all_its_walls(w, d):
+    doc, msp = new_sheet()
+    add_hall(msp, w, d)
+    add_title(msp, "PIANTA PIANO TERRA", 0, -250)
+    add_elevation(msp, w + 2500, 0, w=1400)
+    hall = view_at(views_of(doc), w * S / 2, d * S / 2)
+    assert hall.kind == "plan" and box_m(hall) == pytest.approx((0.0, 0.0, w * S, d * S), abs=0.3)
+    from dwg2c4d import Config
+    from dwg2c4d.autodetect import apply_analysis
+
+    cfg, _ = apply_analysis(doc, Config(), analyze(doc))
+    assert cfg.area[2] - cfg.area[0] > w * S and cfg.area[3] - cfg.area[1] > d * S  # the sheet is not cropped to a part of the hall
+
+
+@pytest.mark.parametrize("w, windows", [(2500, 5), (3000, 5), (4000, 5), (4000, 10)])
+def test_a_long_plain_facade_is_one_view_not_the_pieces_its_long_lines_leave(w, windows):
+    doc, msp = new_sheet()
+    add_elevation(msp, 0, 0, w=w, windows=windows)  # wall, gable and ground line are each 12 m long or more
+    add_title(msp, "PROSPETTO SUD", 0, 600 + 150 + 100)
+    (v,) = views_of(doc)
+    assert v.kind == "elevation" and box_m(v)[2] - box_m(v)[0] > w * S and v.titles == ["PROSPETTO SUD"]
+    assert box_m(v)[3] > 7.4  # the gable (a ridge at 7.5 m, two lines of 12 m) runs beside the top of the wall: part of it
+
+
+def test_the_border_of_a_sheet_that_touches_one_drawing_does_not_become_a_part_of_it():
+    doc, msp = new_sheet()
+    add_plan(msp, 100, 100)  # 1 m from the left and bottom lines of the border
+    add_elevation(msp, 3000, 500, w=1400)  # another drawing, far from the border
+    msp.add_lwpolyline([(0, 0), (5600, 0), (5600, 2400), (0, 2400)], close=True)  # a border of 56 x 24 m: lines of 12 m or more
+    plan = view_at(views_of(doc), 7, 5)
+    assert plan.kind == "plan" and box_m(plan)[2] < 16.5  # not the border, that encloses the elevation too
+
+
 # --- stray marks -------------------------------------------------------------------------------
 
 def test_crop_marks_in_the_corners_do_not_stretch_a_view():

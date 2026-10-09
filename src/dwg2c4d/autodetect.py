@@ -32,7 +32,11 @@ STRAIGHT = 1e-9  # a polyline piece with a smaller bulge than this is a straight
 CELL = 0.5  # m: the size of the cells the sheet is divided in to find the views
 LINK = 1.5  # m: pieces of drawing closer than this are one view; empty space wider than this separates two views
 LONG_LINE = 12.0  # m: a straight line this long (ground line, section mark, border of the sheet, a table) is a ruling
-BARE_RUN = 4.0  # m: ... where it runs through empty space for this long (more than a gap in a drawing) it is cut out
+BARE_RUN = 4.0  # m: ... where it runs through empty space for this long (more than a gap in a drawing) it is cut out...
+END_TOUCH = 0.2  # m: ... unless it is a wall of an outline: a line that ends on lines that run across it at both its ends
+END_ACROSS = 0.17  # (sine of 10 degrees): a line "runs across" another one if the sine of the angle between them is more than this
+OUTLINE_REAL = 2  # ... and the outline does not join this many drawings of its own (a border close to two drawings does)
+MAX_OUTLINES = 2000  # no more long lines than this are looked at to see whether they close an outline
 MIN_VIEW_CELLS = 40  # a piece of fewer cells than this (10 m2 of drawing) is a crumb, not a view
 MIN_VIEW_SIDE = 2.5  # m: a piece thinner than this is a strip of text or a line, not a view
 FLOAT_PAD = 0.001  # m: a view holds what lies this close to its box too (the box is the box of the ink: a hinge sits on its edge)
@@ -70,6 +74,7 @@ NEST_DOORS = 5  # a building drawn in a bigger view has at least this many swing
 NEST_LINK = 10.0  # m: swing doors this close to one another are in the same building
 NEST_MARGIN = 3.0  # m: a building reaches this far beyond its outermost swing doors, at least...
 NEST_TOUCH = 0.15  # m: ... and as far as the walls that end on one another go from the doors (lines that end this close are joined)
+NEST_WALL = 0.5  # m: ... a piece of wall is a line at least this long (the hatches and the furniture in the house are not walls)
 NEST_ORTHO = 0.9  # a view of which more of the lines than this run along two directions is a plan, not a lot with a house on it
 NEST_AREA = 0.3  # a plan in a view takes up less than this share of the box of the view...
 NEST_DENSITY = 1.3  # ... and holds this many times more drawing per square metre than the rest of it
@@ -648,6 +653,67 @@ def _bare_runs(near: np.ndarray, which: np.ndarray, per: float) -> np.ndarray:
     return bare & (np.bincount(run[bare], minlength=run.max() + 1)[run] * per >= BARE_RUN)
 
 
+def _ends_touch(seg: np.ndarray, which: np.ndarray, scale: float) -> np.ndarray:
+    """For each of the lines ``which`` (indices in ``seg``): do both its ends lie on another line that runs across it (the
+    corners of a wall)? A line that ends in the air, like a ground line or the tail of a section mark, does not."""
+    from scipy.spatial import cKDTree
+
+    tol = END_TOUCH / scale
+    length = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
+    unit = (seg[:, 2:] - seg[:, :2]) / np.maximum(length, 1e-12)[:, None]
+    long_ = length * scale >= LONG_LINE
+    short, rulings = np.flatnonzero(~long_), np.flatnonzero(long_)
+    tree = cKDTree((seg[short, :2] + seg[short, 2:]) / 2) if len(short) else None
+    reach = LONG_LINE / scale / 2 + tol  # a line shorter than LONG_LINE has all of its points this close to its middle
+    touches = np.zeros((len(which), 2), bool)
+    for n, i in enumerate(which):
+        for end in (0, 1):
+            p = seg[i, 2 * end:2 * end + 2]
+            near = np.concatenate([short[tree.query_ball_point(p, reach)], rulings]) if tree is not None else rulings
+            near = near[(near != i) & (np.abs(unit[i, 0] * unit[near, 1] - unit[i, 1] * unit[near, 0]) > END_ACROSS)]
+            touches[n, end] = len(near) > 0 and bool((_distance_to_segments(p[0], p[1], seg[near]) <= tol).any())
+    return touches
+
+
+def _closed_outlines(seg: np.ndarray, which: np.ndarray, line: np.ndarray, cut: np.ndarray, ink: np.ndarray, scale: float) -> np.ndarray:
+    """The points of the long lines, cut as bare, that must stay: the walls of an outline. A long wall of a big plain building
+    (a hall of 30 m, a facade of 40 m) runs for metres with no drawing near it, but its ends are on the walls that close
+    the outline, and a person sees one building. A line that is closed like that is kept unless keeping it would join two
+    drawings of their own (a border close to a plan and to an elevation does), would enclose one that it does not touch
+    (the border of the sheet), or would join nothing (the boundary of a lot is a view of its own, made of long lines).
+    ``which``: the line every point is on; ``ink``: the cells with drawing in them."""
+    from scipy.spatial import cKDTree
+
+    candidates = np.unique(which[cut])
+    if len(candidates) > MAX_OUTLINES:
+        return np.zeros(len(line), bool)
+    closed = candidates[_ends_touch(seg, candidates, scale).all(axis=1)]
+    mine = cut & np.isin(which, closed)
+    if not mine.any():
+        return mine
+    cell, reach = CELL / scale, LINK / scale
+    base = np.unique(np.concatenate([ink, _pack(*np.floor(line[~cut] / cell).astype(np.int64).T)]))  # what is not cut
+    extra = _pack(*np.floor(line[mine] / cell).astype(np.int64).T)  # the bare points of the closed lines
+    everything = np.union1d(base, extra)
+    base_xy, all_xy = (_unpack(base) + 0.5) * cell, (_unpack(everything) + 0.5) * cell
+    piece = _components(cKDTree(base_xy), reach) if len(base) else np.empty(0, dtype=int)
+    joined = _components(cKDTree(all_xy), reach)
+    count = np.bincount(piece) if len(piece) else np.zeros(0, dtype=int)
+    boxes, whole = _extent(base_xy, piece, cell / 2), _extent(all_xy, joined, cell / 2)
+    real = {g for g, b in boxes.items() if count[g] >= MIN_VIEW_CELLS and _thick_enough(b, scale)}
+    base_in, extra_in = joined[np.searchsorted(everything, base)], joined[np.searchsorted(everything, extra)]
+    stays = np.zeros(len(everything), bool)  # the cells of the closed lines that stay
+    for t in np.unique(extra_in):
+        held = {int(g) for g in np.unique(piece[base_in == t])}
+        if not held or len(held & real) >= OUTLINE_REAL or any(
+                g not in held and _overlap(boxes[g], whole[int(t)]) >= INSIDE_SHARE * _area(boxes[g]) for g in real):
+            continue
+        stays[np.searchsorted(everything, extra[extra_in == t])] = True
+    keep = np.zeros(len(line), bool)
+    keep[mine] = stays[np.searchsorted(everything, extra)]
+    return keep
+
+
 def _pieces(soup: Soup, scale: float, frames: list[dict]) -> tuple[list[tuple[tuple[float, float, float, float], int, bool]],
                                                                    np.ndarray]:
     """The pieces of drawing of the sheet, each as (box, cells, made of long lines only), and the centres of all the
@@ -672,6 +738,11 @@ def _pieces(soup: Soup, scale: float, frames: list[dict]) -> tuple[list[tuple[tu
     if len(keys) and len(line):
         near = np.isfinite(cKDTree((_unpack(keys) + 0.5) * cell).query(line, distance_upper_bound=LINK / scale)[0])
     cut = _bare_runs(near, which, step * scale)
+    if cut.any() and (walls := _closed_outlines(seg, which, line, cut, keys, scale)).any():
+        # the walls of an outline are drawing: the roof of a long facade, that runs beside the top of it, is not in empty space
+        wall_keys = np.unique(_pack(*np.floor(line[walls] / cell).astype(np.int64).T))
+        near |= np.isfinite(cKDTree((_unpack(wall_keys) + 0.5) * cell).query(line, distance_upper_bound=LINK / scale)[0])
+        cut = _bare_runs(near, which, step * scale) & ~walls
     keys = np.unique(np.concatenate([keys, _pack(*np.floor(line[~cut] / cell).astype(np.int64).T)]))
     centre = (_unpack(keys) + 0.5) * cell
     piece = _components(cKDTree(centre), LINK / scale) if len(centre) else np.empty(0, dtype=int)
@@ -883,7 +954,7 @@ def _walls_around(box: tuple, limit: tuple, soup: Soup, scale: float, hinges: np
     if not by_doors.any():
         return box
     main, _ = _direction(angle[by_doors], length[by_doors])
-    wall = np.abs((angle - main + 45.0) % 90.0 - 45.0) <= ORTHO_TOLERANCE  # along the main direction, or across it
+    wall = (np.abs((angle - main + 45.0) % 90.0 - 45.0) <= ORTHO_TOLERANCE) & (length * scale >= NEST_WALL)  # along it or across
     if not (wall & by_doors).any():
         return box
     w = np.flatnonzero(wall)
