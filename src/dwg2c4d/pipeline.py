@@ -8,7 +8,7 @@ from pathlib import Path
 
 from shapely.geometry.base import BaseGeometry
 
-from .autodetect import analyze, apply_analysis, write_views_image
+from .autodetect import _KIND_IT, analyze, apply_analysis, write_views_image
 from .config import UNIT_TO_METERS, Config
 from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer, read_elevation
 from .export import to_model_dict, write_json
@@ -133,13 +133,28 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
 
     doc = _doc if _doc is not None else open_drawing(input_path, cfg.converter)
     analysis_failed = ""
+    no_plan = False
     if cfg.auto:  # the sheet first: the unit, which view is the plan, which layers are the walls
         try:
             analysis = analyze(doc, lambda layer: layer_used(doc, cfg, layer), cfg.view, cfg.units)
             cfg, _ = apply_analysis(doc, cfg, analysis)
+            no_plan = analysis.plan is None and cfg.area is None and not any(
+                v.kind in ("plan", "?") for v in analysis.views)
         except Exception as exc:  # the analysis is a help: when it fails the layer names and the options decide
             analysis_failed = f"Analisi del foglio non riuscita ({type(exc).__name__}: {exc}): uso i nomi dei layer."
             cfg = replace(cfg, auto=False, analysis_notes=[analysis_failed])
+    if no_plan and len(analysis.views) > 1:  # prospetti, sezioni, una planimetria generale: nessuna pianta di edificio
+        picture = ""
+        if cfg.images:
+            try:
+                picture = f" Guarda {write_views_image(analysis, output_path.with_name(output_path.stem + '_viste.png')).name}."
+            except Exception:  # a picture must never hide the message
+                pass
+        kinds = ", ".join(f"{v.id} ({_KIND_IT.get(v.kind, v.kind)})" for v in analysis.views)
+        raise ConversionError(
+            f"Il foglio ha {len(analysis.views)} viste ma nessuna e' la pianta di un edificio: {kinds}.{picture} Se la pianta "
+            "e' dentro la planimetria generale indica la sua zona con --area x0,y0,x1,y1 (o --vista N per scegliere "
+            "una vista); per leggere il disegno cosi' com'e' usa --no-analisi.")
     found = storeys(doc)
     if cfg.floor is not None and found and cfg.floor not in found:
         raise ConversionError(f"Il piano {cfg.floor} non esiste: i layer nominano i piani "

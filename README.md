@@ -274,23 +274,35 @@ si tiene la facciata dove la maggior parte dei simboli incontra un'apertura. Poi
   (la larghezza utile è quella del vetro, non delle persiane);
 - la **quota zero** (pavimento) viene da una quota scritta (`+0,00`, `±0.00`, `P.P.F.`), altrimenti dal fondo della porta
   più bassa, dalla linea di terra o dal punto di inserimento di una figura umana; se il prospetto mostra più piani
-  (`+3,20`, solai) si usa il piano della pianta (`PIANO TERRA`, `PIANO PRIMO` nel titolo; senza titolo il terreno);
+  (`+3,20`, solai) si usa il piano della pianta (`PIANO TERRA`, `PIANO PRIMO`, `1° PIANO`, `PIANO 2` nel titolo; senza
+  titolo il terreno, e un avviso lo dice quando il prospetto mostra più piani); una pianta interrata non prende nulla
+  dai prospetti;
 - **dove sta il nord** del foglio si ricava dai prospetti con un titolo che dice il lato (`PROSPETTO NORD`) e che
   si abbinano senza ambiguità; poi i titoli risolvono i prospetti la cui fila di finestre starebbe bene su due
   facciate (case simmetriche, finestre a passo regolare). Una pianta ruotata sul foglio funziona;
 - un prospetto che **non corrisponde a nessuna facciata** viene lasciato stare con un avviso (e così le sezioni, o un
-  prospetto in un'altra scala); due prospetti della stessa facciata (stato di fatto e di progetto) non si
+  prospetto in un'altra scala, o di un altro edificio: la larghezza del disegno deve stare tra la metà e due volte e
+  mezzo l'edificio lungo quella facciata); due prospetti della stessa facciata (stato di fatto e di progetto) non si
   sovrappongono: vale il migliore;
+- un'apertura che sta nel muro **dell'altra parte** (libera dal lato opposto, murata da questo) conta nel confronto ma
+  non prende le quote da questo prospetto: ci pensa il prospetto del suo muro;
+- tra file di finestre a passo regolare, a parità di abbinamento, vince la lettura in cui anche porte e finestre
+  coincidono;
 - se le finestre del prospetto salgono più in alto dei muri in uso e l'altezza dei muri è quella predefinita, **l'altezza
   dei muri** viene presa dal prospetto: dall'interpiano se il prospetto mostra il piano sopra, altrimenti dalla linea
-  che chiude il muro in alto (`Altezza muri: ... (dalla linea di gronda dei prospetti)`). Un'altezza scritta o indicata
-  non si cambia mai;
+  che chiude il muro in alto (`Altezza muri: ... (dai prospetti: altezza di interpiano o linea di gronda)`), ma solo da
+  un prospetto di cui il programma è sicuro (`alta`) o da due che dicono la stessa altezza; due piani uno sopra l'altro
+  senza quote dei piani non la danno. Un'altezza scritta o indicata non si cambia mai;
 - le altezze dei **colmi** arrivano dai prospetti nord e sud (orizzontali), come per quelli in proiezione.
 
 Il riepilogo dice per ogni prospetto la facciata, quante aperture sono state abbinate, la quota zero e la sicurezza
 (`alta`/`media`); `NOME_viste.png` scrive accanto a ogni vista a quale facciata è stata abbinata. Servono almeno **3
 aperture abbinate** (meno è un caso): una pianta senza aperture riconosciute (come un inquadramento col solo
-tetto della casa) non ha nulla da confrontare, e il programma lo dice invece di inventare.
+tetto della casa) non ha nulla da confrontare, e il programma lo dice invece di inventare. Se nel foglio **non c'è
+nessuna pianta** di edificio (solo prospetti, sezioni, una planimetria generale) la conversione si ferma con un messaggio
+che dice cosa ha trovato e come scegliere (`--area`, `--vista N`, `--no-analisi`) invece di produrre un modello senza
+senso; la planimetria generale non diventa un edificio. Quando il lato del prospetto (`sud`, `nord`…) non è confermato
+da nessun titolo, il riepilogo avverte che è nel riferimento del disegno (nord = alto).
 
 **Tetto**: si costruisce da solo dalle linee del layer `Tetto`/`Roof`/`Copertura` (o `--layer-tetto`): contorno, colmi,
 displuvi e compluvi, disegnati sul piano del tetto. `--no-tetto` lo evita; `--tetto` lo richiede e avvisa se il layer

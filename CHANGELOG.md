@@ -19,7 +19,15 @@ decomprimi il progetto in una **cartella nuova** e controlla che la versione sia
   annidati, campiture di vetro, ante e persiane), quota del pavimento da `+0,00`/porta/linea di terra/figura, piani
   da quote e solai (`elevsymbols.py`).
 - **Altezza dei muri dal prospetto** quando quella in uso (predefinita) non contiene le finestre del prospetto:
-  interpiano o linea di gronda.
+  interpiano o linea di gronda; solo da un prospetto sicuro o da due che concordano; gli infissi dei prospetti allineati
+  seguono l'altezza nuova.
+- **Revisione indipendente** del confronto: le aperture del muro opposto non prendono quote dal prospetto sbagliato, i
+  tipi (porta/finestra) risolvono i pareggi tra campate, piani interrati e titoli `1° PIANO`/`PIANO 2`, linea di
+  gronda vicina alle finestre, due piani sovrapposti senza quote, larghezza del prospetto contro l'edificio, lato
+  dichiarato nel riferimento del disegno quando il nord non si sa, un errore nel confronto non ferma più la conversione.
+- **Foglio senza pianta** (solo prospetti, sezioni, planimetria generale): messaggio chiaro con `NOME_viste.png`
+  invece di un modello senza senso.
+- Giardino: niente più oltre 25 m dalla pianta (o dal lotto in cui è disegnata).
 - **Viste del foglio** molto più robuste sulle tavole vere: cornici del foglio e dei titoli, linee lunghe e segni
   isolati che non uniscono più due disegni, titoli sopra o sotto il disegno, piante dentro l'inquadramento (copie
   riconosciute dai testi e dalle linee), tipo dal contenuto, riquadro = quello del disegno.

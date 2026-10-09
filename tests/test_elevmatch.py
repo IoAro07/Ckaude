@@ -8,6 +8,7 @@ from shapely.geometry import Polygon
 
 from dwg2c4d import convert
 from dwg2c4d.config import Config
+from dwg2c4d.dwgfile import ConversionError
 from dwg2c4d.elevation import Symbol
 from types import SimpleNamespace
 
@@ -439,3 +440,23 @@ def test_aligned_openings_follow_the_wall_height_when_an_elevation_raises_it(tmp
     assert report.wall_height == pytest.approx(4.95) and report.wall_height_source == "prospetto"
     south = [o for o in report.openings if o.kind == "window" and o.center[1] < 3 and o.from_elevation]
     assert south and all(o.z1 == pytest.approx(3.2) for o in south)  # the aligned windows reach 3.2 m, not the old 2.7
+
+
+def test_a_sheet_with_elevations_and_no_plan_says_so_instead_of_converting_junk(tmp_path):
+    doc = ezdxf.new("R2018", setup=True)
+    doc.units = 5
+    for name in ("FINESTRE", "PORTE", "TESTI"):
+        doc.layers.add(name)
+    msp = doc.modelspace()
+    for x, title in ((0, "PROSPETTO SUD"), (2500, "PROSPETTO NORD")):
+        _rect(msp, x, 0, x + 1000, 600, "0")
+        for c, w in S_ROW:
+            _rect(msp, x + c - w / 2, 90, x + c + w / 2, 220, "FINESTRE")
+        _rect(msp, x + 450, 0, x + 540, 210, "PORTE")
+        msp.add_line((x - 50, 0), (x + 1050, 0), dxfattribs={"layer": "0"})
+        msp.add_text(title, height=20, dxfattribs={"layer": "TESTI", "insert": (x + 350, -150)})
+    path = tmp_path / "only_elevations.dxf"
+    doc.saveas(path)
+    with pytest.raises(ConversionError, match="nessuna e' la pianta di un edificio"):
+        convert(path, tmp_path / "x.obj", Config(auto=True, images=True))
+    assert (tmp_path / "x_viste.png").exists()  # the sheet as understood: the way to choose
