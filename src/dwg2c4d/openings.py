@@ -53,6 +53,7 @@ class Opening:
     axis: tuple[float, float] = (1.0, 0.0)  # unit vector along the wall
     center: tuple[float, float] = (0.0, 0.0)  # middle of the opening, on the wall's mid-plane
     from_elevation: bool = False  # z0/z1 were read from an elevation drawing
+    z1_drawn: float | None = None  # the top of the symbol in that elevation, above the floor (z1 is that cut at the wall height)
     # What the fixtures and the openings table need:
     id: str = ""
     width: float = 0.0  # along the wall (m)

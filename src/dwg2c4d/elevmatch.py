@@ -16,8 +16,11 @@ from __future__ import annotations
 
 import math
 import re
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field, replace
 
+import numpy as np
+import shapely
 from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
@@ -39,10 +42,15 @@ MIN_MARGIN = 0.6  # the best facade must lead the next one that says something e
 SAME_HEIGHT = 0.05  # m: two readings of the same opening this close are the same height
 READ_PADDING = 0.5  # m: an elevation is read this much beyond the box of its ink (views are at least 1.5 m apart)
 EAVES_SHARE = 0.8  # the line that closes the wall at the top runs along this much of the facade at least
-EAVES_ABOVE = 0.3  # m: ... and lies this much above the highest window or door of the view
+EAVES_ABOVE = 0.05  # m: ... and lies above the highest window or door of the view (by more than the drawing noise)
 EAVES_RANGE = (2.2, 12.0)  # m above the floor: a wall height that makes sense
 HIDE_DISTANCE = 25.0  # m: an opening with a wall in front of it within this distance probably does not face the outside
 HIDDEN_WEIGHT = 0.6  # ...so a pair with it counts this much (walls drawn on the plan are not always the building alone)
+SAME_STOREY = 0.15  # m: two elevations that give the height of the storey this close agree
+STACK_X = 0.1  # m: symbols whose centres are this close are one column (the windows of two storeys one above the other)
+MAX_SHIFTS = 1500  # candidate shifts tried per facade: the best supported ones (a facade of 80 openings stays quick)
+EXTENT_REJECT = (0.5, 2.5)  # the width of the elevation against the building along the facade: outside it is another drawing
+EXTENT_SURE = (0.75, 1.5)  # ...inside it the match can be 'alta'
 TITLE_BONUS = 1.0  # a title that says the side of the facade (SUD, NORD...) breaks a tie, once the sheet's north is known
 NORTH_TOLERANCE = 25.0  # degrees: the facade a title points to is the one this close to the expected direction
 
@@ -55,7 +63,7 @@ TITLE_SIDES = {
     "ovest": ("OVEST", "WEST", "OCCIDENTALE"),
 }
 STOREY_WORDS = (  # (storey index, words): which floor a plan view shows
-    (0, ("PIANO TERRA", "PIANTA TERRA", "GROUND FLOOR", "PT")),
+    (0, ("PIANO TERRA", "PIANTA TERRA", "PIANO RIALZATO", "GROUND FLOOR", "PT")),
     (1, ("PIANO PRIMO", "PRIMO PIANO", "FIRST FLOOR", "P1")),
     (2, ("PIANO SECONDO", "SECONDO PIANO", "SECOND FLOOR", "P2")),
     (3, ("PIANO TERZO", "TERZO PIANO", "THIRD FLOOR", "P3")),
@@ -70,6 +78,7 @@ class FacadeOpening:
     width: float
     depth: float  # m along the outward normal: the outermost opening of a slot is the one the elevation shows
     exposure: float = 1.0  # 1 when nothing is built in front of it, HIDDEN_WEIGHT when a wall is
+    away: bool = False  # it is in the wall that faces the other way (free on that side, walled on this one): this facade is its back
 
 
 @dataclass
@@ -114,11 +123,17 @@ class Pair:
     opening: Opening
     residual: float  # m
     exposure: float = 1.0
+    away: bool = False  # the opening faces the other way: it is counted in the match, but its height is not taken from here
+
+    @property
+    def same_kind(self) -> bool:
+        return self.symbol.kind == self.opening.kind
 
     @property
     def weight(self) -> float:
         """1 for a symbol at the very place of the opening and as wide as it, less as it is off, of another width, or
-        paired with an opening that has a wall in front of it."""
+        paired with an opening that has a wall in front of it. (The kinds are not weighed: a window the plan took for a
+        door is common. They only settle a tie, see ``_best_shift``.)"""
         wide = self.symbol.x1 - self.symbol.x0
         like = min(wide, self.opening.width) / max(wide, self.opening.width, 1e-9)
         return max(0.0, 1.0 - (self.residual / CENTRE_TOLERANCE) ** 2) * (0.6 + 0.4 * like) * self.exposure
@@ -135,10 +150,17 @@ class ElevationMatch:
     significance: float
     confidence: str  # alta | media
     by_title: bool = False
+    extent: float | None = None  # width of the elevation over the width of the building along the facade
 
     @property
     def matched(self) -> int:
         return len(self.pairs)
+
+    @property
+    def settable(self) -> list[Pair]:
+        """The pairs whose opening this facade is the front of: an opening in the wall on the other side faces away from
+        it, and the elevation of that wall is the one to say its height."""
+        return [p for p in self.pairs if not p.away]
 
     @property
     def residual(self) -> float:
@@ -162,8 +184,10 @@ def _exposure(o: Opening, normal: tuple[float, float], walls: BaseGeometry | Non
 def facades_of(openings: list[Opening], walls: BaseGeometry | None = None) -> list[Facade]:
     """Every orientation of the walls that carry openings gives two facades (one for each way the wall may face). All the
     openings of the orientation are listed; those with a wall in front of them (``walls``: the walls of the plan) count
-    less. Where two are at the same place along the facade the outermost is the one a symbol is paired with."""
-    usable = [o for o in openings if o.kind in ("door", "window") and o.keep and o.width > 0.2]
+    less, and those that are free on the other side only (they are in the wall that faces the other way) are marked
+    ``away``. Where two are at the same place along the facade the outermost is the one a symbol is paired with."""
+    usable = [o for o in openings if o.kind in ("door", "window") and o.keep and o.width > 0.2
+              and all(math.isfinite(v) for v in (*o.center, *o.axis, o.width, o.thickness))]
     angles: list[list[float]] = []  # orientation clusters: [mean angle, weight]
     for o in usable:
         a = math.atan2(o.axis[1], o.axis[0]) % math.pi
@@ -181,13 +205,16 @@ def facades_of(openings: list[Opening], walls: BaseGeometry | None = None) -> li
         chosen = [o for o in usable
                   if abs((math.atan2(o.axis[1], o.axis[0]) % math.pi - angle + math.pi / 2) % math.pi - math.pi / 2)
                   <= AXIS_TOLERANCE]
+        normals = {sign: (-u[1] * sign, u[0] * sign) for sign in (1.0, -1.0)}  # a wall along u faces one way or the other
+        seen = {sign: [_exposure(o, normals[sign], walls) for o in chosen] for sign in normals}
         for sign in (1.0, -1.0):
-            n = (-u[1] * sign, u[0] * sign)  # the normal of a wall along u, one way or the other
+            n = normals[sign]
             f = Facade(n)
             r = f.run
             f.openings = sorted((FacadeOpening(o, o.center[0] * r[0] + o.center[1] * r[1], o.width,
-                                               o.center[0] * n[0] + o.center[1] * n[1], _exposure(o, n, walls))
-                                 for o in chosen), key=lambda fo: fo.t)
+                                               o.center[0] * n[0] + o.center[1] * n[1], here,
+                                               away=here < 1.0 and there == 1.0)
+                                 for o, here, there in zip(chosen, seen[sign], seen[-sign])), key=lambda fo: fo.t)
             top = max((fo.exposure for fo in f.openings), default=1.0)
             if 0.0 < top < 1.0:  # walls in front of all of them (the plan holds more than the building): none is more hidden
                 for fo in f.openings:
@@ -204,19 +231,23 @@ def _compatible(symbol_width: float, plan_width: float) -> bool:
             and symbol_width <= plan_width * WIDTH_MORE + WIDTH_EXTRA)
 
 
-def _pair_up(symbols: list[Symbol], facade: Facade, shift: float) -> list[Pair]:
+def _pair_up(symbols: list[Symbol], facade: Facade, shift: float, ts: list[float] | None = None) -> list[Pair]:
     """One-to-one pairs at this shift, the best residuals first; of several openings at the same place (one behind the
-    other) the outermost is the one the elevation shows."""
+    other) the outermost is the one the elevation shows. ``ts``: the positions of the openings along the facade."""
+    if ts is None:
+        ts = [fo.t for fo in facade.openings]
     cands: list[tuple[float, int, int]] = []
     for i, s in enumerate(symbols):
         centre = (s.x0 + s.x1) / 2.0 + shift
-        for j, fo in enumerate(facade.openings):
+        for j in range(bisect_left(ts, centre - CENTRE_TOLERANCE), bisect_right(ts, centre + CENTRE_TOLERANCE)):
+            fo = facade.openings[j]
             res = centre - fo.t
             if abs(res) > CENTRE_TOLERANCE:
                 continue
             if not _compatible(s.x1 - s.x0, fo.width):
                 continue
-            cands.append((abs(res) - 1e-4 * fo.depth - 1e-3 * fo.exposure, i, j))  # equal: the outer, the exposed one wins
+            kind = 0.0 if s.kind == fo.opening.kind else 0.02  # equal residuals: the opening of the same kind
+            cands.append((abs(res) + kind - 1e-4 * fo.depth - 1e-3 * fo.exposure, i, j))  # then the outer, the exposed one
     cands.sort()
     used_s: set[int] = set()
     used_o: set[int] = set()
@@ -227,7 +258,7 @@ def _pair_up(symbols: list[Symbol], facade: Facade, shift: float) -> list[Pair]:
         used_s.add(i)
         used_o.add(j)
         s, fo = symbols[i], facade.openings[j]
-        pairs.append(Pair(s, fo.opening, (s.x0 + s.x1) / 2.0 + shift - fo.t, fo.exposure))
+        pairs.append(Pair(s, fo.opening, (s.x0 + s.x1) / 2.0 + shift - fo.t, fo.exposure, fo.away))
     return pairs
 
 
@@ -240,7 +271,8 @@ def _expected(symbols: int, facade: Facade) -> float:
 
 
 def _best_shift(symbols: list[Symbol], facade: Facade) -> tuple[float, list[Pair]] | None:
-    """The shift along the facade that pairs the most symbols with openings (the lowest residuals on a tie)."""
+    """The shift along the facade that pairs the most symbols with openings (the most agreeing kinds, then the lowest
+    residuals, on a tie)."""
     shifts: list[float] = []
     for s in symbols:
         centre = (s.x0 + s.x1) / 2.0
@@ -250,19 +282,25 @@ def _best_shift(symbols: list[Symbol], facade: Facade) -> tuple[float, list[Pair
     if not shifts:
         return None
     shifts.sort()
-    candidates: list[float] = []
-    for v in shifts:  # one candidate per cluster of shifts closer than 3 cm
-        if not candidates or v - candidates[-1] > 0.03:
-            candidates.append(v)
-    best: tuple[tuple[float, float], float, list[Pair]] | None = None
-    for shift in candidates:
-        pairs = _pair_up(symbols, facade, shift)
+    clusters: list[list[float]] = []  # [first shift, how many]: one candidate per cluster of shifts closer than 3 cm
+    for v in shifts:
+        if not clusters or v - clusters[-1][0] > 0.03:
+            clusters.append([v, 1.0])
+        else:
+            clusters[-1][1] += 1.0
+    if len(clusters) > MAX_SHIFTS:  # the best supported ones (a shift that two pairs ask for beats one that one pair asks for)
+        clusters = sorted(sorted(clusters, key=lambda c: -c[1])[:MAX_SHIFTS], key=lambda c: c[0])
+    ts = [fo.t for fo in facade.openings]
+    best: tuple[tuple[float, int, float], float, list[Pair]] | None = None
+    for first, _ in clusters:
+        pairs = _pair_up(symbols, facade, first, ts)
         if not pairs:
             continue
         # refine on the pairs found (the first shift came from one pair only), then look again
-        shift = shift - sum(p.residual for p in pairs) / len(pairs)
-        pairs = _pair_up(symbols, facade, shift)
-        key = (sum(p.weight for p in pairs), -sum(abs(p.residual) for p in pairs))
+        shift = first - sum(p.residual for p in pairs) / len(pairs)
+        pairs = _pair_up(symbols, facade, shift, ts)
+        key = (round(sum(p.weight for p in pairs), 2), sum(p.same_kind for p in pairs),
+               -round(sum(abs(p.residual) for p in pairs), 6))
         if best is None or key > best[0]:
             best = (key, shift, pairs)
     return (best[1], best[2]) if best else None
@@ -278,13 +316,24 @@ def title_side(title: str) -> str | None:
     return None
 
 
-def storey_of(title: str) -> int:
-    """The floor a plan view shows, from its title ('PIANTA PIANO PRIMO' -> 1); the ground floor when it does not say."""
+def storey_stated(title: str) -> int | None:
+    """The floor a plan view shows when its title says it ('PIANTA PIANO PRIMO', '1° PIANO', 'PIANO 2' -> 1, 1, 2), else
+    None."""
     up = " ".join(re.split(r"[^A-Z0-9\-]+", title.upper()))
     for storey, words in STOREY_WORDS:
         if any(re.search(rf"(?<![A-Z0-9]){re.escape(w)}(?![A-Z0-9])", up) for w in words):
             return storey
-    return 0
+    text = title.upper()
+    # a digit alone, not a scale (1:100) or a measure: '1° PIANO', '1 PIANO', 'PIANO 1', 'PIANO 2°'
+    found = (re.search(r"(?<![\d:.,/])([1-4])\s*[°ºª]?\s*PIANO(?![A-Z])", text)
+             or re.search(r"(?<![A-Z])PIANO\s*([1-4])\s*[°ºª]?(?![\d:.,/])", text))
+    return int(found.group(1)) if found else None
+
+
+def storey_of(title: str) -> int:
+    """The floor a plan view shows ('PIANTA PIANO PRIMO' -> 1); the ground floor when the title does not say."""
+    stated = storey_stated(title)
+    return 0 if stated is None else stated
 
 
 def _apart(a: float, b: float) -> float:
@@ -297,7 +346,7 @@ def match_symbols(symbols: list[Symbol], facades: list[Facade], title: str = "",
     """The facade (and the shift) that the symbols of an elevation fit best, or None when no facade fits convincingly.
     ``rotation``: how far the plan is turned from north up (see ``Facade.side_of``), when known: then a title that says
     SUD or NORD points to the facade that looks that way, and wins a tie."""
-    symbols = [s for s in symbols if s.x1 - s.x0 > 0.05]
+    symbols = [s for s in symbols if s.x1 - s.x0 > 0.05 and all(math.isfinite(v) for v in (s.x0, s.x1, s.y0, s.y1))]
     if len(symbols) < 1 or not facades:
         return None
     side = title_side(title) if title else None
@@ -348,9 +397,10 @@ def _same_story(a: ElevationMatch, b: ElevationMatch) -> bool:
 
 def apply_match(match: ElevationMatch, floor: float, cfg: Config, warnings: list[str]) -> int:
     """Set z0/z1 of the paired openings from their symbols (``floor``: the y of the finished floor in the elevation).
-    An opening already set from a better elevation is left as it is. Returns how many were set."""
+    An opening already set from a better elevation is left as it is, and so is one that faces the other way (the
+    elevation of its own wall says its height). Returns how many were set."""
     done = 0
-    for p in match.pairs:
+    for p in match.settable:
         o, s = p.opening, p.symbol
         if o.from_elevation:
             continue
@@ -361,6 +411,7 @@ def apply_match(match: ElevationMatch, floor: float, cfg: Config, warnings: list
         if z1 - z0 < 0.2:
             continue
         o.z0, o.z1, o.from_elevation = z0, z1, True
+        o.z1_drawn = s.y1 - floor
         o.src["height"] = "prospetto"
         o.src["sill"] = "prospetto"
         done += 1
@@ -380,8 +431,11 @@ def _touches(a: tuple[float, float, float, float], b: tuple[float, float, float,
 
 def _storey_band(vs: ViewSymbols, storey: int) -> tuple[list[Symbol], float | None, str]:
     """The symbols that belong to the storey of the plan, and the y of its floor. An elevation that shows several storeys
-    gives each its band (from its floor to the next one); one that does not says nothing about the upper floors."""
-    if vs.levels and 0 <= storey < len(vs.levels):
+    gives each its band (from its floor to the next one); one that does not says nothing about the upper floors. (An
+    elevation says nothing about a storey below the ground either.)"""
+    if storey < 0:
+        return [], None, ""
+    if vs.levels and storey < len(vs.levels):
         floor = vs.levels[storey]
         top = vs.levels[storey + 1] if storey + 1 < len(vs.levels) else math.inf
         band = [s for s in vs.symbols if floor - 0.2 <= s.y0 < top - 0.2]
@@ -389,6 +443,23 @@ def _storey_band(vs: ViewSymbols, storey: int) -> tuple[list[Symbol], float | No
     if storey > 0:
         return [], None, ""
     return vs.symbols, vs.floor, vs.floor_source
+
+
+def _unstack(symbols: list[Symbol]) -> tuple[list[Symbol], bool]:
+    """Without level marks the storeys of an elevation cannot be told apart, and the windows of two storeys one above the
+    other would compete for the same opening of the plan: the lowest of a column is the ground floor's. Returns the
+    symbols left and whether any column was stacked."""
+    kept: list[Symbol] = []
+    stacked = False
+    for s in sorted(symbols, key=lambda s: s.y0):
+        c = (s.x0 + s.x1) / 2.0
+        below = [k for k in kept if abs((k.x0 + k.x1) / 2.0 - c) <= STACK_X]
+        if below:
+            stacked = stacked or s.y0 >= min(k.y1 for k in below) - 0.05
+            continue
+        kept.append(s)
+    kept.sort(key=lambda s: s.x0)
+    return kept, stacked
 
 
 def _roof_elevation(match: ElevationMatch, vs: ViewSymbols, floor: float) -> Elevation | None:
@@ -410,7 +481,7 @@ def _eaves(vs: ViewSymbols, floor: float, band: list[Symbol], span: float) -> fl
     highest door or window that runs along most of the facade (the roof stands on it, or the parapet ends there). None
     when the view has no such line."""
     top = max(s.y1 for s in band) - floor + EAVES_ABOVE
-    wide = [y - floor for y, x0, x1 in vs.hlines if x1 - x0 >= EAVES_SHARE * span and y - floor >= top]
+    wide = [y - floor for y, x0, x1 in vs.hlines if x1 - x0 >= EAVES_SHARE * span and y - floor > top]
     height = min(wide) if wide else None
     return height if height is not None and EAVES_RANGE[0] <= height <= EAVES_RANGE[1] else None
 
@@ -418,8 +489,11 @@ def _eaves(vs: ViewSymbols, floor: float, band: list[Symbol], span: float) -> fl
 def _storey_height(vs: ViewSymbols, floor: float, storey: int, band: list[Symbol], span: float) -> float | None:
     """Height of the walls of the storey of the plan: from its floor to the next one when the elevation shows the next
     one, else to the line that closes the wall at the top."""
+    if storey < 0:
+        return None
     if vs.levels and storey + 1 < len(vs.levels):
-        return vs.levels[storey + 1] - vs.levels[storey]
+        height = vs.levels[storey + 1] - vs.levels[storey]
+        return height if EAVES_RANGE[0] <= height <= EAVES_RANGE[1] else None
     return _eaves(vs, floor, band, span)
 
 
@@ -443,6 +517,40 @@ def _north_of_the_sheet(readings: list[tuple[ElevationMatch, str]]) -> float | N
     return math.degrees(math.atan2(y, x)) % 360.0
 
 
+@dataclass
+class _Read:
+    """An elevation of the sheet with what was read from it."""
+
+    view: object
+    label: str
+    vs: ViewSymbols
+    band: list[Symbol]  # the symbols of the storey of the plan
+    floor: float | None
+    source: str
+    stacked: bool = False  # several storeys one above the other, and no level marks to tell them apart
+
+
+def _extent_along(points: np.ndarray | None, run: tuple[float, float]) -> float | None:
+    """How far the walls of the plan reach along a direction (the length of the building seen from that facade)."""
+    if points is None or not len(points):
+        return None
+    along = points[:, 0] * run[0] + points[:, 1] * run[1]
+    return float(along.max() - along.min())
+
+
+def _fit_extent(match: ElevationMatch, width: float, length: float | None) -> ElevationMatch | None:
+    """A match must also fit the drawing: an elevation much wider or narrower than the building along that facade is
+    another building, or a detail (None). ``width``: of the elevation; ``length``: of the building along the facade."""
+    if length is None or length <= 0.0:
+        return match
+    match.extent = width / length
+    if not EXTENT_REJECT[0] <= match.extent <= EXTENT_REJECT[1]:
+        return None
+    if match.confidence == "alta" and not EXTENT_SURE[0] <= match.extent <= EXTENT_SURE[1]:
+        match.confidence = "media"
+    return match
+
+
 def match_views(doc, cfg: Config, analysis, openings: list[Opening], walls: BaseGeometry, unit: str,
                 unit_scale: float, taken: list[tuple[float, float, float, float]],
                 warnings: list[str]) -> tuple[list[Elevation], list[dict], float | None]:
@@ -462,9 +570,16 @@ def match_views(doc, cfg: Config, analysis, openings: list[Opening], walls: Base
                   and not _inside(v.bbox, plan.bbox, 1.0 / unit_scale) and not any(_touches(v.bbox, z) for z in taken)]
     if not candidates:
         return [], [], None
+    stated = storey_stated(" ".join(plan.titles))
+    storey = 0 if stated is None else stated
+    if storey < 0:
+        for v in candidates:
+            v.matched = "la pianta e' interrata: i prospetti non ne danno le quote"
+        warnings.append("La pianta mostra un piano interrato: i prospetti non danno le quote delle sue aperture.")
+        return [], [], None
     facades = facades_of(openings, walls)
-    storey = storey_of(" ".join(plan.titles))
-    ready: list[tuple[object, str, ViewSymbols, list[Symbol], float | None, str]] = []  # view, label, symbols...
+    points = shapely.get_coordinates(walls) if walls is not None and not walls.is_empty else None
+    ready: list[_Read] = []
     for v in candidates:
         label = f"Prospetto della vista {v.id}" + (f" ({v.titles[0]})" if v.titles else "")
         if not facades:
@@ -474,60 +589,96 @@ def match_views(doc, cfg: Config, analysis, openings: list[Opening], walls: Base
         vs = read_view_symbols(doc, cfg, (v.bbox[0] - pad, v.bbox[1] - pad, v.bbox[2] + pad, v.bbox[3] + pad), unit,
                                unit_scale)
         band, floor, source = _storey_band(vs, storey)
+        stacked = False
+        if not vs.levels and storey == 0:
+            band, stacked = _unstack(band)
         if not band:
             v.matched = "nessun simbolo di porta o finestra riconosciuto"
             warnings.append(f"{label}: nessuna porta o finestra riconosciuta"
                             + (" per il piano della pianta" if storey else "") + ".")
             continue
-        ready.append((v, label, vs, band, floor, source))
-    alone = [match_symbols(band, facades) for _, _, _, band, _, _ in ready]
-    rotation = _north_of_the_sheet([(m, title_side(" ".join(v.titles))) for m, (v, *_rest) in zip(alone, ready)
-                                    if m is not None and title_side(" ".join(v.titles))])
-    found: list[tuple[ElevationMatch, ViewSymbols, float, str, object, str]] = []
-    for (v, label, vs, band, floor, source), first in zip(ready, alone):
-        match = match_symbols(band, facades, " ".join(v.titles), rotation) if rotation is not None else first
+        if stacked:
+            warnings.append(f"{label}: mostra piu' piani uno sopra l'altro ma senza le quote dei piani: per il piano "
+                            "terra uso la fila piu' bassa, e l'altezza dei muri non la ricavo da questo prospetto.")
+        ready.append(_Read(v, label, vs, band, floor, source, stacked))
+    if stated is None and any(len(r.vs.levels) > 1 for r in ready):
+        warnings.append("Il titolo della pianta non dice a che piano e': per i prospetti assumo il piano terra "
+                        "(scrivi 'PIANO PRIMO' o '1 PIANO' nel titolo della pianta se non lo e').")
+
+    def check(match: ElevationMatch | None, rd: _Read) -> ElevationMatch | None:
+        if match is None:
+            return None
+        return _fit_extent(match, (rd.view.bbox[2] - rd.view.bbox[0]) * unit_scale,
+                           _extent_along(points, match.facade.run))
+
+    alone = [check(match_symbols(rd.band, facades), rd) for rd in ready]
+    rotation = _north_of_the_sheet([(m, title_side(" ".join(rd.view.titles))) for m, rd in zip(alone, ready)
+                                    if m is not None and title_side(" ".join(rd.view.titles))])
+    found: list[tuple[ElevationMatch, _Read, str]] = []
+    for rd, first in zip(ready, alone):
+        v = rd.view
+        title = " ".join(v.titles)
+        match = first
+        if rotation is not None and title_side(title):  # the title now points to a facade: it may settle a tie
+            match = check(match_symbols(rd.band, facades, title, rotation), rd)
         side_name = match.facade.side_of(rotation or 0.0) if match is not None else ""
         if match is None:
-            v.matched = f"nessuna facciata corrisponde ({len(band)} simboli)"
-            warnings.append(f"{label}: la fila delle sue {len(band)} aperture non corrisponde a nessuna facciata della "
+            v.matched = f"nessuna facciata corrisponde ({len(rd.band)} simboli)"
+            warnings.append(f"{rd.label}: la fila delle sue {len(rd.band)} aperture non corrisponde a nessuna facciata della "
                             "pianta (disegnata in un'altra scala, o non e' una facciata, o la pianta ha aperture diverse).")
             continue
-        if floor is None:
+        if rd.floor is None:
             v.matched = f"facciata {side_name}, ma senza la quota del pavimento"
-            warnings.append(f"{label}: e' la facciata {side_name} ({match.matched} aperture abbinate) ma non ho "
+            warnings.append(f"{rd.label}: e' la facciata {side_name} ({match.matched} aperture abbinate) ma non ho "
                             "trovato la quota del pavimento: indica '+0,00' nel prospetto o disegna una porta.")
             continue
-        found.append((match, vs, floor, source, v, side_name))
+        found.append((match, rd, side_name))
     elevations: list[Elevation] = []
     report: list[dict] = []
     claimed: dict[int, int] = {}  # id of an opening -> the view that set it
     ordered = sorted(found, key=lambda f: -f[0].score)
-    # the height of the walls, when the elevations say that the one in use is too low for their windows
+    # the height of the walls, when the elevations say that the one in use is too low for their windows: from the elevations
+    # that are sure of their facade, or from two that agree
     new_height = None
     if cfg.wall_height_auto:
-        heights = [h for match, vs, floor, source, v, side_name in ordered
-                   if max(p.symbol.y1 for p in match.pairs) - floor > cfg.wall_height - 0.1
-                   and (h := _storey_height(vs, floor, storey, [p.symbol for p in match.pairs],
-                                            match.facade.span + 1.0)) is not None]
-        if heights:
-            new_height = sorted(heights)[len(heights) // 2]
+        heights: list[tuple[bool, float]] = []  # (sure of its facade, the height of the storey it shows)
+        reached = False  # a window or door of an elevation stands higher than the walls in use
+        for match, rd, side_name in ordered:
+            pairs = match.settable
+            if rd.stacked or not pairs:
+                continue
+            reached = reached or max(p.symbol.y1 for p in pairs) - rd.floor > cfg.wall_height - 0.1
+            h = _storey_height(rd.vs, rd.floor, storey, [p.symbol for p in pairs], match.facade.span + 1.0)
+            if h is not None and h > 0.0:
+                heights.append((match.confidence == "alta", h))
+        pool = [h for sure, h in heights if sure]
+        if not pool:  # no elevation is sure of its facade: two that show the same storey height are
+            pool = max(([h for _, h in heights if abs(h - c) <= SAME_STOREY] for _, c in heights), key=len, default=[])
+            pool = pool if len(pool) >= 2 else []
+        if reached and pool:
+            new_height = sorted(pool)[len(pool) // 2]
             cfg = replace(cfg, wall_height=new_height, wall_height_auto=False)
-    for match, vs, floor, source, v, side_name in ordered:
-        again = [claimed[id(p.opening)] for p in match.pairs if id(p.opening) in claimed]
-        if len(again) >= 0.5 * len(match.pairs):  # the same openings were already set by a better elevation
+    for match, rd, side_name in ordered:
+        v = rd.view
+        pairs = match.settable
+        if not pairs:
+            v.matched = f"facciata {side_name}, ma le aperture abbinate guardano dall'altra parte"
+            continue
+        again = [claimed[id(p.opening)] for p in pairs if id(p.opening) in claimed]
+        if again and len(again) >= 0.5 * len(pairs):  # the same openings were already set by a better elevation
             v.matched = f"facciata {side_name}, gia' abbinata alla vista {again[0]}"
             warnings.append(f"Prospetto della vista {v.id}: corrisponde alla stessa facciata ({side_name}) della vista "
                             f"{again[0]}, che l'ha gia' usata: e' una sezione o un'altra versione dello stesso prospetto.")
             continue
-        done = apply_match(match, floor, cfg, warnings)
-        for p in match.pairs:
+        done = apply_match(match, rd.floor, cfg, warnings)
+        for p in pairs:
             claimed.setdefault(id(p.opening), v.id)
         v.matched = f"facciata {side_name}, {match.matched} di {match.symbols}"
-        roof = _roof_elevation(match, vs, floor)
+        roof = _roof_elevation(match, rd.vs, rd.floor)
         if roof is not None:
             elevations.append(roof)
         report.append({"side": side_name, "label": side_name, "view": v.id, "matched": done,
-                       "total": match.symbols, "zero_source": source or "indicata",
+                       "total": match.symbols, "zero_source": rd.source or "indicata",
                        "confidence": match.confidence, "residual": match.residual, "title_hint": match.by_title,
-                       "north_known": rotation is not None})
+                       "north_known": rotation is not None, "extent": match.extent})
     return elevations, report, new_height

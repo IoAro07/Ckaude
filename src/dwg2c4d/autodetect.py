@@ -99,6 +99,7 @@ DOOR_RADIUS = (0.55, 1.40)  # m: the radius of a swing arc
 DIMENSION_RANGE = (0.5, 15.0)  # m: where the median of the dimension values of a plan should lie
 TEXT_HEIGHT = (0.05, 0.60)  # m: where the median height of the texts of a drawing should lie
 CORE_RANGE = (1.5, 1500.0)  # m: the size of the dense core of the sheet, at least, at most (several drawings fit in it)
+GARDEN_REACH = 25.0  # m: a garden does not lie farther than this from the plan (or from the lot it is drawn in)
 OVERRIDE_MARGIN = 1.0  # the header is overruled only by a unit that leads by this many votes
 
 # the words that say what a view is, strongest first (the text is upper-cased and stripped of punctuation)
@@ -1476,6 +1477,13 @@ def apply_analysis(doc, cfg, a: Analysis, rules=None) -> tuple["Config", list[st
         x0, y0, x1, y1 = a.plan.bbox
         change["area"] = (x0 - margin, y0 - margin, x1 + margin, y1 + margin)
         change["area_auto"] = True
+        if cfg.garden_area is None and cfg.garden_reach is None:
+            # a garden lies around its house, not on the other side of the sheet: the lot the plan is drawn in (when the
+            # plan lies inside a bigger drawing) or a few tens of metres around it
+            host = next((w for w in a.views if w.id == a.plan.parent), None)
+            gx0, gy0, gx1, gy1 = host.bbox if host is not None else a.plan.bbox
+            reach = GARDEN_REACH / a.unit.scale
+            change["garden_reach"] = (gx0 - reach, gy0 - reach, gx1 + reach, gy1 + reach)
     elif a.plan is None and len(a.views) > 1 and cfg.view is None:
         notes.append("Il foglio ha piu' viste e non ho capito quale sia la pianta: indicala con --vista N "
                      "(guarda l'immagine *_viste.png).")

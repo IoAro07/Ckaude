@@ -38,7 +38,7 @@ def summary_lines(report) -> list[str]:
     if report.passages:
         out.append(f"  Vani senza simbolo : {report.passages} (dedotti dai muri: verifica nella tabella)")
     src = {"scritta": "dalla scritta 'h' nei locali", "indicata": "indicata", "predefinita": "predefinita",
-           "prospetto": "dalla linea di gronda dei prospetti"}
+           "prospetto": "dai prospetti: altezza di interpiano o linea di gronda"}
     out.append(f"  Altezza muri       : {report.wall_height:g} m ({src[report.wall_height_source]})")
     if report.labels:
         out.append(f"  Scritte            : quote lette per {report.labels} aperture su "
@@ -49,11 +49,15 @@ def summary_lines(report) -> list[str]:
         out.append(f"  Locale             : {room['name']}  {room['area_m2']:.1f} m2{height}{mark}")
     for ev in report.elevations:
         side = {"south": "sud", "north": "nord"}.get(ev["side"], ev["side"])
-        zero = {"porta": "dal fondo della porta", "indicata": "indicata"}.get(ev["zero_source"], ev["zero_source"])
+        zero = {"porta": "dal fondo della porta", "indicata": "indicata", "quota +0,00": "dal segno di quota",
+                "linea di terra": "dalla sommita' della linea di terra", "blocco figura": "dai piedi della figura umana",
+                "quota del piano": "dalla quota del piano"}.get(ev["zero_source"], ev["zero_source"])
         found = f", trovato da solo sul layer {ev['found_on']}" if ev.get("found_on") else ""
         if ev.get("view"):  # an elevation that is not in line with the plan: matched by the row of its windows
             found = (f", vista {ev['view']} abbinata alla facciata dal confronto delle aperture "
                      f"(affidabilita' {ev['confidence']}, scarto medio {ev['residual'] * 100:.0f} cm)")
+            if not ev.get("north_known", True):
+                found += "; il lato e' nel riferimento del disegno (nord = alto), il foglio non lo conferma"
         out.append(f"  Prospetto {side:<5}    : {ev['matched']} di {ev['total']} aperture con le quote del "
                    f"prospetto (quota zero {zero}{found})")
     if report.roof:

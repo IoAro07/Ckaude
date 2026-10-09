@@ -9,8 +9,12 @@ from shapely.geometry import Polygon
 from dwg2c4d import convert
 from dwg2c4d.config import Config
 from dwg2c4d.elevation import Symbol
-from dwg2c4d.elevmatch import (_north_of_the_sheet, apply_match, facades_of, match_symbols, storey_of,
-                               title_side)
+from types import SimpleNamespace
+
+import numpy as np
+
+from dwg2c4d.elevmatch import (_best_shift, _eaves, _extent_along, _fit_extent, _north_of_the_sheet, _storey_band, _storey_height, _unstack,
+                               apply_match, facades_of, match_symbols, storey_of, storey_stated, title_side)
 from dwg2c4d.openings import Opening
 
 
@@ -157,8 +161,17 @@ def test_titles_and_storeys():
     assert title_side("PROSPETTO SUD") == "sud" and title_side("Prospetto nord-est") == "nord"
     assert title_side("PROSPETTO FRONTALE") is None and title_side("SEZIONE A-A") is None
     assert storey_of("PLANIMETRIA PIANO TERRA") == 0 and storey_of("PIANTA PIANO PRIMO") == 1
-    assert storey_of("PIANTA 1° PIANO") == 0 and storey_of("") == 0
+    assert storey_of("PIANTA 1° PIANO") == 1 and storey_of("") == 0
     assert storey_of("PIANTA PIANO SECONDO") == 2 and storey_of("PIANTA SEMINTERRATO") == -1
+
+
+def test_a_storey_is_read_from_a_digit_but_not_from_a_scale_or_a_measure():
+    assert [storey_of(t) for t in ("PIANTA PIANO 1", "PIANTA 2° PIANO", "PIANO 1° - SCALA 1:100", "1 PIANO")] == [1, 2, 1, 1]
+    assert storey_of("PIANTA PIANO RIALZATO") == 0 and storey_stated("PIANTA PIANO RIALZATO") == 0
+    # scales and measures are no storeys; the ground floor is only assumed when the title says nothing
+    assert storey_stated("PIANTA SCALA 1:50 PIANO TERRA") == 0
+    assert storey_stated("PIANTA 1:100") is None and storey_stated("SCALA 1:5 PIANTA") is None
+    assert storey_stated("PIANTA 12 PIANO") is None and storey_stated("") is None
 
 
 def test_apply_match_sets_the_sill_and_the_height_from_the_floor():
@@ -196,7 +209,8 @@ def _rect(msp, x0, y0, x1, y1, layer):
     msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
 
 
-def sheet_with_free_elevations(path, with_north=True, turn_plan=False, tall=False):
+def sheet_with_free_elevations(path, with_north=True, turn_plan=False, tall=False, title="PIANTA PIANO TERRA",
+                               aligned_south=False):
     """A 10 x 6 m plan (cm) and, 40 m to the right, the south elevation (windows 90-220 above the ground) and, further
     right, the north one (drawn from outside: its x runs from east to west; windows 110-240)."""
     doc = ezdxf.new("R2018", setup=True)
@@ -219,23 +233,35 @@ def sheet_with_free_elevations(path, with_north=True, turn_plan=False, tall=Fals
     for c, w in N_ROW:
         plan_rect(c - w / 2, 570, c + w / 2, 600, "FINESTRE")
     plan_rect(N_DOOR[0] - 45, 570, N_DOOR[0] + 45, 600, "PORTE")
-    msp.add_text("PIANTA PIANO TERRA", height=20,
+    msp.add_text(title, height=20,
                  dxfattribs={"layer": "TESTI", "insert": (350, -150) if not turn_plan else (150, 350)})
     # the south elevation: x as in the plan plus 4000; ground at y = -3000
     ground = -3000
-    for c, w in S_ROW:
-        _rect(msp, c + 4000 - w / 2, ground + (200 if tall else 90), c + 4000 + w / 2, ground + (300 if tall else 220),
-              "FINESTRE")
-    if tall:  # the line that closes the wall at the top: 4.95 m above the floor, along the whole facade
-        msp.add_line((3970, ground + 495), (5030, ground + 495), dxfattribs={"layer": "0"})
-    _rect(msp, S_DOOR[0] + 4000 - 45, ground, S_DOOR[0] + 4000 + 45, ground + 210, "PORTE")
-    msp.add_line((3900, ground), (5100, ground), dxfattribs={"layer": "0"})
-    msp.add_text("PROSPETTO SUD", height=20, dxfattribs={"layer": "TESTI", "insert": (4350, ground - 150)})
+    if aligned_south:  # ... or straight below the plan, as before, on a layer that says what it is
+        doc.layers.add("Prospetto Sud")
+        below = -1500
+        for c, w in S_ROW:
+            _rect(msp, c - w / 2, below + 90, c + w / 2, below + 320, "FINESTRE")
+        _rect(msp, S_DOOR[0] - 45, below, S_DOOR[0] + 45, below + 210, "PORTE")
+        msp.add_lwpolyline([(-30, below), (1030, below), (1030, below + 500), (-30, below + 500)], close=True,
+                           dxfattribs={"layer": "Prospetto Sud"})
+    else:
+        for c, w in S_ROW:
+            _rect(msp, c + 4000 - w / 2, ground + (200 if tall else 90), c + 4000 + w / 2,
+                  ground + (300 if tall else 220), "FINESTRE")
+        if tall:  # the line that closes the wall at the top: 4.95 m above the floor, along the whole facade
+            msp.add_line((3970, ground + 495), (5030, ground + 495), dxfattribs={"layer": "0"})
+        _rect(msp, S_DOOR[0] + 4000 - 45, ground, S_DOOR[0] + 4000 + 45, ground + 210, "PORTE")
+        msp.add_line((3900, ground), (5100, ground), dxfattribs={"layer": "0"})
+        msp.add_text("PROSPETTO SUD", height=20, dxfattribs={"layer": "TESTI", "insert": (4350, ground - 150)})
     if with_north:  # the north elevation: left to right is east to west: x_e = 12000 - x_plan
+        top = 300 if aligned_south and tall else 240
         for c, w in N_ROW:
-            _rect(msp, 12000 - c - w / 2, ground + 110, 12000 - c + w / 2, ground + 240, "FINESTRE")
+            _rect(msp, 12000 - c - w / 2, ground + 110, 12000 - c + w / 2, ground + top, "FINESTRE")
         _rect(msp, 12000 - N_DOOR[0] - 45, ground, 12000 - N_DOOR[0] + 45, ground + 210, "PORTE")
         msp.add_line((10900, ground), (12100, ground), dxfattribs={"layer": "0"})
+        if aligned_south and tall:
+            msp.add_line((10970, ground + 495), (12030, ground + 495), dxfattribs={"layer": "0"})
         msp.add_text("PROSPETTO NORD", height=20, dxfattribs={"layer": "TESTI", "insert": (11350, ground - 150)})
     doc.saveas(path)
     return path
@@ -320,3 +346,96 @@ def test_the_wall_height_written_or_given_is_never_replaced_by_the_elevation(tmp
     assert report.wall_height == 3.2 and report.wall_height_source == "indicata"
     windows = [o for o in report.openings if o.from_elevation and o.kind == "window"]
     assert all(o.z1 == pytest.approx(3.0) for o in windows)
+
+
+# --- the review: faces away, kinds, storeys, eaves, columns ------------------------------------
+
+def test_an_opening_in_the_wall_that_faces_the_other_way_is_not_set_by_this_elevation():
+    ops = house()
+    facades = facades_of(ops, walls_of_the_house())
+    south = next(f for f in facades if f.side == "sud")
+    away = [fo for fo in south.openings if fo.opening.center[1] == 6.0]
+    assert away and all(fo.away for fo in away) and not any(fo.away for fo in south.openings if fo.opening.center[1] == 0.0)
+    # the row of the south wall, and one more symbol that stands where a north window is (x = 760: F with t = 7.6 -> 2.0)
+    extra = [x for x, _ in NORTH][0]
+    drawn = symbols([x + 50.0 for x, _ in SOUTH], [w for _, w in SOUTH], y0=1.0, y1=2.4) + \
+        symbols([extra + 50.0], [0.9], y0=0.3, y1=1.0)
+    found = match_symbols(drawn, [south])
+    assert found is not None
+    taken = [p.opening for p in found.pairs]
+    north_window = next(fo.opening for fo in away if abs(fo.t - extra) < 1e-6)
+    assert north_window in taken  # it fits the row, and counts towards the match...
+    assert apply_match(found, floor=0.0, cfg=Config(wall_height=3.0), warnings=[]) == 4
+    assert not north_window.from_elevation and len(found.settable) == 4  # ...but is not set from this elevation
+
+
+def test_the_kinds_break_the_tie_between_bays_of_a_periodic_row():
+    # windows every 2.5 m with one door; the elevation shows 'W D W W' with the first bay hidden behind a tree
+    kinds = ["window", "window", "door", "window", "window", "window"]
+    ops = [opening(k, 1.0 + 2.5 * i, 0.0, 0.9) for i, k in enumerate(kinds)]
+    drawn = [Symbol(k, 1.0 + 2.5 * (i + 1) - 0.45 + 100, 1.0 + 2.5 * (i + 1) + 0.45 + 100, 0.0, 2.1)
+             for i, k in enumerate(kinds[1:5])]
+    found = _best_shift(drawn, next(f for f in facades_of(ops) if f.side == "sud"))
+    assert found is not None
+    shift, pairs = found
+    assert all(p.symbol.kind == p.opening.kind for p in pairs) and len(pairs) == 4
+    assert shift == pytest.approx(-100.0, abs=1e-6)  # symbols stand 100 m to the right of the plan, the first bay lost
+
+
+def test_a_plan_below_the_ground_takes_nothing_from_the_elevations(tmp_path):
+    path = sheet_with_free_elevations(tmp_path / "base.dxf", title="PIANTA PIANO INTERRATO")
+    report = convert(path, tmp_path / "b.obj", Config(auto=True))
+    assert not any(o.from_elevation for o in report.openings) and not report.elevations
+    assert report.wall_height > 0
+    assert any("interrato" in w for w in report.warnings)
+
+
+def test_storey_below_the_ground_has_no_band_and_no_height():
+    vs = SimpleNamespace(levels=[0.0, 3.0], symbols=symbols([1.0], [1.0]), floor=0.0, floor_source="porta", hlines=[])
+    assert _storey_band(vs, -1) == ([], None, "")
+    assert _storey_height(vs, 0.0, -1, vs.symbols, 10.0) is None
+
+
+def test_the_eaves_line_is_the_first_long_line_above_the_windows_even_when_close():
+    band = symbols([1.0, 3.0], [1.0, 1.0], y0=1.0, y1=2.7)
+    vs = SimpleNamespace(hlines=[(2.9, 0.0, 8.0), (4.6, 0.0, 8.0)])  # the eaves 0.2 m above the window tops, then the ridge
+    assert _eaves(vs, 0.0, band, 8.0) == pytest.approx(2.9)
+    vs = SimpleNamespace(hlines=[(2.7, 0.0, 8.0), (4.6, 0.0, 8.0)])  # a line AT the window tops is their lintel, not the eaves
+    assert _eaves(vs, 0.0, band, 8.0) == pytest.approx(4.6)
+
+
+def test_symbols_of_two_storeys_one_above_the_other_without_level_marks_keep_the_lowest():
+    ground = symbols([1.0, 3.0, 5.0], [0.9] * 3, y0=0.9, y1=2.1)
+    upper = symbols([1.02, 3.0, 5.04], [0.9] * 3, y0=3.9, y1=5.1)
+    kept, stacked = _unstack(ground + upper)
+    assert stacked and [round(s.y0, 1) for s in kept] == [0.9] * 3
+    kept, stacked = _unstack(ground)
+    assert not stacked and len(kept) == 3
+
+
+def test_a_wall_height_needs_a_sure_facade_or_two_elevations_that_agree(tmp_path):
+    # a single elevation that is only 'media' may not move the wall height; one 'alta' may (the tall test above)
+    path = sheet_with_free_elevations(tmp_path / "tall3.dxf", with_north=False, tall=True)
+    report = convert(path, tmp_path / "h3.obj", Config(auto=True))
+    assert any(ev["confidence"] == "alta" for ev in report.elevations) == (report.wall_height_source == "prospetto")
+
+
+def test_an_elevation_of_another_size_than_the_building_is_not_its_facade():
+    ops = [opening("window", x, 0.0, w) for x, w in SOUTH]
+    found = match_symbols(symbols([x + 50.0 for x, _ in SOUTH], [w for _, w in SOUTH]), facades_of(ops))
+    assert found is not None
+    length = _extent_along(np.array([(0.0, 0.0), (10.3, 0.0), (10.3, 6.0)]), found.facade.run)
+    assert length == pytest.approx(10.3)
+    assert _fit_extent(found, 3.1 * length, length) is None and _fit_extent(found, 0.4 * length, length) is None
+    found.confidence = "alta"
+    assert _fit_extent(found, 1.2 * length, length).confidence == "alta"
+    assert _fit_extent(found, 1.9 * length, length).confidence == "media"  # the right drawing is that wide, but it is doubtful
+    assert _fit_extent(found, 5.0, None) is found  # the building is not known: nothing is judged
+
+
+def test_aligned_openings_follow_the_wall_height_when_an_elevation_raises_it(tmp_path):
+    path = sheet_with_free_elevations(tmp_path / "mixed.dxf", with_north=True, tall=True, aligned_south=True)
+    report = convert(path, tmp_path / "m.obj", Config(auto=True))
+    assert report.wall_height == pytest.approx(4.95) and report.wall_height_source == "prospetto"
+    south = [o for o in report.openings if o.kind == "window" and o.center[1] < 3 and o.from_elevation]
+    assert south and all(o.z1 == pytest.approx(3.2) for o in south)  # the aligned windows reach 3.2 m, not the old 2.7

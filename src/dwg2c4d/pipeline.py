@@ -240,12 +240,14 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         found_zones = find_elevation_zones(everything.items, solid.bounds, result.unit_scale, cores=True)
         specs = [(zone, layers) for layers, zone, _ in found_zones]
         garden_zones = [core for _, _, core in found_zones]
+    read_zones: list[tuple[float, float, float, float]] = []  # the zones that gave an elevation, read in line with the plan
     for i, (spec, found_on) in enumerate(specs):
         er = read_items(doc, cfg, area=tuple(spec[:4]), ignore_veto=True, keep_other=True,
                         unit=result.unit)
         ev = read_elevation(er.items, spec, result.unit_scale, solid.bounds, warnings, i)
         if ev is None:
             continue
+        read_zones.append(tuple(spec[:4]))
         elevations.append(ev)
         matched, total = apply_elevation(ev, openings, solid, cfg, warnings)
         elevation_report.append({"side": ev.side, "matched": matched, "total": total,
@@ -253,14 +255,20 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
 
     unaligned_views: list[tuple[float, float, float, float]] = []
     if cfg.analysis is not None and cfg.elevations_auto and not cfg.elevations:
-        taken = [tuple(spec[:4]) for spec, _ in specs]  # read in line with the plan above
-        more, more_report, height = match_views(doc, cfg, cfg.analysis, openings, solid, result.unit,
-                                                result.unit_scale, taken, warnings)
+        try:
+            more, more_report, height = match_views(doc, cfg, cfg.analysis, openings, solid, result.unit,
+                                                    result.unit_scale, read_zones, warnings)
+        except Exception as exc:  # the elevations drawn elsewhere are a help: never the reason a conversion fails
+            more, more_report, height = [], [], None
+            warnings.append(f"Prospetti non allineati alla pianta non usati ({type(exc).__name__}: {exc}).")
         elevations.extend(more)
         elevation_report.extend(more_report)
         if height is not None:  # the windows of the elevations reach higher than the walls in use: the elevation knows
             cfg = replace(cfg, wall_height=height, wall_height_auto=False)
             wall_height_source = "prospetto"
+            for o in openings:  # what an elevation in line with the plan cut at the old height can now reach higher
+                if o.from_elevation and o.z1_drawn is not None and o.z1_drawn > o.z1:
+                    o.z1 = min(height, o.z1_drawn)
         unaligned_views = [v.bbox for v in cfg.analysis.views if v.kind in ("elevation", "section", "roof", "detail")
                            and v is not cfg.analysis.plan]
 

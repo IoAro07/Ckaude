@@ -152,6 +152,7 @@ def apply_elevation(elev: Elevation, openings: list[Opening], walls: BaseGeometr
         if z1 - z0 < 0.2:
             continue
         o.z0, o.z1, o.from_elevation = z0, z1, True
+        o.z1_drawn = sym.y1 - elev.zero
         matched += 1
     unmatched = len(elev.symbols) - matched
     if unmatched:
