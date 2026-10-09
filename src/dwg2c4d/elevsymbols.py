@@ -31,14 +31,13 @@ import copy
 import math
 import re
 import weakref
-from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
 import shapely
 from ezdxf import bbox as ezbbox
 from ezdxf.document import Drawing
-from shapely.geometry import LineString, Polygon, box
+from shapely.geometry import LineString, MultiLineString, Polygon, box
 from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 
@@ -63,6 +62,8 @@ FRAME_BAND = 0.30  # m: a frame is no wider than this around what it holds (more
 MERGE_GAP = 0.20  # m: leaves this close are one symbol (the halves of a door, the panels of an entrance)
 ALIGN_TOL = 0.10  # m: leaves of one symbol line up at the top or at the bottom (or at both sides), within this
 NODE_TOL = 0.005  # m: lines ending this close to a corner meet there
+GRID_STEP = 0.001  # m: horizontal and vertical lines are put on this grid before their faces are made
+OUTWARD = 0.1  # a line leaves a corner outwards if its direction (a unit vector) points this far out of the rectangle
 MIN_FREE_CORNERS = 2  # a real opening is outlined by its own lines: at least this many of its 4 corners are bare
 BAY_MIN = 1.0  # m: an empty rectangle this wide and tall, with fewer bare corners, is a bay of the wall; the panes of a
 #                window with mullions have lines that go on at every corner too, but they are narrow
@@ -198,6 +199,9 @@ class _Group:
     free: int = 4  # bare corners of the whole symbol
 
 
+Nodes = dict[tuple[int, int], list[tuple[float, float]]]  # where lines end (rounded) -> the directions they leave in
+
+
 @dataclass
 class _Linework:
     """The lines of the view and what they enclose."""
@@ -205,8 +209,9 @@ class _Linework:
     lines: list[LineString]  # cut to the view
     faces: list[Polygon]  # the faces of the planar graph of the lines
     outlines: list[Polygon]  # closed polylines and hatches: complete even where other lines cross them
-    nodes: Counter  # where lines end, by rounded position: a corner with more than two ends is a junction
+    nodes: Nodes  # where lines end, by rounded position, and the directions they leave in
     arrows: list[tuple[float, float]]  # corners of the filled triangles that are arrowheads of dimension lines
+    grid: list[Polygon] = field(default_factory=list)  # faces of the horizontal and vertical lines alone, if others exist
 
 
 # --- openings from the shapes ---------------------------------------------------------------------------------
@@ -228,6 +233,45 @@ def _lines(items: list[Item], area: tuple[float, float, float, float]) -> list[L
     return [g for g in cut if g.geom_type == "LineString" and not g.is_empty]
 
 
+def _nodes(pieces: list[LineString]) -> Nodes:
+    """Where the pieces of the noded lines end, and the direction (a unit vector) each one leaves in."""
+    nodes: Nodes = {}
+    for first, second in ((0, 1), (-1, -2)):
+        at = shapely.get_coordinates(shapely.get_point(pieces, first))
+        way = shapely.get_coordinates(shapely.get_point(pieces, second)) - at
+        length = np.hypot(way[:, 0], way[:, 1])
+        for i, j, dx, dy in zip(np.round(at[:, 0] / NODE_TOL).astype(int).tolist(),
+                                np.round(at[:, 1] / NODE_TOL).astype(int).tolist(),
+                                (way[:, 0] / np.where(length > 0, length, 1)).tolist(),
+                                (way[:, 1] / np.where(length > 0, length, 1)).tolist()):
+            nodes.setdefault((i, j), []).append((dx, dy))
+    return nodes
+
+
+def _grid(lines: list[LineString]) -> list[Polygon]:
+    """The faces of the horizontal and vertical lines alone that oblique lines run across. The opening marks of a sash
+    (V, X) cut it into triangles in the planar graph of all the lines, and the sash is a face of the straight ones only.
+    The lines are put on a millimetre grid first: the ends of lines meant to meet differ by less than that."""
+    straight: list[LineString] = []
+    oblique: list[LineString] = []
+    for ls in lines:
+        c = np.asarray(ls.coords)
+        step = np.abs(np.diff(c, axis=0))
+        flat = (step[:, 0] < HORIZONTAL_TOL) | (step[:, 1] < HORIZONTAL_TOL)
+        if flat.all():
+            straight.append(ls)
+            continue
+        straight.extend(LineString(c[k:k + 2]) for k in np.flatnonzero(flat & (step.sum(axis=1) > 0)))
+        oblique.extend(LineString(c[k:k + 2]) for k in np.flatnonzero(~flat))
+    if not straight or not oblique:
+        return []
+    faces = np.array(list(polygonize(unary_union(shapely.set_precision(MultiLineString(straight), GRID_STEP)))),
+                     dtype=object)
+    middles = shapely.line_interpolate_point(np.array(oblique, dtype=object), 0.5, normalized=True)
+    face_i, piece_i = STRtree(middles).query(faces, predicate="contains")  # an oblique line runs inside the face
+    return list(faces[np.unique(face_i)])
+
+
 def _linework(items: list[Item], area: tuple[float, float, float, float]) -> _Linework:
     lines = _lines(items, area)
     outlines = [g for it in items for p in it.prims for g in getattr(p.geom, "geoms", [p.geom])
@@ -235,24 +279,24 @@ def _linework(items: list[Item], area: tuple[float, float, float, float]) -> _Li
     arrows = [(x, y) for g in outlines if len({(round(x, 3), round(y, 3)) for x, y in g.exterior.coords}) == 3
               and max(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1]) <= ARROW_MAX for x, y in g.exterior.coords]
     if not lines:
-        return _Linework([], [], outlines, Counter(), arrows)
+        return _Linework([], [], outlines, {}, arrows)
     noded = unary_union(lines)
-    pieces = list(getattr(noded, "geoms", [noded]))
-    ends = np.vstack([shapely.get_coordinates(shapely.get_point(pieces, i)) for i in (0, -1)])
-    nodes = Counter(zip(np.round(ends[:, 0] / NODE_TOL).astype(int).tolist(),
-                        np.round(ends[:, 1] / NODE_TOL).astype(int).tolist()))
-    return _Linework(lines, list(polygonize(noded)), outlines, nodes, arrows)
+    return _Linework(lines, list(polygonize(noded)), outlines, _nodes(list(getattr(noded, "geoms", [noded]))), arrows,
+                     _grid(lines))
 
 
-def _bare(x: float, y: float, nodes: Counter) -> bool:
-    """A corner where no more than its own two sides meet (no line goes on past it)."""
+def _junction(x: float, y: float, sx: int, sy: int, nodes: Nodes) -> bool:
+    """A line goes on past the corner (x, y) of a rectangle that lies towards (sx, sy) from it: one that leaves it
+    outwards, not along the two sides of the rectangle or into it (the mark of a sash, a diagonal brace)."""
     i, j = round(x / NODE_TOL), round(y / NODE_TOL)
-    return sum(nodes.get((i + di, j + dj), 0) for di in (-1, 0, 1) for dj in (-1, 0, 1)) <= 2
+    return any(dx * sx < -OUTWARD or dy * sy < -OUTWARD
+               for di in (-1, 0, 1) for dj in (-1, 0, 1) for dx, dy in nodes.get((i + di, j + dj), ()))
 
 
-def _bare_corners(x0: float, y0: float, x1: float, y1: float, nodes: Counter) -> int:
+def _bare_corners(x0: float, y0: float, x1: float, y1: float, nodes: Nodes) -> int:
     """How many of the 4 corners of a rectangle are not a junction with a line that goes on past them."""
-    return sum(_bare(x, y, nodes) for x, y in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)))
+    return sum(not _junction(x, y, sx, sy, nodes) for x, y, sx, sy in
+               ((x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1)))
 
 
 def _is_strip(b: _Box) -> bool:
@@ -358,7 +402,7 @@ def _is_dimension(b: _Box, arrows: list[tuple[float, float]]) -> bool:
 def _boxes(lw: _Linework, heads: list[Head]) -> list[_Box]:
     """Rectangles and arches of the drawing, from the faces of its linework and from its closed outlines."""
     found: dict[tuple, _Box] = {}
-    for poly, drawn in [(g, True) for g in lw.outlines] + [(g, False) for g in lw.faces]:  # an outline is whole where
+    for poly, drawn in [(g, True) for g in lw.outlines] + [(g, False) for g in lw.faces + lw.grid]:  # an outline is whole where
         b = _box_of(poly, drawn)  # a line in front cuts the face it encloses
         if b is not None and not _is_dimension(b, lw.arrows):
             b.free = _bare_corners(b.x0, b.y0, b.x1, b.y1, lw.nodes)
@@ -430,7 +474,7 @@ def _within(p: _Group, q: _Group) -> bool:
             and p.y0 >= q.y0 - ALIGN_TOL and p.y1 <= q.y1 + ALIGN_TOL)
 
 
-def _shares(a: _Group, b: _Group, side_by_side: bool, nodes: Counter) -> bool:
+def _shares(a: _Group, b: _Group, side_by_side: bool, nodes: Nodes) -> bool:
     """Along the touching side one piece lies within the extent of the other and they share an end. Pieces one above the
     other must be alike (a window and the wall under it are not one symbol). If they share only one end, both must be
     plain and the shorter one cut at the other end, away from the other piece, by a line that goes on (a piece of sash
@@ -448,13 +492,15 @@ def _shares(a: _Group, b: _Group, side_by_side: bool, nodes: Counter) -> bool:
         return side_by_side or _plain(a) == _plain(b)
     if not (at_lo or at_hi) or not (_plain(a) and _plain(b)):
         return False
-    end = lo if at_hi else hi
+    end, inward = (lo, 1) if at_hi else (hi, -1)  # the end where the shorter piece is cut, and where it lies from it
     if side_by_side:  # the corner away from the other piece: the one beside it is a junction with it, whatever it is
-        return not _bare(a.x0 if a.x0 + a.x1 < b.x0 + b.x1 else a.x1, end, nodes)
-    return not _bare(end, a.y0 if a.y0 + a.y1 < b.y0 + b.y1 else a.y1, nodes)
+        left = a.x0 + a.x1 < b.x0 + b.x1
+        return _junction(a.x0 if left else a.x1, end, 1 if left else -1, inward, nodes)
+    bottom = a.y0 + a.y1 < b.y0 + b.y1
+    return _junction(end, a.y0 if bottom else a.y1, inward, 1 if bottom else -1, nodes)
 
 
-def _joins(a: _Group, b: _Group, nodes: Counter) -> bool:
+def _joins(a: _Group, b: _Group, nodes: Nodes) -> bool:
     """Two pieces of one symbol: they touch (or one lies within a symbol already made of several pieces) and line up."""
     w, h = max(a.x1, b.x1) - min(a.x0, b.x0), max(a.y1, b.y1) - min(a.y0, b.y0)
     if w > SYMBOL_MAX[0] or h > SYMBOL_MAX[1]:
@@ -468,7 +514,7 @@ def _joins(a: _Group, b: _Group, nodes: Counter) -> bool:
     return -0.03 <= gy <= MERGE_GAP and _shares(a, b, False, nodes)
 
 
-def _merge(frames: list[_Box], nodes: Counter) -> list[_Group]:
+def _merge(frames: list[_Box], nodes: Nodes) -> list[_Group]:
     """Frames that touch and line up (the leaves of a door, the panels of an entrance) are one symbol. Strips are left
     alone: a step or a ledge under a window is not a leaf of it."""
     strips = [_Group([f], f.x0, f.y0, f.x1, f.y1, f.arched) for f in frames if _is_strip(f)]

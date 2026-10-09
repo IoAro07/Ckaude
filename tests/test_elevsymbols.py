@@ -710,3 +710,45 @@ def test_a_mark_under_the_floor_does_not_hide_the_slab_between_two_rows_of_openi
     res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 8.0), "m", 1.0)
     assert res.floor == pytest.approx(0.0, abs=0.01) and res.floor_source == "quota +0,00"
     assert res.levels == pytest.approx([0.0, 3.2], abs=0.01)
+
+
+# --- opening marks on the sashes -----------------------------------------------------------------------------------
+
+def _two_sashes_with_marks(msp, outline, mark, x0=3.0, y0=1.0, x1=4.2, y1=2.4):
+    """A window of two sashes whose opening marks (V towards the free side, or X) run to the corners."""
+    (_lines if outline == "lines" else _ring)(msp, x0, y0, x1, y1)
+    xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
+    msp.add_line((xm, y0), (xm, y1))
+    for a, b in ((x0, xm), (xm, x1)):
+        if mark == "V":
+            hinge, free = (a, b) if a == x0 else (b, a)
+            msp.add_line((hinge, y0), (free, ym))
+            msp.add_line((hinge, y1), (free, ym))
+        else:
+            msp.add_line((a, y0), (b, y1))
+            msp.add_line((a, y1), (b, y0))
+
+
+@pytest.mark.parametrize("outline", ["lines", "ring"])
+@pytest.mark.parametrize("mark", ["V", "X"])
+def test_a_window_whose_sashes_carry_opening_marks_is_found(outline, mark):
+    doc, msp = _doc()
+    _facade(msp)
+    _two_sashes_with_marks(msp, outline, mark)
+    _lines(msp, 6, 0, 7, 2.1)
+    res = _read(doc)
+    win = _find(res, "window", 3.6)
+    assert (win.x0, win.x1, win.y0, win.y1) == pytest.approx((3.0, 4.2, 1.0, 2.4), abs=0.01)
+    assert len(res.symbols) == 2
+
+
+def test_a_bay_of_the_wall_with_a_brace_across_it_is_still_a_bay():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    msp.add_line((10, 0), (10, 5))  # two pilasters and a beam: the lines go on past the corners
+    msp.add_line((12.5, 0), (12.5, 5))
+    msp.add_line((9, 3.4), (13.5, 3.4))
+    msp.add_line((10, 0.0), (12.5, 3.4))  # a diagonal brace across the bay
+    res = _read(doc)
+    assert [s.kind for s in res.symbols] == ["window"]
