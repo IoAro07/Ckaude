@@ -39,7 +39,10 @@ SITE_RATIO = 2.5  # a plan this many times bigger than another view with the sam
 UNIT_CHOICES = ("m", "cm", "mm")
 UNIT_SURE = 2.0  # with no unit in the header, the analysis decides when its best unit leads by this many votes
 DOOR_RADIUS = (0.55, 1.40)  # m: the radius of a swing arc
-DIMENSION_RANGE = (0.8, 6.0)  # m: where the median of the dimension values of a plan should lie
+DIMENSION_RANGE = (0.5, 15.0)  # m: where the median of the dimension values of a plan should lie
+TEXT_HEIGHT = (0.05, 0.60)  # m: where the median height of the texts of a drawing should lie
+CORE_RANGE = (1.5, 1500.0)  # m: the size of the dense core of the sheet, at least, at most (several drawings fit in it)
+OVERRIDE_MARGIN = 1.0  # the header is overruled only by a unit that leads by this many votes
 
 # the words that say what a view is, strongest first (the text is upper-cased and stripped of punctuation)
 VIEW_WORDS = (
@@ -254,7 +257,7 @@ class UnitGuess:
 
     @property
     def differs(self) -> bool:
-        return self.declared is not None and self.unit != self.declared
+        return self.declared is not None and self.unit != self.declared and self.margin >= OVERRIDE_MARGIN
 
     @property
     def margin(self) -> float:
@@ -273,20 +276,26 @@ def _core_extent(soup: Soup) -> float:
 
 
 def infer_unit(soup: Soup) -> UnitGuess:
-    """Vote on the unit of the numbers in the drawing: dimension values, door arcs, the size of the drawing, and the
-    header (the weakest, because it is the one that is wrong most often)."""
+    """Vote on the unit of the numbers in the drawing: dimension values, door arcs, the height of the texts, the size of
+    the drawing, and the header (the weakest, because it is the one that is wrong most often)."""
     if soup.declared_unit not in UNIT_CHOICES and soup.declared_unit is not None:
         return UnitGuess(soup.declared_unit, soup.declared_unit, {}, [])  # feet and inches: not for us to second-guess
     votes = {u: 0.0 for u in UNIT_CHOICES}
     evidence: list[str] = []
+
+    def vote(median: float, low: float, high: float, weight: float, what: str) -> None:
+        fits = [u for u in UNIT_CHOICES if low <= median * UNIT_TO_METERS[u] <= high]
+        for u in fits:
+            votes[u] += weight / len(fits)
+        if fits:
+            evidence.append(f"{what} e' {median:g}: {'/'.join(fits)}")
+
     values = [d["value"] for d in soup.dims]
     if len(values) >= 3:
-        med = statistics.median(values)
-        fits = [u for u in UNIT_CHOICES if DIMENSION_RANGE[0] <= med * UNIT_TO_METERS[u] <= DIMENSION_RANGE[1]]
-        for u in fits:
-            votes[u] += 3.0 / len(fits)
-        if fits:
-            evidence.append(f"la mediana delle {len(values)} quote e' {med:g}: {'/'.join(fits)}")
+        vote(statistics.median(values), *DIMENSION_RANGE, 3.0, f"la mediana delle {len(values)} quote")
+    heights = [t["height"] for t in soup.texts if t["height"] > 0]
+    if len(heights) >= 5:  # the letters of a drawing are 5 cm to 60 cm high, whatever the size of the sheet
+        vote(statistics.median(heights), *TEXT_HEIGHT, 2.0, f"l'altezza mediana dei {len(heights)} testi")
     if len(soup.arcs):
         quarter = soup.arcs[(soup.arcs[:, 4] > 70) & (soup.arcs[:, 4] < 110)]
         if len(quarter) >= 3:
@@ -297,12 +306,12 @@ def infer_unit(soup: Soup) -> UnitGuess:
                 if share >= 0.4:
                     evidence.append(f"{share:.0%} dei {len(quarter)} archi di 90 gradi misura quanto una porta in {u}")
     core = _core_extent(soup)
-    if core > 0:
+    if core > 0:  # a sheet can hold several drawings side by side: only the absurd is ruled out
         for u in UNIT_CHOICES:
-            if 3.0 <= core * UNIT_TO_METERS[u] <= 150.0:
-                votes[u] += 1.0
+            if CORE_RANGE[0] <= core * UNIT_TO_METERS[u] <= CORE_RANGE[1]:
+                votes[u] += 0.5
             else:
-                votes[u] -= 3.0  # a drawing that would be smaller than a room or bigger than a town is not in this unit
+                votes[u] -= 3.0  # smaller than a room, or bigger than a town: not in this unit
     if soup.declared_unit in votes:
         votes[soup.declared_unit] += 1.0
     best = max(UNIT_CHOICES, key=lambda u: (votes[u], u == soup.declared_unit))

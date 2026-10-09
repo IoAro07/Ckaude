@@ -444,3 +444,24 @@ def test_old_style_polylines_solids_and_mirrored_arcs_are_seen_by_the_scan(tmp_p
     soup = scan(ezdxf.readfile(path))
     assert soup.arcs[0, 0] == pytest.approx(-100) and soup.seg[0, 0] == pytest.approx(0) and soup.seg[0, 2] == pytest.approx(-200)
     assert soup.arcs[0, 3] == pytest.approx(80) and soup.arcs[0, 4] == pytest.approx(90)
+
+
+def test_a_sheet_of_several_drawings_side_by_side_is_not_in_the_wrong_unit_because_it_is_big():
+    # numbers in centimetres, header millimetres, 400 m of sheet (three tavole in a row): dimensions and the height of
+    # the texts (15) say centimetres, the size of the sheet must not veto it
+    texts = [{"layer": "T", "text": "x", "x": 0, "y": 0, "height": 15.0}] * 20
+    soup = _soup("mm", dims=[262, 300, 180, 410], extent=41000.0)
+    soup.texts = texts
+    guess = infer_unit(soup)
+    assert guess.unit == "cm" and guess.differs and any("testi" in e for e in guess.evidence)
+
+
+def test_the_text_height_alone_tells_centimetres_from_millimetres():
+    soup = _soup(None, extent=3000.0)
+    soup.texts = [{"layer": "T", "text": "x", "x": 0, "y": 0, "height": 25.0}] * 10  # 25 cm letters, not 2.5 cm
+    assert infer_unit(soup).unit == "cm"
+    soup.texts = [{"layer": "T", "text": "x", "x": 0, "y": 0, "height": 250.0}] * 10  # 250 mm letters
+    assert infer_unit(_soup(None, extent=30000.0)).unit in ("cm", "mm")  # no texts here: nothing to decide on
+    soup2 = _soup(None, extent=30000.0)
+    soup2.texts = soup.texts
+    assert infer_unit(soup2).unit == "mm"
