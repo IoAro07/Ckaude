@@ -42,7 +42,7 @@ from .texts import RawText, read_texts
 
 PART_MIN = 0.15  # m: a rectangle with a smaller side is a bar, a mullion or a moulding, never a leaf
 SYMBOL_MAX = (6.8, 4.2)  # m: widest and tallest door or window (a sectional door with its piers, a portal and its steps)
-SYMBOL_MIN = (0.35, 0.35)  # m: smallest door or window (a cellar light)
+SYMBOL_MIN = (0.28, 0.35)  # m: smallest door or window (a slit, a cellar light)
 RECT_FILL = 0.97  # a face is a rectangle if it fills this share of its bounding box
 ARCH_FILL = 0.80  # ... an arch if it fills at least this much of it (a semicircle on a square: 0.93)
 CLIP_FILL = 0.85  # a polygon filling this much of its box, with straight sides and ...
@@ -69,6 +69,8 @@ CAP_MIDDLE = 0.1  # the head rises at least this share of the width in the middl
 CAP_SIDES = 0.5  # ... and at a quarter of the width at least this share of that
 FLOOR_DOORS = 1 / 3  # doors at one level count for the floor if they are at least this share of the doors at the busiest
 JAMB_SHARE = 0.25  # a plain piece beside the sashes narrower than this share of the width left is a jamb or a pier
+SLIT_WIDTH = 0.35  # m: an opening narrower than this ...
+SLIT_ASPECT = 2.0  # ... is at least this many times as tall as it is wide
 MAX_ASPECT = 3.5  # a symbol wider than this (width / height) is a strip: fascia, canopy, step ...
 MAX_TALL = 5.6  # ... and one taller than this (height / width) is a post, a pilaster or a downpipe
 DOOR_HEIGHT = 1.6  # m: a symbol this tall that stands on a floor is a door
@@ -85,6 +87,11 @@ FIGURE_WIDTH = 1.0  # m: at most this wide
 FIGURE_FOOT = 0.10  # m: the insertion point of such a block is this close to its bottom, the feet
 
 TEXT_MARGIN = 1.0  # m: a level mark may sit this far outside the drawing it belongs to
+RAIL_BARS = 7  # a run of at least this many bars, evenly spaced ...
+RAIL_PITCH = 0.25  # m: ... no further apart than this ...
+RAIL_REGULAR = 0.15  # ... with spacings equal within this share ...
+RAIL_HEIGHT = 0.6  # ... and as tall as this share of the symbol, is a railing, not glazing bars
+BAR_MERGE = 0.03  # m: lines this close are one bar (a bar drawn as two lines)
 SKY = 60.0  # m: how far above a symbol the drawing is searched for a roof
 ROOF_SPAN = 2.0  # m: a roof, an eave or the top of a wall runs at least this far sideways; the cap of a chimney does not
 MARK_RE = re.compile(r"(?<![\w.,])([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")  # "+0,00" "- 0.40" "+-0.00"
@@ -255,6 +262,18 @@ def _is_arch(poly: Polygon, w: float, h: float) -> bool:
         and abs((t0 + t1) / 2 - (x0 + x1) / 2) <= ARCH_CENTRED * w
 
 
+def _is_open_frame(outline: Polygon) -> bool:
+    """The frame of a door whose leaf stands on the same threshold: a bar on each side and one on top, open at the
+    bottom (the leaf between them is not a closed ring, so the planar graph does not give the frame as one face)."""
+    x0, y0, x1, y1 = outline.bounds
+    gap = box(x0, y0, x1, y1).difference(outline)
+    if gap.geom_type != "Polygon":
+        return False
+    g0, h0, g1, h1 = gap.bounds
+    return gap.area >= RECT_FILL * (g1 - g0) * (h1 - h0) and abs(h0 - y0) <= NODE_TOL \
+        and 0 < g0 - x0 <= FRAME_BAND and 0 < x1 - g1 <= FRAME_BAND and 0 < y1 - h1 <= FRAME_BAND
+
+
 def _box_of(poly: Polygon, drawn: bool) -> _Box | None:
     """The rectangle or arch of this outline, if it is one of a size a leaf can have. ``drawn``: the outline is a closed
     polyline of the drawing, not a face between lines (which a railing or a stair in front cuts anywhere)."""
@@ -270,6 +289,8 @@ def _box_of(poly: Polygon, drawn: bool) -> _Box | None:
         return _Box(x0, y0, x1, y1, arched=True)
     if drawn and fill >= CLIP_FILL and len(outline.simplify(CAP_CURVE).exterior.coords) <= CLIP_CORNERS + 1:
         return _Box(x0, y0, x1, y1)  # a leaf trimmed by the roof or the wall behind it: a corner or two cut off
+    if not drawn and _is_open_frame(outline):
+        return _Box(x0, y0, x1, y1)
     return None
 
 
@@ -580,6 +601,34 @@ def _horizontals(lines: list[LineString], min_len: float) -> list[tuple[float, f
     return sorted(out)
 
 
+def _verticals(lines: list[LineString]) -> np.ndarray:
+    """(x, bottom, top) of the vertical pieces of the lines."""
+    rows = []
+    for ls in lines:
+        c = np.asarray(ls.coords)
+        for k in np.flatnonzero(np.abs(np.diff(c[:, 0])) < HORIZONTAL_TOL):
+            rows.append(((c[k, 0] + c[k + 1, 0]) / 2, min(c[k, 1], c[k + 1, 1]), max(c[k, 1], c[k + 1, 1])))
+    return np.array(rows).reshape(-1, 3)
+
+
+def _is_railing(g: _Group, verticals: np.ndarray) -> bool:
+    """A balcony or a stair rail: as many evenly spaced balusters, close together, as no window has glazing bars."""
+    h = g.y1 - g.y0
+    inside = verticals[(verticals[:, 0] > g.x0 + ALIGN_TOL) & (verticals[:, 0] < g.x1 - ALIGN_TOL)
+                       & (verticals[:, 2] - verticals[:, 1] >= RAIL_HEIGHT * h) & (verticals[:, 1] >= g.y0 - ALIGN_TOL)
+                       & (verticals[:, 2] <= g.y1 + ALIGN_TOL), 0]
+    xs = np.sort(inside)
+    bars = xs[np.concatenate(([True], np.diff(xs) > BAR_MERGE))] if len(xs) else xs  # the first line of each bar
+    if len(bars) < RAIL_BARS:
+        return False
+    pitch = np.diff(bars)
+    run = best = 1
+    for a, b in zip(pitch, pitch[1:]):
+        run = run + 1 if abs(a - b) <= RAIL_REGULAR * max(a, b) and max(a, b) <= RAIL_PITCH else 1
+        best = max(best, run)
+    return best + 1 >= RAIL_BARS
+
+
 def _triangles(lw: _Linework) -> list[tuple[float, float, float, float]]:
     """Bounding boxes of the little triangles (drawn with lines or filled) that point at the level of a mark."""
     found = set()
@@ -717,6 +766,8 @@ def _is_opening(g: _Group) -> bool:
     w, h = g.core[1] - g.core[0], g.y1 - g.y0
     if g.x1 - g.x0 < SYMBOL_MIN[0] or h < SYMBOL_MIN[1] or w / h > MAX_ASPECT or h / w > MAX_TALL:
         return False
+    if w < SLIT_WIDTH and h < SLIT_ASPECT * w:
+        return False  # a narrow opening is a slit, taller than wide: a small square is a post, a vent
     return g.arched or g.free >= MIN_FREE_CORNERS or any(m.kids for m in g.members) \
         or len(g.members) >= STRUCTURE_MIN
 
@@ -906,7 +957,8 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
     everything = _groups(lw)
     groups = [g for g in everything if g.x1 - g.x0 >= SYMBOL_MIN[0] and g.y1 - g.y0 >= SYMBOL_MIN[1]]
     strips = [g for g in everything if _is_strip(g.members[0]) and g.x1 - g.x0 > g.y1 - g.y0]
-    shapes = _roofed([g for g in groups if _is_opening(g)], lw)
+    verticals = _verticals(lw.lines)
+    shapes = _roofed([g for g in groups if _is_opening(g) and not _is_railing(g, verticals)], lw)
     hsegs = _horizontals(lw.lines, MARK_LINE_MIN)
     span = area[2] - area[0]
     named = _named(items, cfg)
