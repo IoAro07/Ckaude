@@ -628,3 +628,20 @@ def test_eighty_thousand_lines_in_ten_drawings_are_read_in_a_few_seconds():
     views = find_views(soup, S)
     assert time.time() - t0 < 10.0
     assert len(views) == 10 and all(v.size_m(S)[0] < 30 for v in views)
+
+
+def test_thousands_of_texts_that_look_like_titles_do_not_slow_the_reading_down():
+    rng = np.random.default_rng(5)
+    seg = []
+    for x, y in [(x, y) for y in (0, 4000) for x in range(0, 9000, 3000)]:  # six drawings of 26 x 18 m
+        p = np.column_stack([rng.uniform(x, x + 2600, 6000), rng.uniform(y, y + 1800, 6000)])
+        seg.append(np.hstack([p, p + rng.uniform(-60, 60, (6000, 2))]))
+    seg = np.vstack(seg)
+    texts = [{"layer": "0", "text": f"PIANO TERRA {k}", "x": float(rng.uniform(0, 11000)), "y": float(rng.uniform(0, 6000)),
+              "height": 20.0} for k in range(3000)]
+    soup = Soup("cm", ["0"], seg, np.zeros(len(seg), dtype=int), np.zeros((0, 5)), np.zeros(0, dtype=int), np.zeros((0, 3)),
+                np.zeros((0, 4)), texts=texts)
+    t0 = time.time()
+    views = find_views(soup, S)
+    assert time.time() - t0 < 10.0 and len(views) == 6
+

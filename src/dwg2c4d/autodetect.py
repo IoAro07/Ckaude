@@ -37,6 +37,7 @@ MIN_VIEW_CELLS = 40  # a piece of fewer cells than this (10 m2 of drawing) is a 
 MIN_VIEW_SIDE = 2.5  # m: a piece thinner than this is a strip of text or a line, not a view
 MAX_CELLS = 1e8  # a coordinate more cells than this from the origin is damage (NaN, 1e300), not drawing: it is left out
 MAX_VIEWS = 200  # a sheet is not read as having more views than this (the biggest are kept): the views are compared in pairs
+MAX_TITLES = 300  # ... nor as having more titles than this (the tallest letters are kept): each is looked for among all the lines
 OUTLINE_LINES = 3  # a drawing made of long lines only (the boundary of a lot) is a view if it has this many of them
 CRUMB_REACH = 3.0  # m: a crumb this close to a view is a part of it (a note, a north arrow, a stair)
 CRUMB_SHARE = 0.15  # ... if it holds at most this share of the cells of that view
@@ -74,7 +75,8 @@ COPY_REPEATS = 12  # a text written more often than this (a dimension like 100) 
 COPY_PAIRS = 200_000  # no more pairs of equal texts than this are tried...
 COPY_MOVES = 60  # ... and no more moves than this (the best supported) are looked at
 COPY_INK = 0.6  # the lines confirm it: this share of the lines of the smaller drawing lands on lines of the same length
-COPY_INK_TOLERANCE = 0.05  # m: ... within this distance (two floors of a house share their walls and little else: 0.3)
+#   (a copy reaches 0.8 and more; two floors of a house, with the same walls and other partitions, 0.3)
+COPY_INK_TOLERANCE = 0.05  # m: ... within this distance
 COPY_SIZE = 0.05  # two views are twins only if their sides differ by less than this share
 COPY_VOTERS = 150  # the longest lines of a drawing vote for the shift that takes it onto its twin...
 COPY_PARTNERS = 50  # ... each for the shifts to the lines of nearly its length, this many looked at...
@@ -691,7 +693,7 @@ def _sane(soup: Soup, scale: float) -> Soup:
 def find_views(soup: Soup, scale: float) -> list[View]:
     """The views of the sheet: pieces of drawing separated by empty space, with the title near each and a type."""
     soup = _sane(soup, scale)
-    titles = _title_texts(soup)
+    titles = sorted(_title_texts(soup), key=lambda t: -t["height"])[:MAX_TITLES]
     frames = _label_frames(soup, titles, scale)
     pieces, centre = _pieces(soup, scale, frames)
     views = [View(0, box, cells, outline=outline) for box, cells, outline in sorted(pieces, key=lambda p: -p[1])[:MAX_VIEWS]]
