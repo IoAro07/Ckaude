@@ -742,6 +742,76 @@ def test_a_mark_under_the_floor_does_not_hide_the_slab_between_two_rows_of_openi
     assert res.levels == pytest.approx([0.0, 3.2], abs=0.01)
 
 
+# --- sloppy frames: ends that nearly meet, lines that run on past the corners ------------------------------------
+
+def _loose(msp, x0, y0, x1, y1, gap=0.0, over=0.0):
+    """A rectangle of four loose lines whose ends stop ``gap`` short of the corners (``over``: run past them)."""
+    d = gap - over
+    for a, b in (((x0 + d, y0), (x1 - d, y0)), ((x1, y0 + d), (x1, y1 - d)), ((x1 - d, y1), (x0 + d, y1)),
+                 ((x0, y1 - d), (x0, y0 + d))):
+        msp.add_line(a, b)
+
+
+def _centres(res):
+    return sorted((s.kind, round((s.x0 + s.x1) / 2, 1)) for s in res.symbols)
+
+
+@pytest.mark.parametrize("gap, over", [(1e-12, 0), (0.0005, 0), (0.004, 0), (0, 0.001), (0, 0.004)])
+def test_lines_that_nearly_meet_at_the_corners_make_a_window(gap, over):
+    doc, msp = _doc()
+    _facade(msp)
+    for x0, y0, x1, y1 in ((3, 1.0, 4.2, 2.4), (8, 1.0, 9.2, 2.4), (12, 0, 13, 2.1)):
+        _loose(msp, x0, y0, x1, y1, gap, over)
+    assert _centres(_read(doc)) == [("door", 12.5), ("window", 3.6), ("window", 8.6)]
+
+
+def test_a_line_that_runs_on_into_the_wall_still_makes_the_corner_a_junction():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    msp.add_line((9, 3.4), (13.5, 3.4))  # a beam and two pilasters: lines of metres past the corners of the bay
+    msp.add_line((10, 0), (10, 5))
+    msp.add_line((12.5, 0), (12.5, 5))
+    assert _centres(_read(doc)) == [("window", 3.5)]
+
+
+def _boxes_between(doc, x0, x1):
+    """The (x0, x1) of the boxes the detector finds in the view, inside a stretch of it."""
+    from dwg2c4d import elevsymbols
+    items = read_items(doc, Config(), area=None, ignore_veto=True, keep_other=True, unit="m", keep_fills=True).items
+    lw = elevsymbols._linework(items, elevsymbols._lines(items, AREA))
+    return sorted((round(b.x0, 2), round(b.x1, 2)) for b in elevsymbols._boxes(lw, elevsymbols._heads(lw))
+                  if x0 <= b.x0 and b.x1 <= x1)
+
+
+def test_a_rectangle_a_line_cuts_in_two_gives_its_two_faces_and_no_third_box():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.2, 2.4)
+    msp.add_line((3.6, 1.0), (3.6, 2.4))  # the mullion: the window is two faces, not a rectangle left open by a gap
+    assert _boxes_between(doc, 2.0, 5.0) == [(3.0, 3.6), (3.6, 4.2)]
+
+
+def test_a_rectangle_inside_a_box_does_not_join_the_nest_when_its_ends_miss_the_corners():
+    doc, msp = _doc()
+    _facade(msp)
+    _ring(msp, 3, 1.0, 4.8, 2.0)  # a frame, whole as a closed polyline
+    _loose(msp, 3.45, 1.0, 4.35, 2.0, gap=0.001)  # four lines round two of its panes, ends a millimetre short
+    assert _boxes_between(doc, 2.0, 5.0) == [(3.0, 4.8)]
+
+
+def test_a_wall_panel_drawn_with_its_own_lines_between_the_courses_is_no_window():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    _lines(msp, 3.1, 0.2, 3.9, 0.95)  # the panel under the window: four lines of its own ...
+    for y in (0.2, 0.95):
+        msp.add_line((0, y), (20, y))  # ... and the courses of the wall run through all its corners
+    for x in (3.1, 3.9):
+        msp.add_line((x, 0), (x, 1.0))
+    assert _centres(_read(doc)) == [("window", 3.5)]
+
+
 # --- opening marks on the sashes -----------------------------------------------------------------------------------
 
 def _two_sashes_with_marks(msp, outline, mark, x0=3.0, y0=1.0, x1=4.2, y1=2.4):
@@ -1024,7 +1094,7 @@ def _floor_by_mark(text):
     return res.floor, res.floor_source
 
 
-@pytest.mark.parametrize("text", ["%%p0,00", "%%P0.00", "±0,00", "P.F.+0,00", "P.P.F. +0.00"])
+@pytest.mark.parametrize("text", ["%%p0,00", "%%P0.00", "±0,00", "\\U+00B10,00", "P.F.+0,00", "P.P.F. +0.00"])
 def test_a_level_mark_in_a_text_is_read_whichever_way_it_is_written(text):
     floor, source = _floor_by_mark(text)
     assert floor == pytest.approx(0.5, abs=0.01) and source == "quota +0,00"
@@ -1059,3 +1129,193 @@ def test_the_top_step_of_an_entrance_is_no_plinth_and_the_door_stays_on_it():
     _lines(msp, 5.8, 0.0, 7.2, 0.15)  # the step under it
     door = _find(_read(doc), "door", 6.5)
     assert door.y0 == pytest.approx(0.3, abs=0.01)
+
+
+# --- the outline of a facade is no door ------------------------------------------------------------------------
+
+def _small_building(msp, w, h, ring=True, roof=True):
+    """The wall of a small building with no opening drawn in it: a ground line, the closed outline of the wall and a
+    roof whose eave is a hand above its top (so the corners of the outline are bare)."""
+    msp.add_line((-2, 0), (w + 2, 0))
+    (_ring if ring else _lines)(msp, 0, 0, w, h)
+    if roof:
+        msp.add_lwpolyline([(-0.4, h + 0.15), (w + 0.4, h + 0.15), (w - 1, h + 1.35), (1, h + 1.35)], close=True)
+
+
+@pytest.mark.parametrize("w, h", [(6.0, 3.0), (4.0, 2.7), (6.5, 3.9)])
+@pytest.mark.parametrize("ring, roof", [(True, True), (False, True), (True, False)])
+def test_the_closed_outline_of_a_small_blank_facade_is_no_door(w, h, ring, roof):
+    doc, msp = _doc()
+    _small_building(msp, w, h, ring, roof)
+    assert not read_view_symbols(doc, Config(), (-3.0, -2.0, w + 3.0, h + 3.0), "m", 1.0).symbols
+
+
+def test_a_wide_empty_frame_in_a_long_facade_is_still_a_door():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 4, 0, 7.8, 2.9)  # a gate 3.8 m wide with nothing drawn in it
+    _lines(msp, 12, 1.0, 13.2, 2.4)
+    assert _centres(_read(doc)) == [("door", 5.9), ("window", 12.6)]
+
+
+def test_a_small_facade_with_its_window_drawn_gives_the_window_and_not_the_outline():
+    doc, msp = _doc()
+    _small_building(msp, 6.0, 3.0)
+    _lines(msp, 2.5, 1.0, 3.5, 2.0)
+    res = read_view_symbols(doc, Config(), (-3.0, -2.0, 9.0, 6.0), "m", 1.0)
+    assert [(s.kind, round((s.x0 + s.x1) / 2, 1)) for s in res.symbols] == [("window", 3.0)]
+
+
+# --- what a view is and how big -----------------------------------------------------------------------------------
+
+def _two_openings(msp):
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.2, 2.4)
+    _lines(msp, 6, 0, 7.0, 2.1)
+
+
+@pytest.mark.parametrize("bbox", [(22.0, 8.0, -2.0, -2.0), (22.0, -2.0, -2.0, 8.0)])
+def test_a_box_given_the_wrong_way_round_is_the_same_view(bbox):
+    doc, msp = _doc()
+    _two_openings(msp)
+    assert _centres(read_view_symbols(doc, Config(), bbox, "m", 1.0)) == _centres(_read(doc)) \
+        == [("door", 6.5), ("window", 3.6)]
+
+
+@pytest.mark.parametrize("bbox", [(3.0, 1.0, 3.0, 1.0), (3.0, 1.0, 9.0, 1.0), (float("nan"), 0.0, 1.0, 1.0),
+                                  (-float("inf"), -2.0, 22.0, 8.0)])
+def test_a_view_without_an_area_is_empty_and_says_so(bbox):
+    doc, msp = _doc()
+    _two_openings(msp)
+    res = read_view_symbols(doc, Config(), bbox, "m", 1.0)
+    assert not res.symbols and res.floor is None and any("area" in n for n in res.notes)
+
+
+def test_a_view_with_too_many_lines_is_not_read(monkeypatch):
+    from dwg2c4d import elevsymbols
+    doc, msp = _doc()
+    _two_openings(msp)
+    _lines(msp, 10, 1.0, 11, 2.0)
+    _lines(msp, 14, 1.0, 15, 2.0)
+    assert len(_read(doc).symbols) == 4
+    monkeypatch.setattr(elevsymbols, "SEGMENTS_MAX", 10)  # the facade and its four openings are 20 straight pieces
+    res = _read(doc)
+    assert not res.symbols and any("troppi" in n for n in res.notes)
+
+
+def test_a_plan_with_its_areas_written_in_it_is_not_read_for_facade_symbols():
+    doc, msp = _doc()
+    _two_openings(msp)
+    for i in range(3):
+        msp.add_text(f"{10 + i},5 mq", dxfattribs={"height": 0.2, "insert": (5 + 4 * i, 3)})
+    res = _read(doc)
+    assert not res.symbols and any("pianta" in n for n in res.notes)
+
+
+def test_a_facade_with_one_or_two_texts_about_square_metres_is_still_read():
+    doc, msp = _doc()
+    _two_openings(msp)
+    msp.add_text("Superficie 12,5 mq", dxfattribs={"height": 0.2, "insert": (5, 3)})
+    assert len(_read(doc).symbols) == 2
+
+
+def test_what_stands_far_below_the_floor_is_another_drawing():
+    doc, msp = _doc()
+    _two_openings(msp)
+    _mark(msp, 0.0, "+0,00")
+    _lines(msp, 10, -9.0, 11, -6.8)  # a door 9 m under the floor: a detail drawn below the elevation
+    res = read_view_symbols(doc, Config(), (-2.0, -12.0, 24.0, 8.0), "m", 1.0)
+    assert _centres(res) == [("door", 6.5), ("window", 3.6)]
+    assert any("scartate" in n for n in res.notes)
+
+
+# --- grids of cells --------------------------------------------------------------------------------------------
+
+def _grid_of_cells(msp, x0, y0, cols, rows, w, h):
+    for i in range(cols):
+        for j in range(rows):
+            _lines(msp, x0 + i * w, y0 + j * h, x0 + (i + 1) * w, y0 + (j + 1) * h)
+
+
+def test_a_stack_bond_grid_of_small_tiles_is_no_window():
+    doc, msp = _doc()
+    _two_openings(msp)
+    _grid_of_cells(msp, 10, 0.5, 6, 8, 0.5, 0.25)  # 6 x 8 tiles of 0.5 x 0.25 m: cladding, 3 m wide and 2 m tall
+    assert _centres(_read(doc)) == [("door", 6.5), ("window", 3.6)]
+
+
+def test_the_slats_of_a_louvred_window_are_a_window_though_they_are_small_and_alike():
+    doc, msp = _doc()
+    _two_openings(msp)
+    _grid_of_cells(msp, 10, 1.0, 2, 6, 0.45, 0.27)  # 2 x 6 slats: a lattice, but only two across
+    msp.add_line((9.9, 0), (9.9, 5))  # the lines of the wall go on at its corners
+    msp.add_line((11.0, 0), (11.0, 5))
+    msp.add_line((9.0, 1.0), (12.0, 1.0))
+    msp.add_line((9.0, 2.62), (12.0, 2.62))
+    assert [(s.kind, round((s.x0 + s.x1) / 2, 1)) for s in _read(doc).symbols if s.x0 > 9] == [("window", 10.4)]
+
+
+def test_a_door_made_of_a_lattice_of_big_panels_between_two_piers_is_still_a_door():
+    doc, msp = _doc()
+    _two_openings(msp)
+    _grid_of_cells(msp, 10, 0.0, 4, 5, 1.2, 0.5)  # 4 x 5 panels of 1.2 x 0.5 m: the glazed door of a hall
+    msp.add_line((9.9, 0), (9.9, 5))  # the piers beside it and the lintel over it: lines go on at its corners
+    msp.add_line((14.9, 0), (14.9, 5))
+    msp.add_line((9.0, 2.5), (16.0, 2.5))
+    res = _read(doc)
+    assert [(s.kind, round((s.x0 + s.x1) / 2, 1)) for s in res.symbols if s.x0 > 9] == [("door", 12.4)]
+
+
+def test_the_sheet_is_read_again_when_the_unit_or_the_drawing_changes(monkeypatch):
+    from dwg2c4d import elevsymbols
+    doc, msp = _doc()
+    _two_openings(msp)
+    calls = []
+    real = elevsymbols.read_items
+    monkeypatch.setattr(elevsymbols, "read_items", lambda *a, **k: calls.append(1) or real(*a, **k))
+    read_view_symbols(doc, Config(), AREA, "m", 1.0)
+    read_view_symbols(doc, Config(), AREA, "m", 1.0)
+    assert len(calls) == 1
+    read_view_symbols(doc, Config(), AREA, "m", 0.5)  # the same unit name, another size
+    assert len(calls) == 2
+    msp.add_line((0, 7), (1, 7))  # an entity more
+    read_view_symbols(doc, Config(), AREA, "m", 0.5)
+    assert len(calls) == 3
+
+
+# --- the ground line and a line under the drawing ----------------------------------------------------------------
+
+def test_a_dimension_string_under_the_elevation_is_no_ground_line():
+    doc, msp = _doc()
+    _facade(msp)  # the ground line, and the two ends of the wall standing on it
+    for x in (3, 8, 13):
+        _lines(msp, x, 1.0, x + 1.2, 2.4)
+    msp.add_line((0, -0.8), (20, -0.8))  # the dimension string, 20 m long, with its ticks
+    for x in (0, 3, 4.2, 8, 9.2, 13, 14.2, 20):
+        msp.add_line((x, -0.9), (x, -0.7))
+    res = _read(doc)
+    assert res.floor == pytest.approx(0.0, abs=0.01) and res.floor_source == "linea di terra"
+    assert _find(res, "window", 3.6).y0 == pytest.approx(1.0, abs=0.01)
+
+
+def test_the_lowest_long_line_is_the_ground_when_nothing_rises_from_any():
+    doc, msp = _doc()
+    msp.add_line((-1, 0), (21, 0))  # no wall ends: the windows stand alone
+    msp.add_line((-1, -0.8), (21, -0.8))
+    for x in (3, 8, 13):
+        _lines(msp, x, 1.0, x + 1.2, 2.4)
+    msp.add_line((-1, 5), (21, 5))
+    assert _read(doc).floor == pytest.approx(-0.8, abs=0.01)
+
+
+# --- a box on a named symbol -------------------------------------------------------------------------------------
+
+def test_the_lintel_box_over_a_named_door_is_no_window_but_a_window_a_floor_higher_is():
+    doc, msp = _doc()
+    doc.layers.add("PORTE")
+    _facade(msp)
+    _lines(msp, 6, 0, 7, 2.1, "PORTE")
+    _lines(msp, 6, 2.1, 7, 2.6)  # the box that holds the shutter, touching the door and as wide as it
+    _lines(msp, 6, 3.4, 7, 4.5)  # the window of the floor above: a gap between them
+    res = _read(doc)
+    assert [(s.kind, round(s.y0, 1)) for s in res.symbols] == [("door", 0.0), ("window", 3.4)]

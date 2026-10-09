@@ -9,8 +9,9 @@ their shape and by where they stand; so does this module:
 * leaves that touch (the two halves of a door, the panels of an entrance, the sashes between two shutters) are one
   symbol; shutters folded against the wall are told from the sashes and left out of the clear width;
 * what is not an opening (a strip of fascia, a bay of the wall between two pilasters, a planter on the ground line,
-  a railing, a chimney above the roof, a pergola with its vine, a title frame) is rejected by its proportions and
-  by how it is drawn;
+  a railing, a chimney above the roof, a pergola with its vine, a title frame, a grid of tiles, the outline of the
+  whole facade) is rejected by its proportions and by how it is drawn; a rectangle drawn with four lines whose ends
+  miss the corners by a few millimetres is still a rectangle;
 * the floor comes from a level mark ("+0,00", "P.P.F. +0.00") and the line it labels, else from the bottom of the
   lowest door (the top of the ground line when the doors found all stand a storey above a ground line that walls
   stand on), the top of the ground line, or the foot of a person figure; the other storeys from their marks, or
@@ -23,7 +24,12 @@ draw; a shutter the layer does not call part of the window only widens ``full_x`
 a step that lies across them, and add the openings the names do not give.
 
 A sheet has many views and reading it takes seconds: ``read_view_symbols`` reads the modelspace once per drawing and
-cuts each view out of that.
+cuts each view out of that. A view that is a plan (areas written in it) or has too many lines is not read.
+
+Limits, because the drawing does not tell: a window between a continuous sill line and a continuous lintel line is
+not found, nor told from the bays of the wall between such windows (a rectangle with all four corners crossed by lines
+is a bay, also when it was drawn with four lines of its own: the panel under a window is drawn so); a shape with no
+roof, eave or wall top over any opening is accepted (with a note), as chimneys and details cannot then be told.
 """
 
 from __future__ import annotations
@@ -42,6 +48,7 @@ from shapely.geometry import LineString, MultiLineString, Polygon, box
 from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 
+from .autodetect import AREA_MARK, PLAN_AREAS
 from .config import Config
 from .elevation import MIN_LINE, Symbol
 from .openings import _symbols
@@ -72,6 +79,10 @@ BAY_MIN = 1.0  # m: an empty rectangle this wide and tall, with fewer bare corne
 #                window with mullions have lines that go on at every corner too, but they are narrow
 STRUCTURE_MIN = 4  # a symbol of at least this many leaves is an opening even if its corners are not bare
 #                    (a frame with a frame inside is one too)
+TILE_GRID = 3  # a grid of alike leaves at least this many across and down, none bigger than TILE_MAX ...
+TILE_MAX = 0.8  # m: ... is a wall of tiles (glass blocks, stack-bond bricks), not the panels of a door
+TILED_MIN = 0.9  # a rectangle drawn with four lines is cut by lines across it (not left open by a gap) if the faces
+#                  inside it fill this share of it
 GLAZED_MIN = 2  # a leaf divided in at least this many panes is a sash; a plain one is a shutter
 SLAT_MIN = 3  # a leaf cut across by at least this many lines ...
 SLAT_PITCH = 0.30  # m: ... no further apart than this, its cells ...
@@ -115,10 +126,14 @@ RAIL_MAX = 1.3  # m: ... if the symbol is no taller than a balustrade (a plank d
 RAIL_TOP = 0.8  # ... and a line along the top, this share of its width at least, is the handrail
 BAR_MERGE = 0.03  # m: lines this close are one bar (a bar drawn as two lines)
 SKY = 60.0  # m: how far above a symbol the drawing is searched for a roof
+OUTLINE_MIN = 2.0  # m: a lone frame with nothing in it at least this wide ...
+OUTLINE_SHARE = 0.8  # ... and this share of all that is drawn from half its height up, is the outline of the facade
+SEGMENTS_MAX = 60_000  # a view with more straight pieces of line than this is a plan or a site, not an elevation (and
+#                        reading it takes minutes)
 ROOF_SPAN = 2.0  # m: a roof, an eave or a wall top runs at least this far sideways; the cap of a chimney does not
 # "+0,00" "- 0.40" "+-0.00" "P.F.+0,00": not the end of a number ("2.5-3.0")
 MARK_RE = re.compile(r"(?<![\w,])(?<!\d\.)([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")
-PLUS_MINUS_RE = re.compile(r"%%[pP]")  # how a TEXT of a DXF file stores the plus-minus sign (MTEXT is converted already)
+PLUS_MINUS_RE = re.compile(r"%%[pP]|\\U\+00[bB]1")  # how a DXF file stores the plus-minus sign: %%p, \U+00B1
 MARK_MAX = 30.0  # m: a level mark is no more than this above or below the floor
 MARK_REACH = 3.2  # text heights: the line a level mark labels lies at most this far below the text
 MARK_SIDE = 0.5  # m: ... and no further than this beyond the ends of the text, sideways
@@ -145,6 +160,7 @@ SAME_SYMBOL = (1 / 3, 3.0)  # a named symbol and a shape are the same opening if
 SAME_OVERLAP = 0.5  # ... and the smaller one lies this much within the other
 INSIDE = 0.9  # a named symbol lying this much within a shape is a part of it
 PART_RATIO = 3.0  # a shape lying within a named symbol this many times as large is a piece of it
+HEAD_MAX = 0.6  # m: a box this low that is as wide as a named symbol and touches it is its lintel box, not a window
 CUT_LINE = (0.2, 0.3)  # m: a symbol the layers name that is narrower or lower than this is a cut mark, not an opening
 FLOOR_FROM = {  # floor_source -> what to say in the notes
     "quota +0,00": "dal segno di quota",
@@ -228,6 +244,8 @@ class _Linework:
     arrows: list[tuple[float, float]]  # corners of the filled triangles that are arrowheads of dimension lines
     grid: list[Polygon] = field(default_factory=list)  # faces of the horizontal and vertical lines alone, if others exist
     glass: list[Polygon] = field(default_factory=list)  # the outlines that are hatches and solids
+    rows: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))  # (y, x0, x1) of each horizontal piece drawn
+    cols: np.ndarray = field(default_factory=lambda: np.zeros((0, 3)))  # (x, y0, y1) of each vertical piece drawn
 
 
 # --- openings from the shapes ---------------------------------------------------------------------------------
@@ -249,18 +267,36 @@ def _lines(items: list[Item], area: tuple[float, float, float, float]) -> list[L
     return [g for g in cut if g.geom_type == "LineString" and not g.is_empty]
 
 
+def _sides(lines: list[LineString]) -> tuple[np.ndarray, np.ndarray]:
+    """The horizontal pieces of the lines as rows (y, x0, x1) and the vertical ones as rows (x, y0, y1)."""
+    xy = shapely.get_coordinates(lines)
+    owner = np.repeat(np.arange(len(lines)), shapely.get_num_coordinates(lines))
+    a, b = xy[:-1], xy[1:]
+    along = owner[:-1] == owner[1:]
+    flat = along & (np.abs(a[:, 1] - b[:, 1]) < HORIZONTAL_TOL) & (a[:, 0] != b[:, 0])
+    upright = along & (np.abs(a[:, 0] - b[:, 0]) < HORIZONTAL_TOL) & (a[:, 1] != b[:, 1])
+    return (np.column_stack([(a[flat, 1] + b[flat, 1]) / 2, np.minimum(a[flat, 0], b[flat, 0]),
+                             np.maximum(a[flat, 0], b[flat, 0])]),
+            np.column_stack([(a[upright, 0] + b[upright, 0]) / 2, np.minimum(a[upright, 1], b[upright, 1]),
+                             np.maximum(a[upright, 1], b[upright, 1])]))
+
+
 def _nodes(pieces: list[LineString]) -> Nodes:
-    """Where the pieces of the noded lines end, and the direction (a unit vector) each one leaves in."""
+    """Where the pieces of the noded lines end, and the direction (a unit vector) each one leaves in. A piece no longer
+    than NODE_TOL with a free end (nothing else ends there) is a line run a hair past a corner: it leaves no direction."""
+    at = np.concatenate([shapely.get_coordinates(shapely.get_point(pieces, k)) for k in (0, -1)])
+    next_to = np.concatenate([shapely.get_coordinates(shapely.get_point(pieces, k)) for k in (1, -2)])
+    way = next_to - at
+    length = np.hypot(way[:, 0], way[:, 1])
+    way /= np.where(length > 0, length, 1)[:, None]
+    _, inverse, count = np.unique(at, axis=0, return_inverse=True, return_counts=True)  # the noding made the ends equal
+    alone = (count[inverse.ravel()] == 1).reshape(2, -1).any(axis=0)  # the piece has an end where nothing else ends
+    cell = np.round(at / NODE_TOL).astype(int)
+    stub = np.tile(alone & (shapely.length(pieces) <= NODE_TOL), 2)
     nodes: Nodes = {}
-    for first, second in ((0, 1), (-1, -2)):
-        at = shapely.get_coordinates(shapely.get_point(pieces, first))
-        way = shapely.get_coordinates(shapely.get_point(pieces, second)) - at
-        length = np.hypot(way[:, 0], way[:, 1])
-        for i, j, dx, dy in zip(np.round(at[:, 0] / NODE_TOL).astype(int).tolist(),
-                                np.round(at[:, 1] / NODE_TOL).astype(int).tolist(),
-                                (way[:, 0] / np.where(length > 0, length, 1)).tolist(),
-                                (way[:, 1] / np.where(length > 0, length, 1)).tolist()):
-            nodes.setdefault((i, j), []).append((dx, dy))
+    keep = ~stub
+    for (i, j), (dx, dy) in zip(cell[keep].tolist(), way[keep].tolist()):
+        nodes.setdefault((i, j), []).append((dx, dy))
     return nodes
 
 
@@ -288,8 +324,8 @@ def _grid(lines: list[LineString]) -> list[Polygon]:
     return list(faces[np.unique(face_i)])
 
 
-def _linework(items: list[Item], area: tuple[float, float, float, float]) -> _Linework:
-    lines = _lines(items, area)
+def _linework(items: list[Item], lines: list[LineString]) -> _Linework:
+    """The faces and nodes of the ``lines`` of the view and the closed outlines of its items."""
     polygons = [(p.kind == "fill", g) for it in items for p in it.prims for g in getattr(p.geom, "geoms", [p.geom])
                 if g.geom_type == "Polygon"]
     outlines, glass = [g for _, g in polygons], [g for fill, g in polygons if fill]
@@ -298,8 +334,9 @@ def _linework(items: list[Item], area: tuple[float, float, float, float]) -> _Li
     if not lines:
         return _Linework([], [], outlines, {}, arrows, [], glass)
     noded = unary_union(lines)
+    rows, cols = _sides(lines)
     return _Linework(lines, list(polygonize(noded)), outlines, _nodes(list(getattr(noded, "geoms", [noded]))), arrows,
-                     _grid(lines), glass)
+                     _grid(lines), glass, rows, cols)
 
 
 def _ends_at(x: float, y: float, nodes: Nodes) -> list[tuple[float, float]]:
@@ -420,17 +457,65 @@ def _is_dimension(b: _Box, arrows: list[tuple[float, float]]) -> bool:
     return sum(any(abs(x - cx) <= ARROW_TOL and abs(y - cy) <= ARROW_TOL for x, y in arrows) for cx, cy in corners) >= 2
 
 
+def _rectangles(rows: np.ndarray, cols: np.ndarray) -> list[tuple[float, float, float, float]]:
+    """(x0, y0, x1, y1) of the rectangles drawn as four lines of their own size: two horizontal and two vertical ones
+    whose ends are within NODE_TOL of the corners. Ends that stop short of a corner or run past it by less leave no face
+    in the planar graph of the lines (or none of the right size), but they are a rectangle to the eye."""
+    if not len(rows) or not len(cols):
+        return []
+    by_x = cols[np.argsort(cols[:, 0])]
+    rows = rows[(rows[:, 2] - rows[:, 1] >= PART_MIN) & (rows[:, 2] - rows[:, 1] <= SYMBOL_MAX[0])]
+    rows = rows[np.argsort(rows[:, 1])]
+
+    def drawn(x: float, y0: float, y1: float) -> bool:
+        near = by_x[np.searchsorted(by_x[:, 0], x - NODE_TOL):np.searchsorted(by_x[:, 0], x + NODE_TOL, side="right")]
+        return bool(np.any((np.abs(near[:, 1] - y0) <= NODE_TOL) & (np.abs(near[:, 2] - y1) <= NODE_TOL)))
+
+    found = []
+    for k, (y, a, b) in enumerate(rows.tolist()):
+        twins = rows[k + 1:np.searchsorted(rows[:, 1], a + NODE_TOL, side="right")]
+        for y2 in twins[(np.abs(twins[:, 2] - b) <= NODE_TOL) & (np.abs(twins[:, 0] - y) >= PART_MIN)
+                        & (np.abs(twins[:, 0] - y) <= SYMBOL_MAX[1]), 0].tolist():
+            if drawn(a, min(y, y2), max(y, y2)) and drawn(b, min(y, y2), max(y, y2)):
+                found.append((a, min(y, y2), b, max(y, y2)))
+    return found
+
+
 def _boxes(lw: _Linework, heads: list[Head]) -> list[_Box]:
-    """Rectangles and arches of the drawing, from the faces of its linework and from its closed outlines."""
+    """Rectangles and arches of the drawing, from the faces of its linework, from its closed outlines and from the
+    rectangles drawn as four lines whose ends do not quite meet (they close no face) that no box holds yet."""
     found: dict[tuple, _Box] = {}
     glass = {id(g) for g in lw.glass}
+
+    def complete(b: _Box | None) -> _Box | None:
+        if b is None or _is_dimension(b, lw.arrows):
+            return None
+        b.free = _bare_corners(b.x0, b.y0, b.x1, b.y1, lw.nodes)
+        b.headed = not _is_strip(b) and _apex(b.x0, b.x1, b.y1, heads) is not None
+        return b
+
     for poly, drawn in [(g, True) for g in lw.outlines] + [(g, False) for g in lw.faces + lw.grid]:  # an outline is whole where
-        b = _box_of(poly, drawn)  # a line in front cuts the face it encloses
-        if b is not None and not _is_dimension(b, lw.arrows):
-            b.free = _bare_corners(b.x0, b.y0, b.x1, b.y1, lw.nodes)
-            b.headed = not _is_strip(b) and _apex(b.x0, b.x1, b.y1, heads) is not None
+        b = complete(_box_of(poly, drawn))  # a line in front cuts the face it encloses
+        if b is not None:
             b.glass = id(poly) in glass
             found.setdefault((round(b.x0, 2), round(b.y0, 2), round(b.x1, 2), round(b.y1, 2)), b).glass |= b.glass
+    drawn_as_four_lines = _rectangles(lw.rows, lw.cols)
+    if drawn_as_four_lines:
+        have = np.array([[b.x0, b.y0, b.x1, b.y1] for b in found.values()]).reshape(-1, 4)
+        faces = STRtree(lw.faces)
+
+        def tiled(x0: float, y0: float, x1: float, y1: float) -> bool:
+            """The faces inside it fill it: lines across it (a mullion, a railing) cut it, no gap leaves it open."""
+            inside = faces.query(box(x0 - NODE_TOL, y0 - NODE_TOL, x1 + NODE_TOL, y1 + NODE_TOL), predicate="contains")
+            return sum(lw.faces[i].area for i in inside) >= TILED_MIN * (x1 - x0) * (y1 - y0)
+
+        for x0, y0, x1, y1 in drawn_as_four_lines:
+            # a box that is, or holds, the rectangle already has its place in the nest: leave that as it is
+            held = np.any((have[:, 0] <= x0 + NODE_TOL) & (have[:, 1] <= y0 + NODE_TOL)
+                          & (have[:, 2] >= x1 - NODE_TOL) & (have[:, 3] >= y1 - NODE_TOL))
+            if not held and not tiled(x0, y0, x1, y1) and (b := complete(_Box(x0, y0, x1, y1))) is not None:
+                found[(x0, y0, x1, y1)] = b
+                have = np.vstack([have, [x0, y0, x1, y1]])
     return list(found.values())
 
 
@@ -799,11 +884,14 @@ def _mark_levels(marks: list[_Mark], hsegs: list[tuple[float, float, float]],
     return found
 
 
-def _ground_line(hsegs: list[tuple[float, float, float]], span: float) -> float | None:
-    """The top of the ground line: the lowest horizontal line as long as the building, or a double one's upper line."""
+def _ground_line(hsegs: list[tuple[float, float, float]], span: float, verticals: np.ndarray) -> float | None:
+    """The top of the ground line: the lowest horizontal line as long as the building that something tall rises from
+    (a dimension string under the drawing is no ground), or a double one's upper line. If none carries anything, the
+    lowest long one."""
     longest = sorted((y, a, b) for y, a, b in hsegs if b - a >= GROUND_SHARE * span)
     if not longest:
         return None
+    longest = [t for t in longest if _carries(t[0], verticals)] or longest
     y = longest[0][0]
     above = [yy for yy, _, _ in longest if y < yy <= y + GROUND_DOUBLE]
     return max(above) if above else y
@@ -849,6 +937,8 @@ class _Sheet:
 
     cfg: Config
     unit: str
+    scale: float  # metres per drawing unit
+    size: int  # entities of the modelspace when it was read: more or fewer, and the drawing was edited
     items: list[Item]
     tree: STRtree | None
     owner: np.ndarray  # the index in ``items`` of each piece the tree holds
@@ -876,15 +966,17 @@ _SHEETS: "weakref.WeakKeyDictionary[Drawing, _Sheet]" = weakref.WeakKeyDictionar
 
 
 def _sheet(doc: Drawing, cfg: Config, unit: str, unit_scale: float) -> _Sheet:
-    """The sheet of this drawing, read the first time and kept for as long as the drawing is (same settings)."""
+    """The sheet of this drawing, read the first time and kept for as long as the drawing is (same settings, same unit
+    and the same number of entities)."""
+    size = len(doc.modelspace())
     known = _SHEETS.get(doc)
-    if known is not None and known.unit == unit and known.cfg == cfg:
+    if known is not None and (known.unit, known.scale, known.size) == (unit, unit_scale, size) and known.cfg == cfg:
         return known
     items = read_items(doc, cfg, area=None, ignore_veto=True, keep_other=True, unit=unit, keep_fills=True).items
     pieces = [(i, p.geom) for i, it in enumerate(items) for p in it.prims]
     tree = STRtree([g for _, g in pieces]) if pieces else None
     owner = np.array([i for i, _ in pieces], dtype=int)
-    sheet = _Sheet(copy.deepcopy(cfg), unit, items, tree, owner, read_texts(doc, cfg, unit_scale),
+    sheet = _Sheet(copy.deepcopy(cfg), unit, unit_scale, size, items, tree, owner, read_texts(doc, cfg, unit_scale),
                    _figure_feet(doc, unit_scale))
     _SHEETS[doc] = sheet
     return sheet
@@ -900,9 +992,23 @@ class _Named:
     mixed: bool  # on a layer that holds every opening ("Infissi"): door or window is told by where it stands
 
 
+def _is_tiling(g: _Group) -> bool:
+    """A grid of small leaves all of one size, at least TILE_GRID of them across and down: the tiles of a wall. (The
+    slats of a louvred window are two or three across.)"""
+    cells = g.members
+    if len(cells) < TILE_GRID ** 2 or not all(max(c.w, c.h) <= TILE_MAX and abs(c.w - cells[0].w) <= ALIGN_TOL
+                                              and abs(c.h - cells[0].h) <= ALIGN_TOL for c in cells):
+        return False
+    columns = _columns(g)
+    return len(columns) >= TILE_GRID and max(len(c) for c in columns) >= TILE_GRID
+
+
 def _is_opening(g: _Group) -> bool:
-    """The proportions and the drawing of a door or window: not a strip, not a post, not a bay of the wall."""
+    """The proportions and the drawing of a door or window: not a strip, not a post, not a bay of the wall, not a grid
+    of tiles."""
     w, h = g.core[1] - g.core[0], g.y1 - g.y0
+    if _is_tiling(g):
+        return False
     if g.x1 - g.x0 < SYMBOL_MIN[0] or h < SYMBOL_MIN[1] or w / h > MAX_ASPECT or h / w > MAX_TALL:
         return False
     if w < SLIT_WIDTH and h < SLIT_ASPECT * w:
@@ -1076,6 +1182,14 @@ def _part_of(shape: FoundSymbol, named: Symbol) -> bool:
     return _overlap(shape, named) >= INSIDE * _area(shape) and _area(named) >= PART_RATIO * _area(shape)
 
 
+def _head_of(shape: FoundSymbol, named: Symbol) -> bool:
+    """The shape is the lintel box (the shutter box, the sill) of a symbol the layers name: as wide as it, no taller
+    than HEAD_MAX, and touching it from above or from below."""
+    touching = abs(shape.y0 - named.y1) <= TOUCH or abs(shape.y1 - named.y0) <= TOUCH
+    return shape.y1 - shape.y0 <= HEAD_MAX and abs(shape.x0 - named.x0) <= CASING \
+        and abs(shape.x1 - named.x1) <= CASING and touching
+
+
 def _is_low(y0: float, h: float, floor: float | None) -> bool:
     """A window whose bottom is on the floor (or lower) and no taller than a metre or so is a planter, a step or a
     vent."""
@@ -1096,7 +1210,7 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
     out: list[Symbol] = []
     taken: dict[int, list[_Named]] = {}
     alone: list[_Named] = []
-    shapes = [s for s in shapes if not any(_part_of(s, n.sym) for n in named)]
+    shapes = [s for s in shapes if not any(_part_of(s, n.sym) or _head_of(s, n.sym) for n in named)]
     for n in named:
         twins = [i for i, s in enumerate(shapes) if _covers(n.sym, s)]
         if twins:
@@ -1130,6 +1244,22 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
     return sorted(out, key=lambda s: (s.x0, s.y0))
 
 
+def _without_outline(groups: list[_Group], lw: _Linework) -> list[_Group]:
+    """The groups but the outline of the facade: a lone frame with nothing in it, as wide as all the drawing above its
+    middle, is the wall of a small building with no opening drawn in it, not a door as wide as the building."""
+    if not lw.lines:
+        return groups
+    bounds = shapely.bounds(np.array(lw.lines, dtype=object))
+
+    def outline(g: _Group) -> bool:
+        if len(g.members) > 1 or g.members[0].kids or g.x1 - g.x0 < OUTLINE_MIN:
+            return False
+        above = bounds[bounds[:, 3] >= (g.y0 + g.y1) / 2]
+        return len(above) > 0 and g.x1 - g.x0 >= OUTLINE_SHARE * (above[:, 2].max() - above[:, 0].min())
+
+    return [g for g in groups if not outline(g)]
+
+
 def _roofed(groups: list[_Group], lw: _Linework) -> list[_Group]:
     """The symbols with a roof, an eave or the top of the wall above them: a line as long as a roof, not the cap of a
     chimney, or the edge of a hatch or a solid as wide (a roof drawn as a fill has no line). What stands in the open
@@ -1158,13 +1288,21 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
                         area: tuple[float, float, float, float], cfg: Config) -> ViewSymbols:
     """Doors, windows and floor level of one elevation, from its items (metres, as ``read_items`` gives them with
     ``keep_other`` and ``keep_fills``), its texts, the y of the feet of its person figures and its area in metres."""
-    lw = _linework(items, area)
+    areas = sum(bool(AREA_MARK.search(t.text)) for t in texts)
+    if areas >= PLAN_AREAS:
+        return ViewSymbols(notes=[f"La vista ha {areas} superfici scritte (mq): e' una pianta, non un prospetto."])
+    lines = _lines(items, area)
+    segments = int(shapely.get_num_coordinates(lines).sum()) - len(lines)
+    if segments > SEGMENTS_MAX:
+        note = f"La vista ha {segments} tratti di linea: troppi per un prospetto (e' una pianta o una planimetria)."
+        return ViewSymbols(notes=[note + " Non la leggo."])
+    lw = _linework(items, lines)
     everything = _groups(lw)
     groups = [g for g in everything if g.x1 - g.x0 >= SYMBOL_MIN[0] and g.y1 - g.y0 >= SYMBOL_MIN[1]]
     strips = [g for g in everything if _is_strip(g.members[0]) and g.x1 - g.x0 > g.y1 - g.y0]
     verticals = _verticals(lw.lines)
     hsegs = _horizontals(lw.lines, MARK_LINE_MIN)
-    candidates = [g for g in groups if _is_opening(g) and not _is_railing(g, verticals, hsegs)]
+    candidates = _without_outline([g for g in groups if _is_opening(g) and not _is_railing(g, verticals, hsegs)], lw)
     shapes = _roofed(candidates, lw)
     roofless = bool(candidates) and not shapes
     if roofless:  # no roof, eave or wall top over any of them: an elevation drawn without one, not a view of details
@@ -1175,7 +1313,7 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
 
     door_feet = [n.sym.y0 for n in named if n.sym.kind == "door" and not n.mixed]
     door_feet += [g.y0 for g in shapes if g.y1 - g.y0 >= DOOR_HEIGHT_UNKNOWN]
-    ground = _ground_line(hsegs, span)
+    ground = _ground_line(hsegs, span, verticals)
     lowest = [n.sym.y0 for n in named] + [g.y0 for g in shapes]
     if ground is not None and lowest and ground > min(lowest) + FLOOR_TOL:
         ground = None  # a line above the bottom of an opening is the eaves or the roof: the ground is out of the view
@@ -1191,8 +1329,11 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
         levels = _storeys(floor, marks, upper, hsegs, verticals, span,
                           [t for t in bands if not _is_low(t[2], t[3] - t[2], floor)])
 
+    below = -math.inf if floor is None else floor - STOREY_MAX  # what stands further down is another drawing
     found = []
     for g in shapes:
+        if g.y0 < below:
+            continue
         kind = _kind(g.y0, g.y1 - g.y0, floor, levels)
         if kind == "window" and _is_low(g.y0, g.y1 - g.y0, floor) and not g.arched:  # an arch is an opening, whatever
             continue  # the ground hides of it
@@ -1208,7 +1349,7 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
     if len(groups) > len(found):
         notes.append(f"{len(groups) - len(found)} figure scartate: fasce, specchiature di parete, vasi, gradini, "
                      "comignoli: non sono porte o finestre.")
-    symbols = _combine(named, found, floor, levels)
+    symbols = _combine([n for n in named if n.sym.y0 >= below], found, floor, levels)
     return ViewSymbols(symbols, floor, source, levels, [(y, a, b) for y, a, b in hsegs if b - a >= MIN_LINE], notes)
 
 
@@ -1216,6 +1357,9 @@ def read_view_symbols(doc: Drawing, cfg: Config, bbox: tuple[float, float, float
                       unit_scale: float) -> ViewSymbols:
     """Doors, windows and floor level of the elevation inside ``bbox`` (drawing units), whatever its layers are
     called. ``unit``/``unit_scale``: the drawing unit already decided by the main read, and its size in metres."""
-    area = tuple(v * unit_scale for v in bbox[:4])
+    x0, y0, x1, y1 = (v * unit_scale for v in bbox[:4])
+    area = (min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1))
+    if not all(math.isfinite(v) for v in (x0, y0, x1, y1)) or area[2] <= area[0] or area[3] <= area[1]:
+        return ViewSymbols(notes=["La vista non ha un'area (vuota o non valida): nessuna porta o finestra letta."])
     sheet = _sheet(doc, cfg, unit, unit_scale)
     return detect_view_symbols(sheet.items_in(area), sheet.texts_in(area), sheet.feet_in(area), area, cfg)
