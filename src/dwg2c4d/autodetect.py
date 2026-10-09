@@ -56,7 +56,7 @@ SITE_RATIO_OTHER = 6.0  # a plan this many times bigger than another one is the 
 MIN_PLAN_CELLS = 40  # ... if that other one is at least this big (10 m2 of drawing): not a detail
 SITE_RATIO = 2.5  # a plan this many times bigger than another view with the same title, or lying in it, is the site
 COPY_SITE_RATIO = 1.5  # ... this many times if the plan in it is the copy of a plan of the sheet: the box is then exact
-PLAN_DOORS = 3  # a view with this many swing arcs of door size is a plan
+PLAN_DOORS = 3  # a view with this many swing arcs of door size (or blocks called doors) is a plan
 PLAN_AREAS = 3  # ... or with this many areas written in it
 FACADE_ASPECT = 2.5  # a drawing this much wider than high, with no door arcs, is a facade
 SECTION_ROOMS = 3  # a view with this many different room names written in it, and no doors or areas, is a section
@@ -109,19 +109,23 @@ OVERRIDE_MARGIN = 1.0  # the header is overruled only by a unit that leads by th
 
 # the words that say what a view is, strongest first (the text is upper-cased and stripped of punctuation)
 VIEW_WORDS = (
-    ("roof", ("PLANIMETRIA COPERTURA", "PIANTA COPERTURA", "PIANTA TETTO", "COPERTURA", "COPERTURE", "TETTO", "ROOF PLAN", "ROOF")),
-    ("elevation", ("PROSPETTO", "PROSPETTI", "PROSP", "FRONTE", "FRONTI", "ALZATO", "FACCIATA", "ELEVATION", "ELEVAZIONE")),
+    ("roof", ("COPERTURA", "COPERTURE", "TETTO", "ROOF")),
+    ("elevation", ("PROSPETTO", "PROSPETTI", "PROSP", "FRONTE", "FRONTI", "ALZATO", "FACCIATA", "ELEVATION", "ELEVAZIONE",
+                   "VISTA SUD", "VISTA NORD", "VISTA EST", "VISTA OVEST", "VISTA FRONTALE", "VISTA LATERALE", "VISTA POSTERIORE")),
     ("section", ("SEZIONE", "SEZIONI", "SEZ", "SECTION")),
-    ("site", ("PLANIMETRIA GENERALE", "INQUADRAMENTO", "SITE PLAN", "PLANIMETRIA DI INSERIMENTO", "ESTRATTO",
-              "PLANIMETRIA CATASTALE", "CATASTALE", "PLANIMETRIA DI ZONA", "PLANIMETRIA LOTTO", "ORTOFOTO")),
+    ("site", ("PLANIMETRIA GENERALE", "INQUADRAMENTO", "SITE PLAN", "PLANIMETRIA DI INSERIMENTO", "ESTRATTO", "STRALCIO",
+              "COROGRAFIA", "PLANIMETRIA CATASTALE", "CATASTALE", "PLANIMETRIA DI ZONA", "PLANIMETRIA LOTTO", "ORTOFOTO")),
     ("detail", ("DETTAGLIO", "PARTICOLARE", "DETAIL")),
-    ("plan", ("PIANTA", "PIANTE", "PLANIMETRIA", "PLANIMETRIE", "PIANO TERRA", "PIANO PRIMO", "PIANO SECONDO", "PIANO INTERRATO",
-              "FLOOR PLAN", "GROUND FLOOR", "FIRST FLOOR", "PLAN")),
+    ("plan", ("PIANTA", "PIANTE", "PLANIMETRIA", "PLANIMETRIE", "PIANO TERRA", "PIANO PRIMO", "PIANO SECONDO", "PIANO TERZO",
+              "PIANO INTERRATO", "PIANO SEMINTERRATO", "FLOOR PLAN", "GROUND FLOOR", "FIRST FLOOR", "PLAN")),
 )
+NOTE_KINDS = ("roof", "site", "detail")  # what a note written in a plan says (COPERTURA IN COPPI, ESTRATTO DI MAPPA, DETTAGLIO A)
+TITLE_WORDS = 5  # a view word that is not the first word of a text counts only in a text of at most this many words (NORTH
+#   ELEVATION, SECOND FLOOR PLAN, PIANTA DEL TETTO): in a longer one it is a note that mentions a drawing
 # what a caption may say before the word that tells the type: the state of the drawing ("STATO DI FATTO - PROSPETTO SUD")
 STATES = ("STATO DI FATTO", "STATO DI PROGETTO", "STATO ATTUALE", "STATO DI COMPARAZIONE", "STATO SOVRAPPOSTO", "STATO MODIFICATO",
           "PROGETTO", "RILIEVO", "ESISTENTE", "VARIANTE")
-NUMBER = re.compile(r"^(?:(?:TAV|TAVOLA|ALL|ALLEGATO|FIG|DIS|N|NR)\s+)?(?:[0-9]{1,2}|[A-Z])\s+(?=[A-Z]{3})")  # 1 - PIANTA  A) SEZIONE  TAV 3 PROSPETTO
+NUMBER = re.compile(r"^(?:(?:TAV|TAVOLA|ALL|ALLEGATO|FIG|DIS)\s+)?(?:(?:N|NR)\s+)?(?:[0-9]{1,2}|[A-Z])\s+(?=[A-Z]{3})")  # 1 - PIANTA  A) SEZIONE  TAV N 3 PROSPETTO
 
 
 @dataclass
@@ -427,6 +431,7 @@ class View:
     curves: int = 0
     hatches: int = 0
     doors: int = 0  # swing arcs
+    door_blocks: int = 0  # blocks the names call doors (PORTA90): the swing is inside the block, no loose arc shows it
     texts: int = 0
     inserts: int = 0
     named: int = 0  # segments, hatches and blocks on layers the names call walls, doors or windows
@@ -494,8 +499,11 @@ def _sample_points(soup: Soup, step: float) -> np.ndarray:
 
 
 def _title_kind(text: str) -> str | None:
-    """What a title says the view is: the text must start with one of the view words (whole words: TETTOIA is no TETTO),
-    after the number of the drawing and the state it shows ("1 - STATO DI FATTO - PROSPETTO SUD")."""
+    """What a title says the view is, from the view words in it (whole words: TETTOIA is no TETTO). Italian titles start
+    with the word, after the number of the drawing and the state it shows ("1 - STATO DI FATTO - PROSPETTO SUD"); English
+    ones end with it (NORTH ELEVATION, SECOND FLOOR PLAN): a word further on counts in a short text only, so that a note
+    that mentions a drawing is no title. A roof word anywhere makes a PIANTA a roof plan (PIANTA DEL TETTO): the strongest
+    kind wins as in VIEW_WORDS, but a title that starts with another word than PIANTA keeps what that word says."""
     up = " ".join(re.split(r"[^A-Z0-9']+", text.upper())).strip()
     while True:
         rest = next((up[len(w) + 1:] for w in STATES if up.startswith(w + " ")), None)
@@ -504,11 +512,17 @@ def _title_kind(text: str) -> str | None:
         if rest == up:
             break
         up = rest
-    for kind, words in VIEW_WORDS:
-        for w in words:
-            if up == w or up.startswith(w + " "):
-                return kind
-    return None
+    padded, short = f" {up} ", len(up.split()) <= TITLE_WORDS
+
+    def says(words: tuple[str, ...], anywhere: bool) -> bool:
+        return any((f" {w} " in padded) if anywhere else padded.startswith(f" {w} ") for w in words)
+
+    first = next((kind for kind, words in VIEW_WORDS if says(words, False)), None)  # the view word the text starts with
+    if first in (None, "plan") and short and says(VIEW_WORDS[0][1], True):
+        return "roof"
+    if first or not short:
+        return first
+    return next((kind for kind, words in VIEW_WORDS if says(words, True)), None)
 
 
 def _title_texts(soup: Soup) -> list[dict]:
@@ -1064,9 +1078,11 @@ def _orthogonality(angle: np.ndarray, length: np.ndarray) -> float:
 
 
 def _measure(views: list[View], soup: Soup, scale: float) -> None:
-    """What each view holds: lines, arcs, door arcs, hatches, texts, level marks, written areas, room names."""
+    """What each view holds: lines, arcs, door arcs, door blocks, hatches, texts, level marks, written areas, room names."""
+    from .config import LayerRules
     from .texts import ROOM_WORDS
 
+    rules = LayerRules()
     seg, arcs = soup.seg, soup.arcs
     room_re = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, ROOM_WORDS), key=len, reverse=True)) + r")\b")
     mx, my = (seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2
@@ -1083,6 +1099,8 @@ def _measure(views: list[View], soup: Soup, scale: float) -> None:
     room = [m.group() if (m := room_re.search(t["text"].upper())) else "" for t in soup.texts]
     ix = np.array([i["x"] for i in soup.inserts])
     iy = np.array([i["y"] for i in soup.inserts])
+    named = {name: rules.classify_block(name) == "door" for name in {i["name"] for i in soup.inserts}}
+    is_door_block = np.array([named[i["name"]] for i in soup.inserts], bool)
     pad = FLOAT_PAD / scale
     for v in views:
         x0, y0, x1, y1 = v.bbox[0] - pad, v.bbox[1] - pad, v.bbox[2] + pad, v.bbox[3] + pad
@@ -1102,17 +1120,33 @@ def _measure(views: list[View], soup: Soup, scale: float) -> None:
         v.texts = len(t)
         v.levels, v.areas = int(is_level[t].sum()), int(is_area[t].sum())
         v.rooms = len({room[i] for i in t} - {""})
-        v.inserts = int(within(ix, iy).sum())
+        at = within(ix, iy)
+        v.inserts, v.door_blocks = int(at.sum()), int((at & is_door_block).sum())
 
 
-def _contradicts(kind: str, v: View) -> bool:
+def _plan_like(v: View) -> bool:
+    """Does the view hold what only a plan holds: swing doors (arcs, or blocks called doors) and written areas?"""
+    return v.doors + v.door_blocks >= PLAN_DOORS or v.areas >= PLAN_AREAS
+
+
+def _plan_outranks_levels(v: View) -> bool:
+    """Level marks make a facade, unless the rooms of the view are written with their areas or drawn with door blocks
+    in greater number: a plan has a few level marks too (the floor of a step, of a terrace). Loose door arcs do not
+    outrank them: the arches of a facade have the same shape."""
+    return v.levels < LEVEL_MARKS or v.areas + v.door_blocks > v.levels
+
+
+def _contradicts(kind: str, v: View, inside: bool = False) -> bool:
     """A title cannot name a view whose content says otherwise: a PROSPETTO is not the plan with its door arcs and the
-    areas of its rooms, and a PIANTA is not a facade covered with level marks."""
-    plan_like = v.doors >= PLAN_DOORS or v.areas >= PLAN_AREAS
+    areas of its rooms, and a PIANTA is not a facade covered with level marks. A text written in the plan that says
+    COPERTURA, TETTO, ESTRATTO or DETTAGLIO (``inside``) is a note, not a title: a roof plan has tiles, not doors and areas."""
+    plan_like = _plan_like(v)
     if kind in ("elevation", "section"):
-        return plan_like and v.levels < LEVEL_MARKS
+        return plan_like and _plan_outranks_levels(v)
     if kind == "plan":
         return v.levels >= LEVEL_MARKS and not plan_like
+    if kind in NOTE_KINDS:
+        return inside and plan_like and v.tiles == 0
     return False
 
 
@@ -1140,8 +1174,11 @@ def _assign_titles(views: list[View], titles: list[dict], frames: list[dict], sc
     options = []
     for t in titles:
         box = box_of.get(id(t), (t["x"], t["y"], t["x"], t["y"]))
-        near = sorted(((_gap(box, v.bbox), v.cells, v) for v in views
-                       if _gap(box, v.bbox) <= reach and not _contradicts(t["kind"], v)), key=lambda o: o[:2])
+        gaps = [(_gap(box, v.bbox), v) for v in views]
+        if t["kind"] in NOTE_KINDS and any(g == 0 and _contradicts(t["kind"], v, True) for g, v in gaps):
+            continue  # a note written in a plan: it names nothing, and no other view is meant by it
+        near = sorted(((g, v.cells, v) for g, v in gaps if g <= reach and not _contradicts(t["kind"], v, g == 0)),
+                      key=lambda o: o[:2])
         options.append((t, box, near))
     sure = Counter(_side(box, near[0][2].bbox) for _, box, near in options
                    if near and near[0][0] > 0 and (len(near) == 1 or near[1][0] - near[0][0] > tie))
@@ -1192,14 +1229,14 @@ def _kind_from_content(v: View, scale: float) -> tuple[str, str]:
     aspect = max(w, h) / max(min(w, h), 1e-9)
     if v.segments >= ORTHO_MIN_LINES and v.ortho < SITE_ORTHO and max(w, h) >= SITE_SIZE:
         return "site", "linee in ogni direzione (curve di livello, confini) su molti metri"
-    if (v.doors >= PLAN_DOORS or v.areas >= PLAN_AREAS or (v.doors >= 2 and aspect < FACADE_ASPECT)) \
-            and v.levels < LEVEL_MARKS:
-        return "plan", f"{v.doors} archi di porta, {v.areas} superfici scritte"
-    if v.rooms >= SECTION_ROOMS and v.doors < PLAN_DOORS and v.areas < PLAN_AREAS:
+    doors = v.doors + v.door_blocks
+    if (_plan_like(v) or (doors >= 2 and aspect < FACADE_ASPECT)) and _plan_outranks_levels(v):
+        return "plan", f"{v.doors} archi di porta, {v.door_blocks} blocchi porta, {v.areas} superfici scritte"
+    if v.rooms >= SECTION_ROOMS and not _plan_like(v):
         return "section", f"{v.rooms} nomi di locali scritti e nessuna porta"
     if v.tiles >= ROOF_TILES and v.tiles * 5 >= v.hatches and v.levels == 0 and aspect < FACADE_ASPECT * 1.5:
         return "roof", f"{v.tiles} campiture di coppi"
-    if v.levels >= LEVEL_MARKS or (aspect >= FACADE_ASPECT and v.doors == 0):
+    if v.levels >= LEVEL_MARKS or (aspect >= FACADE_ASPECT and doors == 0):
         return "elevation", f"larga e bassa ({w:.0f} x {h:.0f} m)" if v.levels < LEVEL_MARKS else f"{v.levels} quote di livello"
     return "?", ""
 
@@ -1263,11 +1300,11 @@ def choose_plan(views: list[View], wanted: int | None = None) -> tuple[View | No
     plans = [v for v in views if v.kind == "plan" and v.copy_of is None]
     plans = [v for v in plans if v.parent is None] or plans
     if plans:
-        best = max(plans, key=lambda v: (v.named > 0 or v.doors > 0, v.cells))
+        best = max(plans, key=lambda v: (v.named > 0 or v.doors + v.door_blocks > 0 or v.areas > 0, v.cells))
         return best, "la pianta piu' grande"
-    withdoors = [v for v in views if v.doors > 0 and v.kind not in ("elevation", "section", "roof", "site")]
+    withdoors = [v for v in views if v.doors + v.door_blocks > 0 and v.kind not in ("elevation", "section", "roof", "site")]
     if withdoors:
-        return max(withdoors, key=lambda v: v.doors), "la vista con piu' porte"
+        return max(withdoors, key=lambda v: v.doors + v.door_blocks), "la vista con piu' porte"
     return None, ""
 
 

@@ -279,12 +279,37 @@ def test_a_title_inside_a_view_names_that_view():
     ("STATO DI FATTO - PROSPETTO SUD", "elevation"), ("1 - PIANTA PIANO TERRA", "plan"), ("A) SEZIONE B-B", "section"),
     ("TAV. 3 PROSPETTI", "elevation"), ("Stato di progetto: planimetria piano primo", "plan"), ("Fronte principale", "elevation"),
     ("SEZ. A-A", "section"), ("N 2 PIANTA COPERTURA", "roof"), ("PROGETTO DI RISTRUTTURAZIONE", None), ("STATO DI FATTO", None),
-    ("3 CAMERE", None), ("TETTOIA IN ACCIAIO", None),
+    ("3 CAMERE", None), ("TETTOIA IN ACCIAIO", None), ("TAVOLA N. 3 - PIANTA PIANO TERRA", "plan"),
 ])
 def test_the_state_and_the_number_before_the_word_do_not_change_what_a_title_says(text, kind):
     from dwg2c4d.autodetect import _title_kind
 
     assert _title_kind(text) == kind
+
+
+@pytest.mark.parametrize("text, kind", [
+    ("NORTH ELEVATION", "elevation"), ("SOUTH ELEVATION 1:100", "elevation"), ("BUILDING SECTION", "section"),
+    ("SECOND FLOOR PLAN", "plan"), ("BASEMENT PLAN", "plan"), ("VISTA SUD", "elevation"), ("STRALCIO CATASTALE", "site"),
+    ("COROGRAFIA", "site"), ("PIANO COPERTURA", "roof"), ("PIANTA DEL TETTO", "roof"), ("PIANTA PIANO COPERTURA", "roof"),
+    ("PIANTA DELLA COPERTURA", "roof"), ("PIANTA SOTTOTETTO", "plan"), ("PLANIMETRIA COPERTURA", "roof"),
+    ("PROSPETTO COPERTURA IN COPPI", "elevation"),  # what the text starts with wins, except for a PIANTA that is a roof
+    ("SITE PLAN", "site"), ("ROOF PLAN", "roof"),  # the strongest kind keeps its place
+])
+def test_a_view_word_ends_a_title_as_well_as_starts_it_and_a_roof_word_makes_a_pianta_a_roof(text, kind):
+    from dwg2c4d.autodetect import _title_kind
+
+    assert _title_kind(text) == kind
+
+
+@pytest.mark.parametrize("note", [
+    "NOTE: SEE THE GROUND FLOOR PLAN FOR THE POSITION OF THE POSTS",  # the view word is far in a long text
+    "ATTACCO A TERRA DEL MURO PIANO TERRA CON GUAINA",
+    "VEDI LA PIANTA DEL SOTTOTETTO PER LE QUOTE", "ACCESSO", "SOTTOTETTO NON ABITABILE", "FINESTRA DA 120X140",
+])
+def test_a_note_that_mentions_a_drawing_is_no_title(note):
+    from dwg2c4d.autodetect import _title_kind
+
+    assert _title_kind(note) is None
 
 
 def test_a_title_written_twice_counts_once_and_a_caption_with_a_number_is_a_title():
@@ -309,6 +334,93 @@ def test_a_plan_is_known_by_its_doors_and_the_areas_of_its_rooms():
     add_plan(msp, 0, 0)
     (v,) = views_of(doc)
     assert v.kind == "plan" and v.kind_from.startswith("contenuto") and v.doors == 5 and v.areas == 4
+
+
+def add_plan_with_door_blocks(doc, msp, x, y, rooms=True, areas=False, marks=0, doors=5):
+    """A plan like ``add_plan`` whose doors are blocks called PORTA90 (the swing is inside the block: no loose arc shows it),
+    with ``marks`` level marks written in it. The rooms are written with their names only unless ``areas``."""
+    for off in (0, 30):
+        msp.add_lwpolyline([(x + off, y + off), (x + 1400 - off, y + off), (x + 1400 - off, y + 900 - off), (x + off, y + 900 - off)],
+                           close=True)
+        msp.add_line((x + 600 + off, y), (x + 600 + off, y + 900))
+    if "PORTA90" not in doc.blocks:
+        block = doc.blocks.new("PORTA90")
+        block.add_arc((0, 0), 90, 0, 90)
+        block.add_line((0, 0), (0, 90))
+    for k in range(doors):
+        msp.add_blockref("PORTA90", (x + 120 + k * 250, y + 30))
+    if rooms:
+        for k, name in enumerate(("CAMERA", "BAGNO", "CUCINA", "SOGGIORNO")):
+            msp.add_text(f"{name} MQ {10 + k},5" if areas else name, height=20, dxfattribs={"insert": (x + 100 + k * 300, y + 700)})
+    for k in range(marks):
+        msp.add_text(["+0,00", "+0,15", "-0,05", "+3,00"][k], height=15, dxfattribs={"insert": (x + 100 + k * 300, y + 500)})
+
+
+@pytest.mark.parametrize("marks", [0, 1, 2, 3])
+def test_a_plan_with_a_few_level_marks_is_still_a_plan_when_its_rooms_are_written_with_their_areas(marks):
+    doc, msp = new_sheet()
+    add_plan(msp, 0, 0)  # five doors and the areas of four rooms
+    for k in range(marks):  # the level of a step, of a terrace
+        msp.add_text(["+0,00", "+0,15", "-0,05"][k], height=15, dxfattribs={"insert": (300 + k * 300, 500)})
+    add_elevation(msp, 3000, 0)
+    plan, elevation = (view_at(views_of(doc), x, 4) for x in (7, 40))
+    assert (plan.kind, elevation.kind) == ("plan", "elevation") and plan.levels == marks
+    assert analyze(doc).plan.bbox == plan.bbox
+
+
+def test_door_blocks_make_a_plan_not_a_section_of_its_room_names():
+    doc, msp = new_sheet()
+    add_plan_with_door_blocks(doc, msp, 0, 0)  # four room names, five door blocks, no 'mq', no arc
+    add_elevation(msp, 3000, 0)
+    plan = view_at(views_of(doc), 7, 4)
+    assert plan.kind == "plan" and plan.door_blocks == 5 and plan.doors == 0 and plan.rooms == 4
+    assert analyze(doc).plan.bbox == plan.bbox
+
+
+@pytest.mark.parametrize("marks", [2, 3])
+def test_the_title_of_a_plan_drawn_with_door_blocks_is_not_refused_for_its_level_marks(marks):
+    doc, msp = new_sheet()
+    add_plan_with_door_blocks(doc, msp, 0, 0, marks=marks)
+    add_title(msp, "PIANTA PIANO TERRA", 0, -200)
+    add_elevation(msp, 3000, 0)
+    plan = view_at(views_of(doc), 7, 4)
+    assert plan.kind == "plan" and plan.titles == ["PIANTA PIANO TERRA"] and plan.kind_from == "titolo"
+
+
+@pytest.mark.parametrize("note", ["COPERTURA IN COPPI", "TETTO", "ROOF", "ESTRATTO DI MAPPA", "DETTAGLIO A", "PARTICOLARE 3"])
+def test_a_note_written_in_a_plan_does_not_make_it_a_roof_a_map_or_a_detail(note):
+    doc, msp = new_sheet()
+    add_plan(msp, 0, 0)
+    msp.add_text(note, height=15, dxfattribs={"insert": (300, 600)})
+    add_elevation(msp, 3000, 0)
+    views = views_of(doc)
+    plan = view_at(views, 7, 4)
+    assert plan.kind == "plan" and plan.titles == [] and analyze(doc).plan.bbox == plan.bbox
+    assert [v.kind for v in views] == ["plan", "elevation"]  # the note names no other view either
+
+
+def test_a_title_that_says_roof_names_a_roof_plan_and_a_roof_is_never_chosen_over_a_plan_with_rooms():
+    doc, msp = new_sheet()
+    add_plan_with_door_blocks(doc, msp, 0, 0, areas=True)
+    add_title(msp, "PIANTA PIANO TERRA", 0, -250)
+    for k in range(40):  # the lines of the tiles: a bigger drawing than the plan
+        msp.add_line((3000 + k * 35, 0), (3000 + k * 35, 900))
+    for k in range(30):
+        msp.add_line((3000, k * 30), (4400, k * 30))
+    add_title(msp, "PIANTA DEL TETTO", 3000, -250)
+    views = views_of(doc)
+    roof = view_at(views, 36, 4)
+    assert roof.kind == "roof" and roof.kind_from == "titolo" and roof.cells > view_at(views, 7, 4).cells
+    assert analyze(doc).plan.bbox == view_at(views, 7, 4).bbox
+
+
+def test_the_plan_to_convert_counts_the_areas_written_in_it_as_evidence_of_a_plan():
+    def v(id_, cells, **kw):
+        return View(id_, (0, 0, 1, 1), cells, kind="plan", **kw)
+
+    roof_like, rooms = v(1, 668), v(2, 135, areas=4)  # a plan that is a roof by its lines has no doors and no areas
+    assert choose_plan([roof_like, rooms])[0].id == 2
+    assert choose_plan([v(1, 668), v(2, 135, door_blocks=3)])[0].id == 2
 
 
 def test_a_plan_turned_at_any_angle_is_still_a_plan_and_no_site():
