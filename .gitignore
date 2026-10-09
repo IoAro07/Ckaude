@@ -11,3 +11,6 @@ output/
 
 # disegni reali usati solo in locale per il test di regressione (non pubblicarli)
 tests/data/
+
+# worktrees of parallel agents
+.claude/worktrees/

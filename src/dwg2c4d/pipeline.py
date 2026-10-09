@@ -24,6 +24,7 @@ from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
 from .texts import read_words
 from .passages import find_passages
+from .elevmatch import match_views
 from .garden import build_garden
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
 from .floors import extend_to_outer_faces, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
@@ -250,6 +251,16 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         elevation_report.append({"side": ev.side, "matched": matched, "total": total,
                                  "zero_source": ev.zero_source, **({"found_on": found_on} if found_on else {})})
 
+    unaligned_views: list[tuple[float, float, float, float]] = []
+    if cfg.analysis is not None and cfg.elevations_auto and not cfg.elevations:
+        taken = [tuple(spec[:4]) for spec, _ in specs]  # read in line with the plan above
+        more, more_report = match_views(doc, cfg, cfg.analysis, openings, solid, result.unit, result.unit_scale, taken,
+                                        warnings)
+        elevations.extend(more)
+        elevation_report.extend(more_report)
+        unaligned_views = [v.bbox for v in cfg.analysis.views if v.kind in ("elevation", "section", "roof", "detail")
+                           and v is not cfg.analysis.plan]
+
     labels = apply_labels(openings, words, cfg, text_unit, solid.bounds, warnings) if words else 0
 
     if cfg.table_in:
@@ -299,7 +310,8 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if cfg.garden:
         # the walls may have a gap (a doorway wider than a passage): what the floor bridges is inside as well
         outside_of = union([footprint, floor_footprint(solid)])
-        garden = build_garden(doc, cfg, result.unit_scale, outside_of, garden_zones, warnings)
+        garden = build_garden(doc, replace(cfg, garden_exclude=[*cfg.garden_exclude, *unaligned_views]),
+                              result.unit_scale, outside_of, garden_zones, warnings)
         if cfg.garden_table_in:
             if garden is None:
                 warnings.append("Tabella del giardino indicata, ma non ho trovato nessun giardino a cui applicarla.")

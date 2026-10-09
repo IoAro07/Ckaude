@@ -55,6 +55,26 @@ def _horizontal_segments(items: list[Item]) -> list[tuple[float, float, float]]:
     return sorted(set(out))
 
 
+def named_symbols(items: list[Item]) -> list[Symbol]:
+    """The doors and windows of an elevation drawn on layers (or in blocks) that the names call doors and windows."""
+    symbols: list[Symbol] = []
+    for kind in ("door", "window"):
+        for sym in _symbols(items, kind):
+            if sym.geom.is_empty:
+                continue
+            x0, y0, x1, y1 = sym.geom.bounds
+            symbols.append(Symbol(kind, x0, x1, y0, y1))
+    # A window drawn as a frame plus an inner pane (nested rectangles) is one window: keep
+    # the outermost shape.
+    tol = 0.01
+    return [a for a in symbols
+            if not any(b is not a and b.kind == a.kind
+                       and b.x0 <= a.x0 + tol and b.x1 >= a.x1 - tol
+                       and b.y0 <= a.y0 + tol and b.y1 >= a.y1 - tol
+                       and (b.x1 - b.x0) * (b.y1 - b.y0) > (a.x1 - a.x0) * (a.y1 - a.y0)
+                       for b in symbols)]
+
+
 def read_elevation(items: list[Item], spec: tuple[float, ...], unit_scale: float,
                    plan_bounds: tuple[float, float, float, float], warnings: list[str],
                    index: int) -> Elevation | None:
@@ -74,22 +94,7 @@ def read_elevation(items: list[Item], spec: tuple[float, ...], unit_scale: float
         )
         return None
 
-    symbols: list[Symbol] = []
-    for kind in ("door", "window"):
-        for sym in _symbols(items, kind):
-            if sym.geom.is_empty:
-                continue
-            x0, y0, x1, y1 = sym.geom.bounds
-            symbols.append(Symbol(kind, x0, x1, y0, y1))
-    # A window drawn as a frame plus an inner pane (nested rectangles) is one window: keep
-    # the outermost shape.
-    tol = 0.01
-    symbols = [a for a in symbols
-               if not any(b is not a and b.kind == a.kind
-                          and b.x0 <= a.x0 + tol and b.x1 >= a.x1 - tol
-                          and b.y0 <= a.y0 + tol and b.y1 >= a.y1 - tol
-                          and (b.x1 - b.x0) * (b.y1 - b.y0) > (a.x1 - a.x0) * (a.y1 - a.y0)
-                          for b in symbols)]
+    symbols = named_symbols(items)
     if not symbols:
         warnings.append(f"{label}: nessuna porta o finestra riconosciuta nell'area.")
         return None

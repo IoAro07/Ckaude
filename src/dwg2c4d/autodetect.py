@@ -338,6 +338,7 @@ class View:
     texts: int = 0
     inserts: int = 0
     named: int = 0  # segments, hatches and blocks on layers the names call walls, doors or windows
+    matched: str = ""  # an elevation: which facade of the plan it was matched to (written by elevmatch.match_views)
 
     def size_m(self, scale: float) -> tuple[float, float]:
         x0, y0, x1, y1 = self.bbox
@@ -658,6 +659,8 @@ def write_views_image(analysis: Analysis, path) -> "Path":
         label = f"{v.id}: {_KIND_IT.get(v.kind, v.kind)}" + (f"  \"{v.titles[0]}\"" if v.titles else "")
         if v.copy_of:
             label += f" (copia di {v.copy_of})"
+        if v.matched:
+            label += f"  -> {v.matched}"
         ax.text(x0, y1, label, fontsize=8, color=colour, va="bottom", ha="left",
                 bbox={"fc": "white", "ec": "none", "alpha": 0.8, "pad": 1})
     ax.autoscale()

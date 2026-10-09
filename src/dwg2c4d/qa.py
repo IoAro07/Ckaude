@@ -47,9 +47,12 @@ def summary_lines(report) -> list[str]:
         mark = "" if room["named"] else "  (senza nome)"
         out.append(f"  Locale             : {room['name']}  {room['area_m2']:.1f} m2{height}{mark}")
     for ev in report.elevations:
-        side = {"south": "sud", "north": "nord"}[ev["side"]]
-        zero = "dal fondo della porta" if ev["zero_source"] == "porta" else "indicata"
+        side = {"south": "sud", "north": "nord"}.get(ev["side"], ev["side"])
+        zero = {"porta": "dal fondo della porta", "indicata": "indicata"}.get(ev["zero_source"], ev["zero_source"])
         found = f", trovato da solo sul layer {ev['found_on']}" if ev.get("found_on") else ""
+        if ev.get("view"):  # an elevation that is not in line with the plan: matched by the row of its windows
+            found = (f", vista {ev['view']} abbinata alla facciata dal confronto delle aperture "
+                     f"(affidabilita' {ev['confidence']}, scarto medio {ev['residual'] * 100:.0f} cm)")
         out.append(f"  Prospetto {side:<5}    : {ev['matched']} di {ev['total']} aperture con le quote del "
                    f"prospetto (quota zero {zero}{found})")
     if report.roof:
