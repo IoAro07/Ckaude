@@ -81,6 +81,7 @@ COPY_INK = 0.6  # the lines confirm it: this share of the lines of the smaller d
 #   (a copy reaches 0.8 and more; two floors of a house, with the same walls and other partitions, 0.3)
 COPY_INK_TOLERANCE = 0.05  # m: ... within this distance
 COPY_SIZE = 0.05  # two views are twins only if their sides differ by less than this share
+COPY_TRIES = 200  # no more pairs of views than this (a sheet of dozens of drawings of one size) are compared by their lines
 COPY_VOTERS = 150  # the longest lines of a drawing vote for the shift that takes it onto its twin...
 COPY_PARTNERS = 50  # ... each for the shifts to the lines of nearly its length, this many looked at...
 COPY_VOTES = 6  # ... and a shift needs this many votes
@@ -965,9 +966,13 @@ class _Lines:
         self.length = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
         self.tree = cKDTree(np.stack([self.x, self.y], axis=1)) if len(seg) else None
         self.scale = scale
+        self._inside: dict[tuple, np.ndarray] = {}
 
     def inside(self, box: tuple) -> np.ndarray:
-        return np.flatnonzero((self.x >= box[0]) & (self.x <= box[2]) & (self.y >= box[1]) & (self.y <= box[3]))
+        """The lines whose middle lies in ``box`` (kept: a view is compared with many others)."""
+        if box not in self._inside:
+            self._inside[box] = np.flatnonzero((self.x >= box[0]) & (self.x <= box[2]) & (self.y >= box[1]) & (self.y <= box[3]))
+        return self._inside[box]
 
     def share(self, box: tuple, turns: int, shift: tuple[float, float]) -> float:
         """The share of the lines in ``box`` that a move (``shift`` in metres) carries onto a line of the same length."""
@@ -995,16 +1000,17 @@ class _Lines:
         c, s = (1, 0, -1, 0)[turns], (0, 1, 0, -1)[turns]
         tol = COPY_INK_TOLERANCE / self.scale
         lengths = self.length[there]
-        votes = []
-        for i in mine:
-            at = int(np.searchsorted(lengths, self.length[i]))  # the lines of nearly the same length are around here
-            near = there[max(at - COPY_PARTNERS // 2, 0):at + COPY_PARTNERS // 2]
-            j = near[np.abs(self.length[near] - self.length[i]) <= tol]
-            votes.append(np.stack([self.x[j] - (c * self.x[i] - s * self.y[i]), self.y[j] - (s * self.x[i] + c * self.y[i])], axis=1))
-        votes = np.concatenate(votes) if votes else np.empty((0, 2))
+        at = np.searchsorted(lengths, self.length[mine])  # the lines of nearly the same length are around here
+        pos = at[:, None] + np.arange(-(COPY_PARTNERS // 2), COPY_PARTNERS // 2)[None, :]
+        ok = (pos >= 0) & (pos < len(there))
+        pos = np.where(ok, pos, 0)
+        ok &= np.abs(lengths[pos] - self.length[mine][:, None]) <= tol
+        voter, partner = np.nonzero(ok)
+        i, j = mine[voter], there[pos[voter, partner]]
+        votes = np.stack([self.x[j] - (c * self.x[i] - s * self.y[i]), self.y[j] - (s * self.x[i] + c * self.y[i])], axis=1)
         if len(votes) == 0:
             return None
-        _, inverse, count = np.unique(np.round(votes / (2 * tol)).astype(np.int64), axis=0, return_inverse=True, return_counts=True)
+        _, inverse, count = np.unique(_pack(*np.round(votes / (2 * tol)).astype(np.int64).T), return_inverse=True, return_counts=True)
         best = int(count.argmax())
         if count[best] < COPY_VOTES:
             return None
@@ -1058,17 +1064,40 @@ def _copies(views: list[View], soup: Soup, scale: float, lines: _Lines) -> list[
 def _twins(views: list[View], lines: _Lines, known: set[frozenset]) -> list[tuple[View, View]]:
     """Views of about the same size whose lines lie on one another after a turn and a shift: a drawing and its copy, with
     no words in common. Two floors of a house have the same walls and not the same partitions: they are no twins."""
-    pairs = []
+    pairs: list[tuple[View, View]] = []
     if lines.tree is None:
         return pairs
-    for i, a in enumerate(views):
-        for b in views[i + 1:]:
-            wa, ha = sorted(a.size_m(lines.scale))
-            wb, hb = sorted(b.size_m(lines.scale))  # a copy may be turned a quarter of a turn
-            if a.outline or b.outline or frozenset((id(a), id(b))) in known or a.cells < MIN_PLAN_CELLS or b.cells < MIN_PLAN_CELLS \
-                    or "site" in (a.kind, b.kind) or (a.kind != b.kind and "?" not in (a.kind, b.kind)) \
-                    or abs(wa - wb) > COPY_SIZE * max(wa, wb) or abs(ha - hb) > COPY_SIZE * max(ha, hb):
+    # only views of nearly the same size can be twins: they are looked at in the order of their short side, and the ones
+    # after a view stop being candidates as soon as they are too much bigger. A pair already linked (directly or through a
+    # third view) is not looked at again, and no more than COPY_TRIES pairs are compared by their lines.
+    sides = [sorted(v.size_m(lines.scale)) for v in views]  # a copy may be turned a quarter of a turn
+    order = sorted((i for i, v in enumerate(views) if not v.outline and v.cells >= MIN_PLAN_CELLS and v.kind != "site"),
+                   key=lambda i: sides[i][0])
+    index = {id(v): i for i, v in enumerate(views)}
+    group = list(range(len(views)))
+
+    def find(k: int) -> int:
+        while group[k] != k:
+            group[k] = group[group[k]]
+            k = group[k]
+        return k
+
+    for pair in known:
+        linked = [index[k] for k in pair if k in index]
+        if len(linked) == 2:
+            group[find(linked[0])] = find(linked[1])
+    tries = 0
+    for n, i in enumerate(order):
+        (wa, ha), a = sides[i], views[i]
+        for j in order[n + 1:]:
+            (wb, hb), b = sides[j], views[j]
+            if wb - wa > COPY_SIZE * wb:
+                break
+            if find(i) == find(j) or (a.kind != b.kind and "?" not in (a.kind, b.kind)) or abs(ha - hb) > COPY_SIZE * max(ha, hb):
                 continue
+            if tries >= COPY_TRIES:
+                return pairs
+            tries += 1
             for turns in range(4):
                 shift = lines.shift(a.bbox, b.bbox, turns)
                 if shift is None:
@@ -1077,7 +1106,8 @@ def _twins(views: list[View], lines: _Lines, known: set[frozenset]) -> list[tupl
                 c, s = (1, 0, -1, 0)[back], (0, 1, 0, -1)[back]
                 if max(lines.share(a.bbox, turns, shift),
                        lines.share(b.bbox, back, (-(c * shift[0] - s * shift[1]), -(s * shift[0] + c * shift[1])))) >= COPY_INK:
-                    pairs.append((b, a))
+                    pairs.append((b, a) if i < j else (a, b))
+                    group[find(i)] = find(j)
                     break
     return pairs
 

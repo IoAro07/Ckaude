@@ -649,6 +649,44 @@ def test_two_plans_with_no_words_and_the_same_lines_are_twins_even_when_one_is_t
     assert first.copy_of is None and second.copy_of == first.id
 
 
+def _count_comparisons(monkeypatch):
+    """The number of times two drawings are compared line by line (``_Lines.shift``)."""
+    from dwg2c4d import autodetect
+
+    calls: list[int] = []
+    real = autodetect._Lines.shift
+    monkeypatch.setattr(autodetect._Lines, "shift", lambda self, *a: calls.append(1) or real(self, *a))
+    return calls
+
+
+def test_thirty_alike_plans_are_twins_found_without_comparing_every_pair(monkeypatch):
+    doc, msp = new_sheet()
+    for k in range(30):
+        add_plan(msp, (k % 6) * 2200, (k // 6) * 1500)
+    _without_words(msp)
+    calls = _count_comparisons(monkeypatch)
+    views = views_of(doc)
+    assert len(views) == 30 and sum(v.copy_of is not None for v in views) == 29  # one original, the rest its copies
+    assert len(calls) <= 2 * 29  # a pair linked through a third plan is not compared: 435 pairs before
+
+
+def test_dozens_of_unlike_drawings_of_one_size_are_compared_a_bounded_number_of_times(monkeypatch):
+    from dwg2c4d.autodetect import COPY_TRIES
+
+    rng = np.random.default_rng(5)
+    seg = []
+    for k in range(40):  # forty clouds of lines in boxes of 30 x 20 m, 20 m apart
+        ox, oy = (k % 8) * 5000, (k // 8) * 4000
+        p = np.column_stack([rng.uniform(ox, ox + 3000, 400), rng.uniform(oy, oy + 2000, 400)])
+        seg.append(np.hstack([p, p + rng.uniform(-100, 100, (400, 2))]))
+    seg = np.vstack(seg)
+    soup = Soup("cm", ["0"], seg, np.zeros(len(seg), dtype=int), np.zeros((0, 5)), np.zeros(0, dtype=int), np.zeros((0, 3)),
+                np.zeros((0, 4)))
+    calls = _count_comparisons(monkeypatch)
+    assert len(find_views(soup, S)) >= 40
+    assert len(calls) <= 4 * COPY_TRIES  # four turns for each pair tried, 780 pairs before
+
+
 def test_two_floors_with_the_same_walls_and_other_partitions_are_no_copies():
     doc, msp = new_sheet()
     for k, x in enumerate((0, 2000)):
