@@ -219,6 +219,13 @@ def test_the_whole_sheet_converts_without_any_layer_name(sheet, tmp_path):
     assert (tmp_path / "m_viste.png").exists()
 
 
+def test_a_sheet_in_centimetres_whose_header_says_feet_converts_as_one_in_centimetres(tmp_path):
+    path = messy_sheet(tmp_path / "ft.dxf", declared_units=2)  # the dimensions (2 to 10 m) are 600 m and more in feet
+    report = convert(path, tmp_path / "ft.obj", Config(auto=True))
+    assert report.unit == "cm" and report.size_m[0] == pytest.approx(10.0, abs=0.2) and report.size_m[1] == pytest.approx(6.0, abs=0.2)
+    assert any("uso 'cm'" in w for w in report.warnings)
+
+
 def test_without_the_analysis_the_layer_name_is_all_there_is(sheet, tmp_path):
     from dwg2c4d.dwgfile import ConversionError
 
@@ -391,13 +398,14 @@ def test_a_header_in_feet_or_inches_is_not_overridden_where_nothing_speaks_again
     assert feet.unit == "ft" and not feet.differs
 
 
-def test_a_centimetre_sheet_with_a_header_in_feet_is_read_in_centimetres():
+@pytest.mark.parametrize("declared", ["ft", "in"])
+def test_a_centimetre_sheet_with_a_header_in_feet_or_inches_is_read_in_centimetres(declared):
     # converters that do not know the unit often write feet: 90 cm door arcs, 15 cm letters, dimensions of 2 to 5 m
     arcs = [(0, 0, 90, 0, 90)] * 5
-    soup = _soup("ft", dims=[200, 350, 500, 420, 280], arcs=arcs, extent=3000.0)
+    soup = _soup(declared, dims=[200, 350, 500, 420, 280], arcs=arcs, extent=3000.0)
     soup.texts = [{"layer": "T", "text": "x", "x": 0, "y": 0, "height": 15.0}] * 10
     guess = infer_unit(soup)
-    assert guess.unit == "cm" and guess.differs and guess.declared == "ft"
+    assert guess.unit == "cm" and guess.differs and guess.declared == declared
 
 
 def test_a_header_in_feet_is_not_enough_to_read_the_sheet_at_the_wrong_scale():

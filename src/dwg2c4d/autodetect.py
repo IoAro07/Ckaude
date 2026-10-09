@@ -105,8 +105,8 @@ CAPTION = re.compile(r"^[A-Za-z' ]+?\s*(?:[-:\u2013]\s*(?:[A-Z]|\d{1,2})(?:-(?:[
 AREA_MARK = re.compile(r"(?<![A-Za-z0-9])(?:mq|m2|m\u00b2)(?![A-Za-z0-9])", re.I)  # 12,5 mq
 
 UNIT_CHOICES = ("m", "cm", "mm")
-OLD_UNITS = ("in", "ft")  # a header in these is voted on as one more unit, and overruled only by a clear majority
-UNIT_SURE = 2.0  # with no unit in the header (or one in inches or feet) the analysis decides when its best unit leads by this many votes
+OLD_UNITS = ("in", "ft")  # a header in these is voted on as one more unit, with the bonus of the header, like any other
+UNIT_SURE = 2.0  # with no unit in the header, the analysis decides when its best unit leads by this many votes
 MIN_PLAN_SIDE = 3.0  # m: a plan thinner than this is a fragment (the title block of a sheet read in the wrong unit), not a plan
 MAX_GRID_CELLS = 4e5  # a sheet spread over more cells than this (a unit 100 times too small) is looked at through bigger cells
 DOOR_RADIUS = (0.55, 1.40)  # m: the radius of a swing arc
@@ -345,13 +345,7 @@ class UnitGuess:
 
     @property
     def differs(self) -> bool:
-        return self.declared is not None and self.unit != self.declared and self.margin >= self.needed
-
-    @property
-    def needed(self) -> float:
-        """How far ahead the best unit must be to overrule the header: a header in feet or inches is a unit that few of
-        the drawings we meet are really in, but also one that nobody checks, so it takes a clear majority."""
-        return UNIT_SURE if self.declared in OLD_UNITS else OVERRIDE_MARGIN
+        return self.declared is not None and self.unit != self.declared and self.margin >= OVERRIDE_MARGIN
 
     @property
     def margin(self) -> float:
@@ -377,9 +371,10 @@ def _core_extent(soup: Soup) -> float:
 def infer_unit(soup: Soup) -> UnitGuess:
     """Vote on the unit of the numbers in the drawing: dimension values, door arcs, the height of the texts, the size of
     the drawing, and the header (the weakest, because it is the one that is wrong most often). A header in inches or feet
-    stands in the vote as one more unit, overruled by a clear majority only: a centimetre sheet that says feet (the
-    default of some converters) must not be read at the scale of feet. Whenever the header is not overruled the sheet is
-    read in the unit it declares, as the conversion will."""
+    stands in the vote as one more unit: a centimetre sheet that says feet (the default of some converters) must not be
+    read at the scale of feet, and a sheet really in feet keeps its header, because its door arcs and dimensions fit feet
+    and fit no other unit. Whenever the header is not overruled the sheet is read in the unit it declares, as the
+    conversion will."""
     declared = soup.declared_unit
     if declared is not None and declared not in UNIT_CHOICES and declared not in OLD_UNITS:
         return UnitGuess(declared, declared, {}, [])  # a unit we cannot vote on
