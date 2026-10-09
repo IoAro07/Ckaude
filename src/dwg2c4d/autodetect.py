@@ -54,6 +54,8 @@ TITLE_REACH = 8.0  # m: a title belongs to a view it is this close to (a gap of 
 TITLE_TIE = 1.0  # m: views this much farther than the nearest are about as near: the habit of the sheet decides
 SITE_RATIO_OTHER = 6.0  # a plan this many times bigger than another one is the site even with another title
 MIN_PLAN_CELLS = 40  # ... if that other one is at least this big (10 m2 of drawing): not a detail
+SITE_RICHER = 6.0  # ... unless it also has this many times the doors and the written areas: a bigger building (a ground floor
+#   against an upper floor that is a tenth of it), not the lot around a house, which has about as many as the house
 SITE_RATIO = 2.5  # a plan this many times bigger than another view with the same title, or lying in it, is the site
 COPY_SITE_RATIO = 1.5  # ... this many times if the plan in it is the copy of a plan of the sheet: the box is then exact
 PLAN_DOORS = 3  # a view with this many swing arcs of door size (or blocks called doors) is a plan
@@ -122,9 +124,12 @@ VIEW_WORDS = (
 NOTE_KINDS = ("roof", "site", "detail")  # what a note written in a plan says (COPERTURA IN COPPI, ESTRATTO DI MAPPA, DETTAGLIO A)
 TITLE_WORDS = 5  # a view word that is not the first word of a text counts only in a text of at most this many words (NORTH
 #   ELEVATION, SECOND FLOOR PLAN, PIANTA DEL TETTO): in a longer one it is a note that mentions a drawing
-# what a caption may say before the word that tells the type: the state of the drawing ("STATO DI FATTO - PROSPETTO SUD")
-STATES = ("STATO DI FATTO", "STATO DI PROGETTO", "STATO ATTUALE", "STATO DI COMPARAZIONE", "STATO SOVRAPPOSTO", "STATO MODIFICATO",
-          "PROGETTO", "RILIEVO", "ESISTENTE", "VARIANTE")
+# the state of the building a drawing shows ("STATO DI FATTO - PROSPETTO SUD"): the plans of two states are twins by their lines
+STATE_WORDS = (("fatto", ("STATO DI FATTO", "STATO ATTUALE", "RILIEVO", "ESISTENTE")),
+               ("progetto", ("STATO DI PROGETTO", "PROGETTO", "STATO MODIFICATO", "VARIANTE")),
+               ("confronto", ("STATO DI COMPARAZIONE", "STATO SOVRAPPOSTO", "COMPARAZIONE", "SOVRAPPOSIZIONE")))
+STATES = tuple(w for _, words in STATE_WORDS for w in words)  # what a caption may say before the word that tells the type
+STATE_SIZE = 0.7  # the plan of the project is the one to convert if it is at least this share of the plan of the existing state
 NUMBER = re.compile(r"^(?:(?:TAV|TAVOLA|ALL|ALLEGATO|FIG|DIS)\s+)?(?:(?:N|NR)\s+)?(?:[0-9]{1,2}|[A-Z])\s+(?=[A-Z]{3})")  # 1 - PIANTA  A) SEZIONE  TAV N 3 PROSPETTO
 
 
@@ -525,6 +530,20 @@ def _title_kind(text: str) -> str | None:
     return next((kind for kind, words in VIEW_WORDS if says(words, True)), None)
 
 
+def _state(v: View) -> str | None:
+    """The state of the building the titles of a view say it shows (fatto, progetto, confronto), None when they say none
+    or more than one."""
+    padded = [" " + " ".join(re.split(r"[^A-Z0-9']+", t.upper())).strip() + " " for t in v.titles]
+    found = {state for text in padded for state, words in STATE_WORDS if any(f" {w} " in text for w in words)}
+    return found.pop() if len(found) == 1 else None
+
+
+def _other_state(a: View, b: View) -> bool:
+    """Do the titles of two views name different states of the building? Then they are two drawings, however alike."""
+    sa, sb = _state(a), _state(b)
+    return sa is not None and sb is not None and sa != sb
+
+
 def _title_texts(soup: Soup) -> list[dict]:
     """The texts that name a view: short (or a caption that starts with the number of the drawing), and starting with a
     view word (a text drawn twice on itself counts once)."""
@@ -762,6 +781,7 @@ def find_views(soup: Soup, scale: float) -> list[View]:
     lines = _Lines(soup, scale)
     pairs = _match_copies(views, inner, soup, scale, centre, lines)
     pairs += _twins(views, lines, {frozenset((id(c), id(o))) for c, o in pairs})
+    pairs = [(c, o) for c, o in pairs if not _other_state(c, o)]  # the plans of the existing state and of the project
     _measure(inner, soup, scale)
     for v in inner:
         _name(v, scale)
@@ -797,8 +817,8 @@ def _match_copies(views: list[View], inner: list[View], soup: Soup, scale: float
 
 def _link_copies(views: list[View], pairs: list[tuple[View, View]], inner: list[View]) -> None:
     """Views that repeat one another are one group: the original is the one that is not drawn inside another view, then
-    the one with a title, then the first in reading order; the others are its copies. A copy with no type of its own has
-    the type of the original."""
+    the one whose title says PROGETTO (the state to build), then the one with a title, then the first in reading order; the
+    others are its copies. A copy with no type of its own has the type of the original."""
     group = {id(v): id(v) for v in views}
 
     def find(k: int) -> int:
@@ -816,7 +836,7 @@ def _link_copies(views: list[View], pairs: list[tuple[View, View]], inner: list[
     for g in members.values():
         if len(g) < 2:
             continue
-        first = min(g, key=lambda v: (id(v) in inside, not v.title_items, v.id))
+        first = min(g, key=lambda v: (id(v) in inside, _state(v) != "progetto", not v.title_items, v.id))
         for v in g:
             if v is not first:
                 v.copy_of = first.id
@@ -1205,9 +1225,16 @@ def _name(v: View, scale: float) -> None:
         v.kind_from = f"contenuto: {why}" if why else ""
 
 
+def _richer(a: View, b: View) -> bool:
+    """Has ``a`` far more doors and written areas than ``b``? Then it is a bigger building, not the lot around ``b``."""
+    return a.doors + a.door_blocks + a.areas >= SITE_RICHER * max(b.doors + b.door_blocks + b.areas, 1)
+
+
 def _relate(views: list[View], scale: float) -> None:
     """Views that hold one another: a plan much bigger than another view that has the same title, or that lies in it, is
-    the site around it."""
+    the site around it. A plan much bigger than another one with another title is the site only if the other lies in it
+    or if it has no more doors and rooms than the other: the ground floor of a big building, against a small upper floor,
+    has far more of both, the lot around a house has about as many."""
     for a in views:
         for b in views:
             if a is b or a.kind != "plan" or b.kind not in ("plan", "roof"):
@@ -1215,7 +1242,8 @@ def _relate(views: list[View], scale: float) -> None:
             same = bool({t["text"].upper() for t in a.title_items} & {t["text"].upper() for t in b.title_items})
             if same and b.kind == "plan" and a.cells >= SITE_RATIO * b.cells:
                 a.kind, a.kind_from = "site", f"contiene la vista {b.id}, che ha lo stesso titolo"
-            elif b.kind == "plan" and a.cells >= SITE_RATIO_OTHER * b.cells and b.cells >= MIN_PLAN_CELLS:
+            elif b.kind == "plan" and a.cells >= SITE_RATIO_OTHER * b.cells and b.cells >= MIN_PLAN_CELLS \
+                    and (_inside(b, a) or not _richer(a, b)):
                 a.kind, a.kind_from = "site", f"molto piu' grande della vista {b.id}: il lotto intorno alla casa"
             elif b.parent == a.id and a.cells >= (COPY_SITE_RATIO if b.copy_of else SITE_RATIO) * b.cells:
                 a.kind, a.kind_from = "site", f"contiene la vista {b.id}: il lotto intorno alla casa"
@@ -1300,7 +1328,14 @@ def choose_plan(views: list[View], wanted: int | None = None) -> tuple[View | No
     plans = [v for v in views if v.kind == "plan" and v.copy_of is None]
     plans = [v for v in plans if v.parent is None] or plans
     if plans:
-        best = max(plans, key=lambda v: (v.named > 0 or v.doors + v.door_blocks > 0 or v.areas > 0, v.cells))
+        def key(v: View) -> tuple:
+            return v.named > 0 or v.doors + v.door_blocks > 0 or v.areas > 0, v.cells
+
+        best = max(plans, key=key)
+        if _state(best) == "fatto":  # the existing state and the project are plans of one building: the project is to be built
+            project = [v for v in plans if _state(v) == "progetto" and key(v)[0] >= key(best)[0] and v.cells >= STATE_SIZE * best.cells]
+            if project:
+                return max(project, key=key), "la pianta dello stato di progetto"
         return best, "la pianta piu' grande"
     withdoors = [v for v in views if v.doors + v.door_blocks > 0 and v.kind not in ("elevation", "section", "roof", "site")]
     if withdoors:
@@ -1327,6 +1362,11 @@ def analyze(doc, layer_used=None, wanted_view: int | None = None, unit: str | No
         others = ", ".join(f"{v.id} ({_KIND_IT.get(v.kind, v.kind)})" for v in views if v is not plan)
         notes.append(f"Il foglio ha {len(views)} viste: converto la vista {plan.id} ({_KIND_IT.get(plan.kind, plan.kind)}, "
                      f"{w:.0f} x {h:.0f} m), {why}. Le altre: {others}. Per un'altra usa --vista N.")
+    if plan is not None and _state(plan):
+        for other in views:
+            if other is not plan and other.kind == "plan" and other.copy_of is None and _other_state(plan, other):
+                notes.append(f"Il foglio ha due stati dello stesso edificio: converto la vista {plan.id} (stato di {_state(plan)}); "
+                             f"la vista {other.id} e' lo stato di {_state(other)}: per quella usa --vista {other.id}.")
     return Analysis(soup, unit, views, plan, notes)
 
 

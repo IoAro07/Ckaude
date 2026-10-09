@@ -672,6 +672,57 @@ def test_two_plans_of_a_sheet_that_repeat_each_other_are_copies_even_with_titles
     assert first.copy_of is None and second.copy_of == first.id and second.kind == "plan"
 
 
+def _two_states(titles):
+    """The same plan drawn twice, 20 m apart, with the same words in it and one partition moved in the second."""
+    doc, msp = new_sheet()
+    for k, x in enumerate((0, 2000)):
+        add_plan(msp, x, 0)
+        if k:
+            msp.add_line((x + 300, 100), (x + 300, 800))  # the project adds a partition
+        add_title(msp, titles[k], x, 1050)
+    return doc
+
+
+def test_the_plans_of_the_existing_state_and_of_the_project_are_two_drawings_not_a_copy_and_its_original():
+    doc = _two_states(("STATO DI FATTO - PIANTA PIANO TERRA", "STATO DI PROGETTO - PIANTA PIANO TERRA"))
+    old, new = views_of(doc)
+    assert old.copy_of is None and new.copy_of is None  # the lines coincide, the words coincide: but the states differ
+    a = analyze(doc)
+    assert a.plan.id == new.id and "progetto" in " ".join(a.notes) and f"--vista {old.id}" in " ".join(a.notes)
+
+
+def test_where_a_plan_is_paired_with_the_plan_of_the_project_the_project_is_the_original():
+    doc = _two_states(("PIANTA PIANO TERRA", "PIANTA PIANO TERRA - STATO DI PROGETTO"))
+    first, second = views_of(doc)
+    assert first.copy_of == second.id and second.copy_of is None  # the project is the one to build, not the leftmost
+
+
+def _rooms(msp, x, y, w, d, step=400):
+    """Walls of rooms of ``step`` all over a plan: pieces of 4 m, so that no long line holds them together."""
+    for px in range(step, w, step):
+        for y0 in range(0, d, 400):
+            msp.add_line((x + px, y + y0 + 30), (x + px, y + min(y0 + 400, d) - 30))
+    for py in range(step, d, step):
+        for x0 in range(0, w, 400):
+            msp.add_line((x + x0 + 30, y + py), (x + min(x0 + 400, w) - 30, y + py))
+
+
+def test_a_big_building_is_no_site_just_because_an_upper_floor_is_a_tenth_of_it():
+    def sheet(doors):
+        doc, msp = new_sheet()
+        add_plan(msp, 0, 0, w=9000, d=4000, doors=doors, door_gap=200)  # a hall of 90 x 40 m
+        _rooms(msp, 0, 0, 9000, 4000)
+        add_title(msp, "PIANTA PIANO TERRA", 0, -250)
+        add_plan(msp, 10500, 0, w=1000, d=600, doors=2)  # ... and a mezzanine of 10 x 6 m
+        add_title(msp, "PIANTA PIANO PRIMO", 10500, -250)
+        return doc
+
+    big, small = views_of(sheet(40))
+    assert big.cells >= 6 * small.cells  # by the size alone the first is the site
+    assert (big.kind, small.kind) == ("plan", "plan") and analyze(sheet(40)).plan.id == big.id  # forty doors, a building
+    assert [v.kind for v in views_of(sheet(1))] == ["site", "plan"]  # no more doors than the small one: the lot around it
+
+
 def test_the_plan_to_convert_is_the_biggest_that_is_not_a_site_a_copy_or_a_part_of_a_bigger_view():
     def v(id_, cells, kind="plan", **kw):
         return View(id_, (0, 0, 1, 1), cells, kind=kind, doors=kw.pop("doors", 3), **kw)
