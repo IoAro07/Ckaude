@@ -6,8 +6,11 @@ door arcs, dimension lines. This module looks for the same things in the geometr
 
 * ``scan``            one fast pass over the modelspace into numpy arrays (segments, arcs, hatches, texts, blocks...);
 * ``infer_unit``      the unit the numbers are really in (dimension values, door arcs...), whatever the header says;
-* ``find_views``      the views of the sheet: groups of drawing separated by empty space, with their titles;
-* the type of each view: plan, roof plan, elevation, section, site plan, detail: from the title, else from the shape.
+* ``find_views``      the views of the sheet: groups of drawing separated by empty space (a long line, a frame, a stray
+                      mark does not join two of them), the title of each (the little frame it is written in is not
+                      part of any drawing), the plans drawn inside a bigger view (a house on its lot);
+* the type of each view: plan, roof plan, elevation, section, site plan, detail: from the title, else from what the
+  view holds (door arcs and room areas, level marks, room names, contour lines, roof tiles).
 
 Nothing here builds a 3D model: it says what is where, and with what confidence; the pipeline decides what to do.
 """
@@ -43,7 +46,7 @@ FRAME_SEED = 1.0  # m: the frame of a title is this close to the title, at most
 FRAME_TOUCH = 0.05  # m: two lines of a frame touch when their ends are this close
 FRAME_SEGMENTS = 16  # a frame has at most this many lines (it is often drawn twice)
 FRAME_SIZE = (20.0, 3.0)  # m: a frame is at most this long and this thick
-TITLE_REACH = 5.0  # m: a title belongs to a view it is this close to
+TITLE_REACH = 8.0  # m: a title belongs to a view it is this close to (a gap of 2 cm on a sheet at 1:200 is 4 m)
 TITLE_TIE = 1.0  # m: views this much farther than the nearest are about as near: the habit of the sheet decides
 SITE_RATIO_OTHER = 6.0  # a plan this many times bigger than another one is the site even with another title
 MIN_PLAN_CELLS = 40  # ... if that other one is at least this big (10 m2 of drawing): not a detail
@@ -471,24 +474,24 @@ def _label_frames(soup: Soup, titles: list[dict], scale: float) -> list[dict]:
     of it. A title with no such frame has none."""
     seg = soup.seg
     frames: list[dict] = []
-    reach, touch = FRAME_SEED / scale, FRAME_TOUCH / scale
+    reach, touch, far = FRAME_SEED / scale, FRAME_TOUCH / scale, FRAME_SIZE[0] / scale
     low, high = np.minimum(seg[:, [0, 1]], seg[:, [2, 3]]), np.maximum(seg[:, [0, 1]], seg[:, [2, 3]])
+
+    def around(x: float, y: float, r: float) -> np.ndarray:
+        return np.flatnonzero((low[:, 0] <= x + r) & (high[:, 0] >= x - r) & (low[:, 1] <= y + r) & (high[:, 1] >= y - r))
+
     for t in titles if len(seg) else []:
-        near = np.flatnonzero((low[:, 0] <= t["x"] + reach) & (high[:, 0] >= t["x"] - reach)
-                              & (low[:, 1] <= t["y"] + reach) & (high[:, 1] >= t["y"] - reach))
+        near = around(t["x"], t["y"], reach)
         if len(near) == 0:
             continue
         d = _distance_to_segments(t["x"], t["y"], seg[near])
         if d.min() > reach:
             continue
+        local = around(t["x"], t["y"], far)  # a frame is no bigger than this: the lines to look at
         mine = [int(near[int(np.argmin(d))])]  # the line of the frame nearest to the title, and the lines touching it
         while len(mine) <= FRAME_SEGMENTS:
             ends = np.concatenate([seg[mine][:, :2], seg[mine][:, 2:]])
-            lo, hi = ends.min(axis=0) - touch, ends.max(axis=0) + touch
-            cand = np.flatnonzero((low[:, 0] <= hi[0]) & (high[:, 0] >= lo[0]) & (low[:, 1] <= hi[1]) & (high[:, 1] >= lo[1]))
-            cand = cand[~np.isin(cand, mine)]
-            if len(cand) == 0:
-                break
+            cand = local[~np.isin(local, mine)]
             hit = np.zeros(len(cand), bool)
             for corner in (seg[cand][:, :2], seg[cand][:, 2:]):
                 hit |= (np.hypot(corner[:, None, 0] - ends[None, :, 0], corner[:, None, 1] - ends[None, :, 1]) <= touch).any(axis=1)
@@ -930,9 +933,9 @@ class Analysis:
         rows = []
         for v in self.views:
             w, h = v.size_m(scale)
-            rows.append({"id": v.id, "tipo": v.kind, "da": v.kind_from, "larghezza_m": round(w, 1),
-                         "altezza_m": round(h, 1), "titolo": " | ".join(v.titles), "porte": v.doors,
-                         "copia_di": v.copy_of or "", "usata": v is self.plan})
+            rows.append({"id": v.id, "tipo": v.kind, "da": v.kind_from, "larghezza_m": round(float(w), 1),
+                         "altezza_m": round(float(h), 1), "titolo": " | ".join(v.titles), "porte": v.doors,
+                         "copia_di": v.copy_of or "", "dentro_la_vista": v.parent or "", "usata": v is self.plan})
         return rows
 
 
