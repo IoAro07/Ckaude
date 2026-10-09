@@ -1004,3 +1004,28 @@ def test_a_level_mark_in_a_text_is_read_whichever_way_it_is_written(text):
 def test_the_end_of_a_number_is_no_level_mark(text):
     floor, source = _floor_by_mark(text)  # a range of sizes, not a level
     assert floor == pytest.approx(0.0, abs=0.01) and source == "linea di terra"
+
+
+# --- a plinth across a door --------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("width, band", [(0.9, 0.2), (1.2, 0.3), (1.6, 0.4)])
+def test_a_plinth_line_across_a_door_does_not_cut_off_its_foot(width, band):
+    doc, msp = _doc()
+    _facade(msp)
+    msp.add_line((0, band), (20, band))  # the plinth runs along the facade, and behind the door
+    _lines(msp, 6, 0, 6 + width, 2.1)
+    _lines(msp, 12, 1.0, 13.2, 2.4)
+    res = _read(doc)
+    door = _find(res, "door", 6 + width / 2)
+    assert (door.y0, door.y1) == pytest.approx((0.0, 2.1), abs=0.01)
+    assert res.floor == pytest.approx(0.0, abs=0.01) and res.floor_source == "porta"
+
+
+def test_the_top_step_of_an_entrance_is_no_plinth_and_the_door_stays_on_it():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 6, 0.3, 7, 2.4)  # the door
+    _lines(msp, 6, 0.15, 7, 0.3)  # the top step, as wide as the door: a closed box, no line goes on past it
+    _lines(msp, 5.8, 0.0, 7.2, 0.15)  # the step under it
+    door = _find(_read(doc), "door", 6.5)
+    assert door.y0 == pytest.approx(0.3, abs=0.01)

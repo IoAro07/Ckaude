@@ -96,6 +96,7 @@ DOOR_HEIGHT = 1.6  # m: a symbol this tall that stands on a floor is a door
 DOOR_HEIGHT_UNKNOWN = 1.9  # m: ... and when the floor is not known, only a taller one is taken for a door
 DOOR_SILL = 0.30  # m: standing on a floor is having the bottom at most this far above it
 STEPS_MAX = 1.2  # m: a door this high above the floor can stand on the steps of an entrance
+PLINTH_MAX = 0.5  # m: a line across the facade this close under the top of a plinth cuts a strip off the foot of a door
 STEP_GAP = 0.08  # m: the steps of a stair are this close to one another ...
 STEP_THRESHOLD = 0.3  # m: ... and the top one this close under the door (the threshold)
 LOW_ON_FLOOR = 0.05  # m: a window whose bottom is this close to the floor (or lower) and ...
@@ -301,12 +302,16 @@ def _linework(items: list[Item], area: tuple[float, float, float, float]) -> _Li
                      _grid(lines), glass)
 
 
+def _ends_at(x: float, y: float, nodes: Nodes) -> list[tuple[float, float]]:
+    """The directions in which the lines that end at (x, y) leave it."""
+    i, j = round(x / NODE_TOL), round(y / NODE_TOL)
+    return [d for di in (-1, 0, 1) for dj in (-1, 0, 1) for d in nodes.get((i + di, j + dj), ())]
+
+
 def _junction(x: float, y: float, sx: int, sy: int, nodes: Nodes) -> bool:
     """A line goes on past the corner (x, y) of a rectangle that lies towards (sx, sy) from it: one that leaves it
     outwards, not along the two sides of the rectangle or into it (the mark of a sash, a diagonal brace)."""
-    i, j = round(x / NODE_TOL), round(y / NODE_TOL)
-    return any(dx * sx < -OUTWARD or dy * sy < -OUTWARD
-               for di in (-1, 0, 1) for dj in (-1, 0, 1) for dx, dy in nodes.get((i + di, j + dj), ()))
+    return any(dx * sx < -OUTWARD or dy * sy < -OUTWARD for dx, dy in _ends_at(x, y, nodes))
 
 
 def _bare_corners(x0: float, y0: float, x1: float, y1: float, nodes: Nodes) -> int:
@@ -556,7 +561,7 @@ def _joins(a: _Group, b: _Group, nodes: Nodes) -> bool:
 
 def _merge(frames: list[_Box], nodes: Nodes) -> list[_Group]:
     """Frames that touch and line up (the leaves of a door, the panels of an entrance) are one symbol. Strips are left
-    alone: a step or a ledge under a window is not a leaf of it."""
+    alone: a step or a ledge under a window is not a leaf of it (``_plinths`` takes the one at the foot of a door)."""
     strips = [_Group([f], f.x0, f.y0, f.x1, f.y1, f.arched) for f in frames if _is_strip(f)]
     groups = [_Group([f], f.x0, f.y0, f.x1, f.y1, f.arched) for f in frames if not _is_strip(f)]
     merged = True
@@ -575,6 +580,25 @@ def _merge(frames: list[_Box], nodes: Nodes) -> list[_Group]:
                 else:
                     j += 1
     return groups + strips
+
+
+def _plinths(groups: list[_Group], nodes: Nodes) -> list[_Group]:
+    """A line across the facade at the foot of a door (the plinth) cuts off the strip between its jambs: the door goes
+    down to the bottom of that strip. A step is a strip too, but no line goes on sideways past its top corners."""
+    strips = [g for g in groups if len(g.members) == 1 and _is_strip(g.members[0]) and not g.members[0].kids]
+    taken: set[int] = set()
+    for g in groups:
+        if len(g.members) == 1 and _is_strip(g.members[0]):
+            continue
+        for s in strips:
+            if id(s) not in taken and abs(s.y1 - g.y0) <= TOUCH and abs(s.x0 - g.x0) <= ALIGN_TOL \
+                    and abs(s.x1 - g.x1) <= ALIGN_TOL and s.y1 - s.y0 <= PLINTH_MAX and g.y1 - s.y0 >= DOOR_HEIGHT \
+                    and any(dx > OUTWARD for dx, _ in _ends_at(s.x1, s.y1, nodes)) \
+                    and any(dx < -OUTWARD for dx, _ in _ends_at(s.x0, s.y1, nodes)):
+                g.y0 = s.y0
+                taken.add(id(s))
+                break
+    return [g for g in groups if id(g) not in taken]
 
 
 def _columns(g: _Group) -> list[list[_Box]]:
@@ -647,7 +671,7 @@ def _groups(lw: _Linework) -> list[_Group]:
     frames: list[_Box] = []
     for r in _outermost(_boxes(lw, heads)):
         _frames(r, frames)
-    groups = _merge(frames, lw.nodes)
+    groups = _plinths(_merge(frames, lw.nodes), lw.nodes)
     for g in groups:
         _describe(g)
         g.free = _bare_corners(g.x0, g.y0, g.x1, g.y1, lw.nodes)
