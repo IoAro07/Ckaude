@@ -697,18 +697,23 @@ def find_views(soup: Soup, scale: float) -> list[View]:
 
 def _match_copies(views: list[View], inner: list[View], soup: Soup, scale: float, centre: np.ndarray) -> list[tuple[View, View]]:
     """The pairs (copy, original) of views that repeat each other. A plan found in a bigger view that is the copy of a plan
-    of the sheet gets the exact box of that plan (the swing doors only say where the house is, roughly)."""
+    of the sheet gets the exact box of that plan (the swing doors only say where the house is, roughly): of several
+    drawings it could be the copy of, the biggest (a plan, not a diagram of its body)."""
     pairs: list[tuple[View, View]] = []
+    best: dict[int, tuple[float, View, tuple]] = {}
     for src, holder, box in _copies(views, soup, scale):
         if box is None:
             pairs.append((holder, src))
             continue
-        for w in inner:
-            if _overlap(w.bbox, box) >= COPY_ROUGH * _area(w.bbox) and \
-                    box[0] <= (w.bbox[0] + w.bbox[2]) / 2 <= box[2] and box[1] <= (w.bbox[1] + w.bbox[3]) / 2 <= box[3]:
-                w.bbox = box
-                w.cells = int(((centre[:, 0] >= box[0]) & (centre[:, 0] <= box[2]) & (centre[:, 1] >= box[1]) & (centre[:, 1] <= box[3])).sum())
-                pairs.append((w, src))
+        for k, w in enumerate(inner):
+            middle = ((w.bbox[0] + w.bbox[2]) / 2, (w.bbox[1] + w.bbox[3]) / 2)
+            if _overlap(w.bbox, box) >= COPY_ROUGH * _area(w.bbox) and box[0] <= middle[0] <= box[2] and box[1] <= middle[1] <= box[3] \
+                    and _area(box) > best.get(k, (0.0,))[0]:
+                best[k] = (_area(box), src, box)
+    for k, (_, src, box) in best.items():
+        inner[k].bbox = box
+        inner[k].cells = int(((centre[:, 0] >= box[0]) & (centre[:, 0] <= box[2]) & (centre[:, 1] >= box[1]) & (centre[:, 1] <= box[3])).sum())
+        pairs.append((inner[k], src))
     return pairs
 
 
