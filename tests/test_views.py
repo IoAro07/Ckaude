@@ -200,6 +200,55 @@ def test_the_border_of_a_sheet_that_touches_one_drawing_does_not_become_a_part_o
     assert plan.kind == "plan" and box_m(plan)[2] < 16.5  # not the border, that encloses the elevation too
 
 
+def test_a_tail_of_the_ground_line_that_almost_meets_another_links_nothing():
+    doc, msp = new_sheet()
+    add_elevation(msp, 0, 0, w=1400, marks=False)  # the ground line goes on for 2 m on each side
+    add_elevation(msp, 1850, 0, w=1400, marks=False)  # 4.5 m away: the two tails are 0.5 m from one another
+    left, right = views_of(doc)
+    assert box_m(left)[2] == pytest.approx(16.0, abs=0.1) and box_m(right)[0] == pytest.approx(16.5, abs=0.1)  # the tails are theirs
+
+
+def test_two_facades_closer_than_the_link_with_their_titles_are_two_views():
+    doc, msp = new_sheet()
+    for k, (x, name) in enumerate(((0, "PROSPETTO SUD"), (1650, "PROSPETTO EST"))):  # the roofs 0.5 m wide each: 1 m of ink between
+        add_elevation(msp, x, 0, w=1400, ground=False)
+        add_title(msp, name, x, 600 + 150 + 120)
+    left, right = views_of(doc)
+    assert left.titles == ["PROSPETTO SUD"] and right.titles == ["PROSPETTO EST"]
+    assert box_m(left)[2] < box_m(right)[0] and box_m(left)[3] > 8 and box_m(right)[3] > 8  # each with the frame of its title
+
+
+def test_four_facades_in_a_row_2_m_apart_are_four_views_each_with_its_title():
+    doc, msp = new_sheet()
+    for k, name in enumerate(("PROSPETTO SUD", "PROSPETTO EST", "PROSPETTO NORD", "PROSPETTO OVEST")):
+        add_elevation(msp, k * 1600, 0, w=1400)
+        add_title(msp, name, k * 1600, 600 + 150 + 120)
+    views = views_of(doc)
+    assert [v.titles for v in views] == [["PROSPETTO SUD"], ["PROSPETTO EST"], ["PROSPETTO NORD"], ["PROSPETTO OVEST"]]
+    assert all(v.kind == "elevation" and v.size_m(S)[0] < 20 for v in views)
+
+
+def test_a_plan_and_a_facade_1_m_apart_are_two_views():
+    doc, msp = new_sheet()
+    add_plan(msp, 0, 0)
+    add_elevation(msp, 0, 1000)  # its ground line a metre over the north wall of the plan
+    add_title(msp, "PIANTA PIANO TERRA", 0, -200)
+    add_title(msp, "PROSPETTO SUD", 0, 1000 + 600 + 150 + 120)
+    plan, elevation = (next(v for v in views_of(doc) if v.kind == k) for k in ("plan", "elevation"))
+    assert plan.titles == ["PIANTA PIANO TERRA"] and elevation.titles == ["PROSPETTO SUD"] and plan.doors == 5 and elevation.doors == 0
+    assert analyze(doc).plan.bbox == plan.bbox
+
+
+def test_two_titles_of_one_drawing_do_not_cut_it():
+    doc, msp = new_sheet()
+    add_elevation(msp, 0, 0, w=1400)
+    add_title(msp, "PROSPETTO SUD", 0, 600 + 150 + 120)  # the same name again under it, and a section of the same facade
+    add_title(msp, "PROSPETTO SUD", 0, -300)
+    add_title(msp, "SEZIONE A-A", 600, -300)
+    (v,) = views_of(doc)
+    assert v.size_m(S)[0] < 20 and len(v.titles) == 3
+
+
 # --- stray marks -------------------------------------------------------------------------------
 
 def test_crop_marks_in_the_corners_do_not_stretch_a_view():
@@ -354,6 +403,7 @@ def test_a_view_word_ends_a_title_as_well_as_starts_it_and_a_roof_word_makes_a_p
     "NOTE: SEE THE GROUND FLOOR PLAN FOR THE POSITION OF THE POSTS",  # the view word is far in a long text
     "ATTACCO A TERRA DEL MURO PIANO TERRA CON GUAINA",
     "VEDI LA PIANTA DEL SOTTOTETTO PER LE QUOTE", "ACCESSO", "SOTTOTETTO NON ABITABILE", "FINESTRA DA 120X140",
+    "TAVOLA: PIANTE E PROSPETTI",  # the caption of a sheet, in its title block: several kinds of drawing, no one of them
 ])
 def test_a_note_that_mentions_a_drawing_is_no_title(note):
     from dwg2c4d.autodetect import _title_kind

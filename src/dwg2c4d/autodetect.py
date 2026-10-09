@@ -19,10 +19,12 @@ Nothing here builds a 3D model: it says what is where, and with what confidence;
 
 from __future__ import annotations
 
+import itertools
 import math
 import re
 import statistics
 from dataclasses import dataclass, field, replace
+from typing import NamedTuple
 
 import numpy as np
 
@@ -36,7 +38,8 @@ BARE_RUN = 4.0  # m: ... where it runs through empty space for this long (more t
 END_TOUCH = 0.2  # m: ... unless it is a wall of an outline: a line that ends on lines that run across it at both its ends
 END_ACROSS = 0.17  # (sine of 10 degrees): a line "runs across" another one if the sine of the angle between them is more than this
 OUTLINE_REAL = 2  # ... and the outline does not join this many drawings of its own (a border close to two drawings does)
-MAX_OUTLINES = 2000  # no more long lines than this are looked at to see whether they close an outline
+MAX_OUTLINES = 2000  # no more long lines than this are looked at to see whether they close an outline or end in the air
+STUB_HOLD = 0.75  # m: a long line is held by the drawing this close to it; what sticks out beyond it, at a free end, links nothing
 MIN_VIEW_CELLS = 40  # a piece of fewer cells than this (10 m2 of drawing) is a crumb, not a view
 MIN_VIEW_SIDE = 2.5  # m: a piece thinner than this is a strip of text or a line, not a view
 FLOAT_PAD = 0.001  # m: a view holds what lies this close to its box too (the box is the box of the ink: a hinge sits on its edge)
@@ -129,6 +132,9 @@ VIEW_WORDS = (
               "PIANO INTERRATO", "PIANO SEMINTERRATO", "FLOOR PLAN", "GROUND FLOOR", "FIRST FLOOR", "PLAN")),
 )
 NOTE_KINDS = ("roof", "site", "detail")  # what a note written in a plan says (COPERTURA IN COPPI, ESTRATTO DI MAPPA, DETTAGLIO A)
+SPLIT_KINDS = ("plan", "roof", "elevation", "section")  # a title of one of these names one drawing: two in a view cut it in two
+FACADE_KINDS = ("elevation", "section")  # ... but a facade and a section may share a drawing (PROSPETTO CUCINA, SEZIONE CUCINA)
+MIN_BAND = 0.5  # m: ... at a band with no ink in it at least this wide, across the view, between the two titles
 TITLE_WORDS = 5  # a view word that is not the first word of a text counts only in a text of at most this many words (NORTH
 #   ELEVATION, SECOND FLOOR PLAN, PIANTA DEL TETTO): in a longer one it is a note that mentions a drawing
 # the state of the building a drawing shows ("STATO DI FATTO - PROSPETTO SUD"): the plans of two states are twins by their lines
@@ -534,7 +540,8 @@ def _title_kind(text: str) -> str | None:
         return "roof"
     if first or not short:
         return first
-    return next((kind for kind, words in VIEW_WORDS if says(words, True)), None)
+    kinds = [kind for kind, words in VIEW_WORDS if says(words, True)]
+    return kinds[0] if len(kinds) == 1 else None  # a text that names several kinds (TAVOLA: PIANTE E PROSPETTI) names a sheet
 
 
 def _state(v: View) -> str | None:
@@ -675,19 +682,34 @@ def _ends_touch(seg: np.ndarray, which: np.ndarray, scale: float) -> np.ndarray:
     return touches
 
 
-def _closed_outlines(seg: np.ndarray, which: np.ndarray, line: np.ndarray, cut: np.ndarray, ink: np.ndarray, scale: float) -> np.ndarray:
+def _stubs(which: np.ndarray, held: np.ndarray, lines: np.ndarray, ends: np.ndarray) -> np.ndarray:
+    """The points of the long lines that stick out beyond the last drawing they are held by, at an end of the line that
+    touches nothing: the tail of a ground line, of a section mark. They are part of the view (its box takes them in) but
+    they link nothing: two facades whose ground lines almost meet are two views. ``held``: the point has drawing within
+    STUB_HOLD; ``lines``: the lines, in the order of their points; ``ends[k]``: do the start and the end of line k touch
+    another line?"""
+    stub = np.zeros(len(which), bool)
+    first = np.flatnonzero(np.r_[True, which[1:] != which[:-1]]) if len(which) else np.empty(0, dtype=int)
+    for k, (a, b) in enumerate(zip(first, np.r_[first[1:], len(which)])):
+        if ends[k].all():
+            continue
+        fixed = np.flatnonzero(held[a:b])
+        if not ends[k, 0]:
+            stub[a:a + (fixed[0] if len(fixed) else b - a)] = True
+        if not ends[k, 1]:
+            stub[a + (fixed[-1] + 1 if len(fixed) else 0):b] = True
+    return stub
+
+
+def _closed_outlines(which: np.ndarray, line: np.ndarray, cut: np.ndarray, ink: np.ndarray, closed: np.ndarray, scale: float) -> np.ndarray:
     """The points of the long lines, cut as bare, that must stay: the walls of an outline. A long wall of a big plain building
     (a hall of 30 m, a facade of 40 m) runs for metres with no drawing near it, but its ends are on the walls that close
     the outline, and a person sees one building. A line that is closed like that is kept unless keeping it would join two
     drawings of their own (a border close to a plan and to an elevation does), would enclose one that it does not touch
     (the border of the sheet), or would join nothing (the boundary of a lot is a view of its own, made of long lines).
-    ``which``: the line every point is on; ``ink``: the cells with drawing in them."""
+    ``which``: the line every point is on; ``ink``: the cells with drawing in them; ``closed``: the lines that are closed."""
     from scipy.spatial import cKDTree
 
-    candidates = np.unique(which[cut])
-    if len(candidates) > MAX_OUTLINES:
-        return np.zeros(len(line), bool)
-    closed = candidates[_ends_touch(seg, candidates, scale).all(axis=1)]
     mine = cut & np.isin(which, closed)
     if not mine.any():
         return mine
@@ -714,13 +736,22 @@ def _closed_outlines(seg: np.ndarray, which: np.ndarray, line: np.ndarray, cut: 
     return keep
 
 
-def _pieces(soup: Soup, scale: float, frames: list[dict]) -> tuple[list[tuple[tuple[float, float, float, float], int, bool]],
-                                                                   np.ndarray]:
-    """The pieces of drawing of the sheet, each as (box, cells, made of long lines only), and the centres of all the
-    cells with drawing in them. The sheet is cut in cells of 0.5 m; cells with drawing in them closer than LINK are one
-    piece. A long straight line (the ground of an elevation, a table, the walls of a plan) holds a drawing together,
-    but where it runs through empty space it links nothing: a ground line under two elevations, a section mark or the
-    border of the sheet must not make one view of two."""
+class _Sheet(NamedTuple):
+    """What the grid of the sheet found: the pieces of drawing, each as (box, cells, made of long lines only), and the
+    drawing as points: the centres of all the cells with drawing in them, the marks (the points the boxes are made of) and
+    which of those are ink (anything but the long lines)."""
+
+    pieces: list[tuple[tuple[float, float, float, float], int, bool]]
+    cells: np.ndarray
+    marks: np.ndarray
+    is_ink: np.ndarray
+
+
+def _pieces(soup: Soup, scale: float, frames: list[dict]) -> _Sheet:
+    """The pieces of drawing of the sheet. The sheet is cut in cells of 0.5 m; cells with drawing in them closer than LINK
+    are one piece. A long straight line (the ground of an elevation, a table, the walls of a plan) holds a drawing
+    together, but where it runs through empty space it links nothing: a ground line under two elevations, a section mark
+    or the border of the sheet must not make one view of two."""
     from scipy.spatial import cKDTree
 
     cell = CELL / scale
@@ -734,18 +765,32 @@ def _pieces(soup: Soup, scale: float, frames: list[dict]) -> tuple[list[tuple[tu
     line, which = _along(seg[ruling], step, 4000)
     which = np.flatnonzero(ruling)[which]
     keys = np.unique(_pack(*np.floor(ink / cell).astype(np.int64).T))
-    near = np.zeros(len(line), bool)
+    away = np.full(len(line), np.inf)  # how far the ink is from every point of the long lines (more than LINK: infinity)
     if len(keys) and len(line):
-        near = np.isfinite(cKDTree((_unpack(keys) + 0.5) * cell).query(line, distance_upper_bound=LINK / scale)[0])
+        away = cKDTree((_unpack(keys) + 0.5) * cell).query(line, distance_upper_bound=LINK / scale)[0]
+    near = np.isfinite(away)
+    lines = np.unique(which)
+    ends = _ends_touch(seg, lines, scale) if len(lines) <= MAX_OUTLINES else np.ones((len(lines), 2), bool)  # (start, end)
     cut = _bare_runs(near, which, step * scale)
-    if cut.any() and (walls := _closed_outlines(seg, which, line, cut, keys, scale)).any():
+    if cut.any() and (walls := _closed_outlines(which, line, cut, keys, lines[ends.all(axis=1)], scale)).any():
         # the walls of an outline are drawing: the roof of a long facade, that runs beside the top of it, is not in empty space
         wall_keys = np.unique(_pack(*np.floor(line[walls] / cell).astype(np.int64).T))
         near |= np.isfinite(cKDTree((_unpack(wall_keys) + 0.5) * cell).query(line, distance_upper_bound=LINK / scale)[0])
         cut = _bare_runs(near, which, step * scale) & ~walls
-    keys = np.unique(np.concatenate([keys, _pack(*np.floor(line[~cut] / cell).astype(np.int64).T)]))
+    stub = _stubs(which, away <= STUB_HOLD / scale, lines, ends) & ~cut
+    core = np.unique(np.concatenate([keys, _pack(*np.floor(line[~cut & ~stub] / cell).astype(np.int64).T)]))
+    keys = np.unique(np.concatenate([core, _pack(*np.floor(line[stub] / cell).astype(np.int64).T)]))
     centre = (_unpack(keys) + 0.5) * cell
-    piece = _components(cKDTree(centre), LINK / scale) if len(centre) else np.empty(0, dtype=int)
+    held = np.isin(keys, core)
+    piece = np.full(len(keys), -1)
+    if held.any():
+        tree = cKDTree(centre[held])
+        piece[held] = _components(tree, LINK / scale)
+        if not held.all():  # a stub joins the piece of the drawing it comes out of, and links nothing
+            d, i = tree.query(centre[~held], distance_upper_bound=LINK / scale)
+            piece[~held] = np.where(np.isfinite(d), piece[held][np.minimum(i, held.sum() - 1)], -1)
+    loose = piece < 0
+    piece[loose] = piece.max(initial=-1) + 1 + np.arange(loose.sum())  # a stub with no drawing near it is a piece of its own
     box = _extent(centre, piece, cell / 2)
     count = np.bincount(piece) if len(piece) else np.zeros(0, dtype=int)
     real = {g for g, b in box.items() if count[g] >= MIN_VIEW_CELLS and _thick_enough(b, scale)}
@@ -782,7 +827,7 @@ def _pieces(soup: Soup, scale: float, frames: list[dict]) -> tuple[list[tuple[tu
         for g, b in _extent(line[cut], lab[inverse.reshape(-1)], 0.0).items():
             if lines_in[g] >= OUTLINE_LINES and cells[g] >= MIN_VIEW_CELLS and _thick_enough(b, scale):
                 out.append((b, int(cells[g]), True))
-    return out, centre
+    return _Sheet(out, centre, marks, np.arange(len(marks)) < len(ink))
 
 
 def _overlap(a: tuple, b: tuple) -> float:
@@ -837,17 +882,95 @@ def _grid_scale(soup: Soup, scale: float) -> float:
     return scale if cells <= MAX_GRID_CELLS else scale * math.sqrt(MAX_GRID_CELLS / cells)
 
 
+def _title_middle(t: dict) -> tuple[float, float]:
+    """About the middle of a title (the text runs to the right of its insertion point)."""
+    return t["x"] + 0.35 * t["height"] * len(t["text"]), t["y"] + t["height"] / 2
+
+
+def _two_drawings(a: dict, b: dict) -> bool:
+    """Do two titles name two drawings? Two of one kind do, and a plan with a facade, but a facade and a section may share."""
+    return a["kind"] == b["kind"] or not (a["kind"] in FACADE_KINDS and b["kind"] in FACADE_KINDS)
+
+
+def _cut_between(box: tuple, titles: list[dict], sheet: _Sheet, scale: float) -> list[tuple]:
+    """The boxes a view is cut in. Each title of a plan, a roof, an elevation or a section names one drawing: where two
+    titles that name two drawings are in a view, they lie closer to one another than LINK (or are held together by the
+    stubs of a ground line), and the widest band with no ink in it between the two titles, across the view, is where one
+    ends and the other begins. A view that has no such band (MIN_BAND) is left whole. A part that is itself a view with two
+    such titles is cut again. Boxes are those of the drawing on each side."""
+    x0, y0, x1, y1 = box
+    here = (sheet.marks[:, 0] >= x0) & (sheet.marks[:, 0] <= x1) & (sheet.marks[:, 1] >= y0) & (sheet.marks[:, 1] <= y1)
+    marks, solid = sheet.marks[here], sheet.is_ink[here]
+    best = None  # the widest band: (width, axis, middle of it)
+    for axis in (0, 1):
+        along = np.unique(marks[solid, axis])
+        for a, b in itertools.combinations(titles, 2):
+            lo, hi = sorted((_title_middle(a)[axis], _title_middle(b)[axis]))
+            between = along[(along > lo) & (along < hi)]
+            if _two_drawings(a, b) and len(between) > 1:
+                gaps = np.diff(between)
+                k = int(gaps.argmax())
+                if gaps[k] * scale >= MIN_BAND and (best is None or gaps[k] > best[0]):
+                    best = (float(gaps[k]), axis, float((between[k] + between[k + 1]) / 2))
+    if best is None:
+        return [box]
+    _, axis, at = best
+    parts = []
+    for low in (True, False):
+        mine = marks[:, axis] <= at if low else marks[:, axis] > at
+        if not mine.any():
+            return [box]
+        part = (float(marks[mine, 0].min()), float(marks[mine, 1].min()), float(marks[mine, 0].max()), float(marks[mine, 1].max()))
+        if not _thick_enough(part, scale):
+            return [box]
+        parts.append((part, [t for t in titles if (_title_middle(t)[axis] <= at) == low]))
+    return [b for part, held in parts for b in (_cut_between(part, held, sheet, scale) if len(held) > 1 else [part])]
+
+
+def _split_titled(views: list[View], titles: list[dict], frames: list[dict], sheet: _Sheet, scale: float) -> list[View]:
+    """The views, with those that hold two titles that name two drawings cut in the drawings they are (``_cut_between``).
+    The titles of a view are its own, and those that were refused by it (a PROSPETTO the plan-like view of a plan and the
+    facade 1 m above it said it cannot be) but lie close to it, within LINK, and nearer to it than to any other view."""
+    box_of = {id(f["title"]): f["box"] for f in frames}
+    assigned = {id(t) for v in views for t in v.title_items}
+    refused: dict[int, list[dict]] = {}
+    for t in titles:
+        box = box_of.get(id(t), (t["x"], t["y"], t["x"], t["y"]))
+        near = min(((_gap(box, v.bbox), v) for v in views), key=lambda g: g[0], default=None)
+        if id(t) not in assigned and near is not None and near[0] <= LINK / scale:
+            refused.setdefault(id(near[1]), []).append(t)
+    out: list[View] = []
+    for v in views:
+        titles = [t for t in v.title_items + refused.get(id(v), []) if t["kind"] in SPLIT_KINDS]
+        boxes = [v.bbox] if v.outline or len(titles) < 2 else _cut_between(v.bbox, titles, sheet, scale)
+        if len(boxes) == 1:
+            out.append(v)
+            continue
+        for b in boxes:
+            cells = int(((sheet.cells[:, 0] >= b[0]) & (sheet.cells[:, 0] <= b[2]) & (sheet.cells[:, 1] >= b[1]) & (sheet.cells[:, 1] <= b[3])).sum())
+            out.append(View(0, b, cells))
+    return out
+
+
 def find_views(soup: Soup, scale: float) -> list[View]:
     """The views of the sheet: pieces of drawing separated by empty space, with the title near each and a type."""
     soup = _sane(soup, scale)
     titles = sorted(_title_texts(soup), key=lambda t: -t["height"])[:MAX_TITLES]
     frames = _label_frames(soup, titles, scale)
-    pieces, centre = _pieces(soup, _grid_scale(soup, scale), frames)
-    views = [View(0, box, cells, outline=outline) for box, cells, outline in sorted(pieces, key=lambda p: -p[1])[:MAX_VIEWS]]
+    sheet = _pieces(soup, _grid_scale(soup, scale), frames)
+    centre = sheet.cells
+    views = [View(0, box, cells, outline=outline) for box, cells, outline in sorted(sheet.pieces, key=lambda p: -p[1])[:MAX_VIEWS]]
     views = _without_strays(views, [f["box"] for f in frames] + [(t["x"], t["y"], t["x"], t["y"]) for t in titles], scale)
     _renumber(views, scale)
     _measure(views, soup, scale)
     _assign_titles(views, titles, frames, scale)
+    if len(split := _split_titled(views, titles, frames, sheet, scale)) != len(views):  # drawings close together that were one piece
+        views = split
+        _renumber(views, scale)
+        _measure(views, soup, scale)
+        for v in views:
+            v.title_items = []
+        _assign_titles(views, titles, frames, scale)
     for v in views:
         _name(v, scale)
     inner = _plans_inside(views, soup, scale, centre)
