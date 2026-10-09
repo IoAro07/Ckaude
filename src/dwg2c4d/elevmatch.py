@@ -22,9 +22,9 @@ from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
 from .config import Config
-from .elevation import Elevation, Symbol, _horizontal_segments, named_symbols
+from .elevation import Elevation, Symbol
+from .elevsymbols import ViewSymbols, read_view_symbols
 from .openings import Opening
-from .reader import read_items
 
 AXIS_TOLERANCE = math.radians(12.0)  # wall directions closer than this are one orientation
 CENTRE_TOLERANCE = 0.25  # m: a symbol and an opening whose centres are this close along the facade can be the same; the
@@ -339,28 +339,6 @@ def apply_match(match: ElevationMatch, floor: float, cfg: Config, warnings: list
 
 # --- the elevations of a sheet --------------------------------------------------------------------
 
-@dataclass
-class ViewSymbols:
-    """What an elevation view holds that matters here."""
-
-    symbols: list[Symbol]
-    floor: float | None = None  # absolute y (m) of the finished floor of the ground storey
-    floor_source: str = ""
-    levels: list[float] = field(default_factory=list)  # absolute y of the floors, ascending, when the view shows several
-    hlines: list[tuple[float, float, float]] = field(default_factory=list)  # (y, x0, x1) roof silhouette lines
-    notes: list[str] = field(default_factory=list)
-
-
-def view_symbols(doc, cfg: Config, bbox: tuple[float, float, float, float], unit: str,
-                 unit_scale: float) -> ViewSymbols:
-    """The doors and windows of an elevation view (``bbox`` in drawing units), the floor level and the roof lines."""
-    items = read_items(doc, cfg, area=tuple(bbox), ignore_veto=True, keep_other=True, unit=unit).items
-    symbols = named_symbols(items)
-    doors = [s.y0 for s in symbols if s.kind == "door"]
-    return ViewSymbols(symbols, min(doors) if doors else None, "porta" if doors else "", [],
-                       _horizontal_segments(items))
-
-
 def _inside(inner: tuple[float, float, float, float], outer: tuple[float, float, float, float], slack: float) -> bool:
     return (inner[0] >= outer[0] - slack and inner[1] >= outer[1] - slack
             and inner[2] <= outer[2] + slack and inner[3] <= outer[3] + slack)
@@ -419,7 +397,7 @@ def match_views(doc, cfg: Config, analysis, openings: list[Opening], walls: Base
         if not facades:
             v.matched = "nessuna apertura in pianta da confrontare"
             continue
-        vs = view_symbols(doc, cfg, v.bbox, unit, unit_scale)
+        vs = read_view_symbols(doc, cfg, v.bbox, unit, unit_scale)
         band, floor, source = _storey_band(vs, storey)
         if not band:
             v.matched = "nessun simbolo di porta o finestra riconosciuto"

@@ -235,8 +235,8 @@ class Config:
     auto: bool = False
     view: int | None = None  # the view of the sheet to convert (the numbers of NOME_viste.png); default: the plan found
     proposed: list[str] = field(default_factory=list)  # internal: categories whose layers came from the proposals
-    analysis: object | None = field(default=None, repr=False)  # internal: the autodetect.Analysis already made
-    analysis_notes: list[str] = field(default_factory=list, repr=False)  # internal: what it decided
+    analysis: object | None = field(default=None, repr=False, compare=False)  # internal: the autodetect.Analysis already made
+    analysis_notes: list[str] = field(default_factory=list, repr=False, compare=False)  # internal: what it decided
     pair_layers: tuple[str, ...] = ()  # internal: wall layers chosen by their shape: two parallel lines make a wall
     shape_openings: bool = False  # internal: openings by their shape: a swing arc at a wall is a door, a gap in an outside wall a window
 
