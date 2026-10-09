@@ -207,20 +207,24 @@ class _Reader:
                 self.skipped += 1
         return out
 
-    def walk(self, entities, depth: int = 0) -> None:
+    def walk(self, entities, depth: int = 0, parent: str = "0") -> None:
+        """``parent``: the layer of the block reference these entities come from."""
         rules = self.cfg.layers
         for e in entities:
             t = e.dxftype()
             layer = e.dxf.layer
-            if depth and layer == "0":
-                continue  # inside a block, layer 0 means "inherit": the insert itself was not a category
+            inherits = bool(depth) and layer == "0"
+            if inherits:
+                if not self.keep_other:
+                    continue  # inside a block, layer 0 means "inherit": the insert itself was not a category
+                layer = parent  # an elevation draws its windows, doors and level marks as blocks of layer 0 lines
             if not self.visible(layer):
                 continue
             if t == "INSERT":
                 block = e.dxf.name
                 if (layer, block) not in self._block_cat:
                     self._block_cat[(layer, block)] = rules.classify(layer, block, self.ignore_veto)
-                cat = self._block_cat[(layer, block)]
+                cat = None if inherits else self._block_cat[(layer, block)]
                 try:
                     virtual = list(e.virtual_entities())
                 except Exception:
@@ -238,9 +242,11 @@ class _Reader:
                     continue
                 if depth < MAX_BLOCK_DEPTH:
                     # e.g. a whole plan inserted as one block: classify inner entities
-                    self.walk(virtual, depth + 1)
+                    self.walk(virtual, depth + 1, layer)
                 continue
             _, cat, vetoed = self.layer_info(layer)
+            if inherits:
+                cat = None  # loose linework: what the layer of the reference is called says nothing about it
             if self.shape_arcs and t == "ARC" and cat in (None, "wall") and not vetoed:
                 prims = [p for p in self.prims_of([e]) if p.meta.get("arc")]
                 if prims:  # maybe the swing of a door: decided later, when the walls are known

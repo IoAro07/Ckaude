@@ -12,12 +12,15 @@ their shape and by where they stand; so does this module:
   a railing, a chimney above the roof, a pergola with its vine, a title frame) is rejected by its proportions and
   by how it is drawn;
 * the floor comes from a level mark ("+0,00", "P.P.F. +0.00") and the line it labels, else from the bottom of the
-  lowest door, the top of the ground line, or the foot of a person figure; the other storeys from their marks, or
-  from the slab that runs between two rows of openings.
+  lowest door (the top of the ground line when the doors found all stand a storey above a ground line that walls
+  stand on), the top of the ground line, or the foot of a person figure; the other storeys from their marks, or
+  from the slab that runs between two rows of openings (a floor is 2.3 to 4.5 m above the one under it and has
+  openings or a slab at it: the eaves and the ridge are marked too but are no floors).
 
-Layers that do name doors and windows stay the primary answer for those symbols: the shapes complete them (a
-window drawn as its inner pane only becomes the whole frame; a shutter the layer does not call part of the window
-only widens ``full_x``) and add the openings the names do not give.
+Layers that do name doors and windows stay the primary answer for those symbols and keep their size: the shapes
+complete them (the frame a few centimetres around a window drawn as its glass only; the arch the layer does not
+draw; a shutter the layer does not call part of the window only widens ``full_x``), never with a stone surround or
+a step that lies across them, and add the openings the names do not give.
 
 A sheet has many views and reading it takes seconds: ``read_view_symbols`` reads the modelspace once per drawing and
 cuts each view out of that.
@@ -29,14 +32,13 @@ import copy
 import math
 import re
 import weakref
-from collections import Counter
 from dataclasses import dataclass, field
 
 import numpy as np
 import shapely
 from ezdxf import bbox as ezbbox
 from ezdxf.document import Drawing
-from shapely.geometry import LineString, Polygon, box
+from shapely.geometry import LineString, MultiLineString, Polygon, box
 from shapely.ops import polygonize, unary_union
 from shapely.strtree import STRtree
 
@@ -58,15 +60,26 @@ ARCH_TOP = 0.8  # ... and narrower than this share of it at the apex, which is i
 ARCH_CENTRED = 0.1  # the apex is this close to the middle of the box, as a share of its width
 NEST_TOL = 0.015  # m: a rectangle this close to the edges of another one lies inside it
 FRAME_BAND = 0.30  # m: a frame is no wider than this around what it holds (more: it is a bay of the wall)
+CASING = 0.10  # m: the frame of a window is no wider than this around its glass; a stone surround or a step is wider
 MERGE_GAP = 0.20  # m: leaves this close are one symbol (the halves of a door, the panels of an entrance)
+TILING_MIN = 0.5  # the leaves of a symbol fill at least this share of the box they span
 ALIGN_TOL = 0.10  # m: leaves of one symbol line up at the top or at the bottom (or at both sides), within this
 NODE_TOL = 0.005  # m: lines ending this close to a corner meet there
+GRID_STEP = 0.001  # m: horizontal and vertical lines are put on this grid before their faces are made
+OUTWARD = 0.1  # a line leaves a corner outwards if its direction (a unit vector) points this far out of the rectangle
 MIN_FREE_CORNERS = 2  # a real opening is outlined by its own lines: at least this many of its 4 corners are bare
 BAY_MIN = 1.0  # m: an empty rectangle this wide and tall, with fewer bare corners, is a bay of the wall; the panes of a
 #                window with mullions have lines that go on at every corner too, but they are narrow
 STRUCTURE_MIN = 4  # a symbol of at least this many leaves is an opening even if its corners are not bare
 #                    (a frame with a frame inside is one too)
 GLAZED_MIN = 2  # a leaf divided in at least this many panes is a sash; a plain one is a shutter
+SLAT_MIN = 3  # a leaf cut across by at least this many lines ...
+SLAT_PITCH = 0.30  # m: ... no further apart than this, its cells ...
+SLAT_ASPECT = 1.5  # ... at least this many times as wide as tall, is louvred: a shutter, not glazed
+SHUTTER_SHARE = 0.6  # alike plain leaves at both ends of a row of plain ones are shutters if each is at most this share
+#                      of the width between them (two shutters close one window: half of it each) ...
+SHUTTER_ROW = 4  # ... and the row has no more leaves than this (a window of one or two sashes: not planks or slats)
+TOUCH = 0.03  # m: leaves this close, or overlapping, touch
 CAP_GAP = 0.05  # m: the faces of an arch's head start this close to the top of the frame ...
 CAP_RISE = 0.55  # ... rise no more than this share of its width and together span it
 CAP_CURVE = 0.01  # m: a curved side keeps at least 5 corners when simplified this much; a gable keeps 3
@@ -83,6 +96,7 @@ DOOR_HEIGHT = 1.6  # m: a symbol this tall that stands on a floor is a door
 DOOR_HEIGHT_UNKNOWN = 1.9  # m: ... and when the floor is not known, only a taller one is taken for a door
 DOOR_SILL = 0.30  # m: standing on a floor is having the bottom at most this far above it
 STEPS_MAX = 1.2  # m: a door this high above the floor can stand on the steps of an entrance
+PLINTH_MAX = 0.5  # m: a line across the facade this close under the top of a plinth cuts a strip off the foot of a door
 STEP_GAP = 0.08  # m: the steps of a stair are this close to one another ...
 STEP_THRESHOLD = 0.3  # m: ... and the top one this close under the door (the threshold)
 LOW_ON_FLOOR = 0.05  # m: a window whose bottom is this close to the floor (or lower) and ...
@@ -97,11 +111,14 @@ RAIL_BARS = 7  # a run of at least this many bars, evenly spaced ...
 RAIL_PITCH = 0.25  # m: ... no further apart than this ...
 RAIL_REGULAR = 0.15  # ... with spacings equal within this share ...
 RAIL_HEIGHT = 0.6  # ... and as tall as this share of the symbol, is a railing, not glazing bars
+RAIL_MAX = 1.3  # m: ... if the symbol is no taller than a balustrade (a plank door or a louvred window is) ...
+RAIL_TOP = 0.8  # ... and a line along the top, this share of its width at least, is the handrail
 BAR_MERGE = 0.03  # m: lines this close are one bar (a bar drawn as two lines)
 SKY = 60.0  # m: how far above a symbol the drawing is searched for a roof
 ROOF_SPAN = 2.0  # m: a roof, an eave or a wall top runs at least this far sideways; the cap of a chimney does not
-# "+0,00" "- 0.40" "+-0.00"
-MARK_RE = re.compile(r"(?<![\w.,])([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")
+# "+0,00" "- 0.40" "+-0.00" "P.F.+0,00": not the end of a number ("2.5-3.0")
+MARK_RE = re.compile(r"(?<![\w,])(?<!\d\.)([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")
+PLUS_MINUS_RE = re.compile(r"%%[pP]")  # how a TEXT of a DXF file stores the plus-minus sign (MTEXT is converted already)
 MARK_MAX = 30.0  # m: a level mark is no more than this above or below the floor
 MARK_REACH = 3.2  # text heights: the line a level mark labels lies at most this far below the text
 MARK_SIDE = 0.5  # m: ... and no further than this beyond the ends of the text, sideways
@@ -118,8 +135,8 @@ GROUND_DOUBLE = 0.25  # m: a second line this close above the ground line makes 
 FLOOR_TOL = 0.15  # m: floors found by two sources agree within this
 FLOOR_VOTE = 0.04  # m: marks whose floors differ by less than this say the same
 FLOOR_SNAP = 0.08  # m: a floor from a mark is moved onto a long line this close to it (the slab the mark stands on)
-STOREY_MIN = 1.8  # m: a mark this far above the floor is the floor of another storey
-STOREY_MAX = 4.5  # m: a storey is no taller than this from floor to floor
+STOREY_MIN = 2.3  # m: a storey is at least this tall from floor to floor (a mark closer is a lintel or a landing)
+STOREY_MAX = 4.5  # m: ... and no taller than this (a mark higher is the eaves or the ridge, or a storey is missing)
 SLAB_SHARE = 0.3  # a line under the foot of an upper door is a slab if it is this share of the width of the building
 SLAB_DEPTH = 0.08  # m: ... and lies this close under the foot
 SLAB_SLACK = 0.1  # m: openings stand on a slab, or hang under it, within this
@@ -170,6 +187,7 @@ class _Box:
     arched: bool = False
     free: int = 4  # bare corners
     headed: bool = False  # an arched head is drawn over it
+    glass: bool = False  # it is a hatch or a solid: the glass of a sash
     kids: list["_Box"] = field(default_factory=list)
 
     @property
@@ -196,6 +214,9 @@ class _Group:
     free: int = 4  # bare corners of the whole symbol
 
 
+Nodes = dict[tuple[int, int], list[tuple[float, float]]]  # where lines end (rounded) -> the directions they leave in
+
+
 @dataclass
 class _Linework:
     """The lines of the view and what they enclose."""
@@ -203,8 +224,10 @@ class _Linework:
     lines: list[LineString]  # cut to the view
     faces: list[Polygon]  # the faces of the planar graph of the lines
     outlines: list[Polygon]  # closed polylines and hatches: complete even where other lines cross them
-    nodes: Counter  # where lines end, by rounded position: a corner with more than two ends is a junction
+    nodes: Nodes  # where lines end, by rounded position, and the directions they leave in
     arrows: list[tuple[float, float]]  # corners of the filled triangles that are arrowheads of dimension lines
+    grid: list[Polygon] = field(default_factory=list)  # faces of the horizontal and vertical lines alone, if others exist
+    glass: list[Polygon] = field(default_factory=list)  # the outlines that are hatches and solids
 
 
 # --- openings from the shapes ---------------------------------------------------------------------------------
@@ -226,31 +249,75 @@ def _lines(items: list[Item], area: tuple[float, float, float, float]) -> list[L
     return [g for g in cut if g.geom_type == "LineString" and not g.is_empty]
 
 
+def _nodes(pieces: list[LineString]) -> Nodes:
+    """Where the pieces of the noded lines end, and the direction (a unit vector) each one leaves in."""
+    nodes: Nodes = {}
+    for first, second in ((0, 1), (-1, -2)):
+        at = shapely.get_coordinates(shapely.get_point(pieces, first))
+        way = shapely.get_coordinates(shapely.get_point(pieces, second)) - at
+        length = np.hypot(way[:, 0], way[:, 1])
+        for i, j, dx, dy in zip(np.round(at[:, 0] / NODE_TOL).astype(int).tolist(),
+                                np.round(at[:, 1] / NODE_TOL).astype(int).tolist(),
+                                (way[:, 0] / np.where(length > 0, length, 1)).tolist(),
+                                (way[:, 1] / np.where(length > 0, length, 1)).tolist()):
+            nodes.setdefault((i, j), []).append((dx, dy))
+    return nodes
+
+
+def _grid(lines: list[LineString]) -> list[Polygon]:
+    """The faces of the horizontal and vertical lines alone that oblique lines run across. The opening marks of a sash
+    (V, X) cut it into triangles in the planar graph of all the lines, and the sash is a face of the straight ones only.
+    The lines are put on a millimetre grid first: the ends of lines meant to meet differ by less than that."""
+    straight: list[LineString] = []
+    oblique: list[LineString] = []
+    for ls in lines:
+        c = np.asarray(ls.coords)
+        step = np.abs(np.diff(c, axis=0))
+        flat = (step[:, 0] < HORIZONTAL_TOL) | (step[:, 1] < HORIZONTAL_TOL)
+        if flat.all():
+            straight.append(ls)
+            continue
+        straight.extend(LineString(c[k:k + 2]) for k in np.flatnonzero(flat & (step.sum(axis=1) > 0)))
+        oblique.extend(LineString(c[k:k + 2]) for k in np.flatnonzero(~flat))
+    if not straight or not oblique:
+        return []
+    faces = np.array(list(polygonize(unary_union(shapely.set_precision(MultiLineString(straight), GRID_STEP)))),
+                     dtype=object)
+    middles = shapely.line_interpolate_point(np.array(oblique, dtype=object), 0.5, normalized=True)
+    face_i, piece_i = STRtree(middles).query(faces, predicate="contains")  # an oblique line runs inside the face
+    return list(faces[np.unique(face_i)])
+
+
 def _linework(items: list[Item], area: tuple[float, float, float, float]) -> _Linework:
     lines = _lines(items, area)
-    outlines = [g for it in items for p in it.prims for g in getattr(p.geom, "geoms", [p.geom])
+    polygons = [(p.kind == "fill", g) for it in items for p in it.prims for g in getattr(p.geom, "geoms", [p.geom])
                 if g.geom_type == "Polygon"]
+    outlines, glass = [g for _, g in polygons], [g for fill, g in polygons if fill]
     arrows = [(x, y) for g in outlines if len({(round(x, 3), round(y, 3)) for x, y in g.exterior.coords}) == 3
               and max(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1]) <= ARROW_MAX for x, y in g.exterior.coords]
     if not lines:
-        return _Linework([], [], outlines, Counter(), arrows)
+        return _Linework([], [], outlines, {}, arrows, [], glass)
     noded = unary_union(lines)
-    pieces = list(getattr(noded, "geoms", [noded]))
-    ends = np.vstack([shapely.get_coordinates(shapely.get_point(pieces, i)) for i in (0, -1)])
-    nodes = Counter(zip(np.round(ends[:, 0] / NODE_TOL).astype(int).tolist(),
-                        np.round(ends[:, 1] / NODE_TOL).astype(int).tolist()))
-    return _Linework(lines, list(polygonize(noded)), outlines, nodes, arrows)
+    return _Linework(lines, list(polygonize(noded)), outlines, _nodes(list(getattr(noded, "geoms", [noded]))), arrows,
+                     _grid(lines), glass)
 
 
-def _bare(x: float, y: float, nodes: Counter) -> bool:
-    """A corner where no more than its own two sides meet (no line goes on past it)."""
+def _ends_at(x: float, y: float, nodes: Nodes) -> list[tuple[float, float]]:
+    """The directions in which the lines that end at (x, y) leave it."""
     i, j = round(x / NODE_TOL), round(y / NODE_TOL)
-    return sum(nodes.get((i + di, j + dj), 0) for di in (-1, 0, 1) for dj in (-1, 0, 1)) <= 2
+    return [d for di in (-1, 0, 1) for dj in (-1, 0, 1) for d in nodes.get((i + di, j + dj), ())]
 
 
-def _bare_corners(x0: float, y0: float, x1: float, y1: float, nodes: Counter) -> int:
+def _junction(x: float, y: float, sx: int, sy: int, nodes: Nodes) -> bool:
+    """A line goes on past the corner (x, y) of a rectangle that lies towards (sx, sy) from it: one that leaves it
+    outwards, not along the two sides of the rectangle or into it (the mark of a sash, a diagonal brace)."""
+    return any(dx * sx < -OUTWARD or dy * sy < -OUTWARD for dx, dy in _ends_at(x, y, nodes))
+
+
+def _bare_corners(x0: float, y0: float, x1: float, y1: float, nodes: Nodes) -> int:
     """How many of the 4 corners of a rectangle are not a junction with a line that goes on past them."""
-    return sum(_bare(x, y, nodes) for x, y in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)))
+    return sum(not _junction(x, y, sx, sy, nodes) for x, y, sx, sy in
+               ((x0, y0, 1, 1), (x1, y0, -1, 1), (x0, y1, 1, -1), (x1, y1, -1, -1)))
 
 
 def _is_strip(b: _Box) -> bool:
@@ -356,12 +423,14 @@ def _is_dimension(b: _Box, arrows: list[tuple[float, float]]) -> bool:
 def _boxes(lw: _Linework, heads: list[Head]) -> list[_Box]:
     """Rectangles and arches of the drawing, from the faces of its linework and from its closed outlines."""
     found: dict[tuple, _Box] = {}
-    for poly, drawn in [(g, True) for g in lw.outlines] + [(g, False) for g in lw.faces]:  # an outline is whole where
+    glass = {id(g) for g in lw.glass}
+    for poly, drawn in [(g, True) for g in lw.outlines] + [(g, False) for g in lw.faces + lw.grid]:  # an outline is whole where
         b = _box_of(poly, drawn)  # a line in front cuts the face it encloses
         if b is not None and not _is_dimension(b, lw.arrows):
             b.free = _bare_corners(b.x0, b.y0, b.x1, b.y1, lw.nodes)
             b.headed = not _is_strip(b) and _apex(b.x0, b.x1, b.y1, heads) is not None
-            found.setdefault((round(b.x0, 2), round(b.y0, 2), round(b.x1, 2), round(b.y1, 2)), b)
+            b.glass = id(poly) in glass
+            found.setdefault((round(b.x0, 2), round(b.y0, 2), round(b.x1, 2), round(b.y1, 2)), b).glass |= b.glass
     return list(found.values())
 
 
@@ -385,14 +454,24 @@ def _nest(boxes: list[_Box]) -> list[_Box]:
     return roots
 
 
+def _flanked(b: _Box, solid: list[_Box]) -> bool:
+    """Leaves of the same height touch it at both sides: the plain middle of a window between its shutters."""
+    def beside(x: float, side: int) -> bool:
+        return any(abs((s.x1 if side < 0 else s.x0) - x) <= TOUCH and abs(s.y0 - b.y0) <= ALIGN_TOL
+                   and abs(s.y1 - b.y1) <= ALIGN_TOL for s in solid)
+
+    return beside(b.x0, -1) and beside(b.x1, 1)
+
+
 def _outermost(boxes: list[_Box]) -> list[_Box]:
     """The outermost rectangles, without the bays of the wall: empty rectangles of some size whose corners are all
     junctions with lines that go on (the space between two pilasters, under a canopy). A rectangle holding nothing
-    but bays is a bay too."""
+    but bays is a bay too. One with a leaf of its own height at each side is no bay: it is between its shutters."""
     while True:
         roots = _nest(boxes)
-        kept = [b for b in boxes
-                if b.kids or b.arched or b.headed or min(b.w, b.h) < BAY_MIN or b.free >= MIN_FREE_CORNERS]
+        real = [bool(b.kids or b.arched or b.headed or b.free >= MIN_FREE_CORNERS) for b in boxes]
+        solid = [b for b, r in zip(boxes, real) if r and not _is_strip(b)]
+        kept = [b for b, r in zip(boxes, real) if r or min(b.w, b.h) < BAY_MIN or _flanked(b, solid)]
         if len(kept) == len(boxes):
             return roots
         boxes = kept
@@ -411,11 +490,21 @@ def _frames(root: _Box, out: list[_Box]) -> None:
     out.append(root)
 
 
+def _has_glass(b: _Box) -> bool:
+    """A hatch or a solid lies in the leaf: it is a sash with its glass drawn, whatever its panes."""
+    return b.glass or any(_has_glass(k) for k in b.kids)
+
+
+def _slats(cells: list[_Box]) -> bool:
+    """Cells stacked at the pitch of a louvre, wider than tall: the slats of a shutter, not the panes of a sash."""
+    return len(cells) >= SLAT_MIN and all(k.h <= SLAT_PITCH + NODE_TOL and k.w >= SLAT_ASPECT * k.h for k in cells)
+
+
 def _panes(b: _Box) -> int:
     """In how many panes a leaf is divided: a shutter holds one inset, a sash is cut by its glazing bars."""
     while len(b.kids) == 1:
         b = b.kids[0]
-    return max(1, len(b.kids))
+    return 1 if _slats(b.kids) else max(1, len(b.kids))
 
 
 def _plain(g: _Group) -> bool:
@@ -428,7 +517,7 @@ def _within(p: _Group, q: _Group) -> bool:
             and p.y0 >= q.y0 - ALIGN_TOL and p.y1 <= q.y1 + ALIGN_TOL)
 
 
-def _shares(a: _Group, b: _Group, side_by_side: bool, nodes: Counter) -> bool:
+def _shares(a: _Group, b: _Group, side_by_side: bool, nodes: Nodes) -> bool:
     """Along the touching side one piece lies within the extent of the other and they share an end. Pieces one above the
     other must be alike (a window and the wall under it are not one symbol). If they share only one end, both must be
     plain and the shorter one cut at the other end, away from the other piece, by a line that goes on (a piece of sash
@@ -446,17 +535,21 @@ def _shares(a: _Group, b: _Group, side_by_side: bool, nodes: Counter) -> bool:
         return side_by_side or _plain(a) == _plain(b)
     if not (at_lo or at_hi) or not (_plain(a) and _plain(b)):
         return False
-    end = lo if at_hi else hi
+    end, inward = (lo, 1) if at_hi else (hi, -1)  # the end where the shorter piece is cut, and where it lies from it
     if side_by_side:  # the corner away from the other piece: the one beside it is a junction with it, whatever it is
-        return not _bare(a.x0 if a.x0 + a.x1 < b.x0 + b.x1 else a.x1, end, nodes)
-    return not _bare(end, a.y0 if a.y0 + a.y1 < b.y0 + b.y1 else a.y1, nodes)
+        left = a.x0 + a.x1 < b.x0 + b.x1
+        return _junction(a.x0 if left else a.x1, end, 1 if left else -1, inward, nodes)
+    bottom = a.y0 + a.y1 < b.y0 + b.y1
+    return _junction(end, a.y0 if bottom else a.y1, inward, 1 if bottom else -1, nodes)
 
 
-def _joins(a: _Group, b: _Group, nodes: Counter) -> bool:
+def _joins(a: _Group, b: _Group, nodes: Nodes) -> bool:
     """Two pieces of one symbol: they touch (or one lies within a symbol already made of several pieces) and line up."""
     w, h = max(a.x1, b.x1) - min(a.x0, b.x0), max(a.y1, b.y1) - min(a.y0, b.y0)
     if w > SYMBOL_MAX[0] or h > SYMBOL_MAX[1]:
         return False
+    if sum(m.w * m.h for m in a.members + b.members) < TILING_MIN * w * h:
+        return False  # leaves fill the symbol they make: a loose cluster of boxes (a stair, a section) is not one
     if (len(b.members) > 1 and _within(a, b)) or (len(a.members) > 1 and _within(b, a)):
         return True  # a pane cut in two by a line in front of it
     gx = max(a.x0, b.x0) - min(a.x1, b.x1)
@@ -466,9 +559,9 @@ def _joins(a: _Group, b: _Group, nodes: Counter) -> bool:
     return -0.03 <= gy <= MERGE_GAP and _shares(a, b, False, nodes)
 
 
-def _merge(frames: list[_Box], nodes: Counter) -> list[_Group]:
+def _merge(frames: list[_Box], nodes: Nodes) -> list[_Group]:
     """Frames that touch and line up (the leaves of a door, the panels of an entrance) are one symbol. Strips are left
-    alone: a step or a ledge under a window is not a leaf of it."""
+    alone: a step or a ledge under a window is not a leaf of it (``_plinths`` takes the one at the foot of a door)."""
     strips = [_Group([f], f.x0, f.y0, f.x1, f.y1, f.arched) for f in frames if _is_strip(f)]
     groups = [_Group([f], f.x0, f.y0, f.x1, f.y1, f.arched) for f in frames if not _is_strip(f)]
     merged = True
@@ -489,6 +582,25 @@ def _merge(frames: list[_Box], nodes: Counter) -> list[_Group]:
     return groups + strips
 
 
+def _plinths(groups: list[_Group], nodes: Nodes) -> list[_Group]:
+    """A line across the facade at the foot of a door (the plinth) cuts off the strip between its jambs: the door goes
+    down to the bottom of that strip. A step is a strip too, but no line goes on sideways past its top corners."""
+    strips = [g for g in groups if len(g.members) == 1 and _is_strip(g.members[0]) and not g.members[0].kids]
+    taken: set[int] = set()
+    for g in groups:
+        if len(g.members) == 1 and _is_strip(g.members[0]):
+            continue
+        for s in strips:
+            if id(s) not in taken and abs(s.y1 - g.y0) <= TOUCH and abs(s.x0 - g.x0) <= ALIGN_TOL \
+                    and abs(s.x1 - g.x1) <= ALIGN_TOL and s.y1 - s.y0 <= PLINTH_MAX and g.y1 - s.y0 >= DOOR_HEIGHT \
+                    and any(dx > OUTWARD for dx, _ in _ends_at(s.x1, s.y1, nodes)) \
+                    and any(dx < -OUTWARD for dx, _ in _ends_at(s.x0, s.y1, nodes)):
+                g.y0 = s.y0
+                taken.add(id(s))
+                break
+    return [g for g in groups if id(g) not in taken]
+
+
 def _columns(g: _Group) -> list[list[_Box]]:
     """The leaves of a symbol side by side, left to right; pieces one above the other are one column."""
     leaves = g.members[0].kids if len(g.members) == 1 and g.members[0].kids else g.members
@@ -505,18 +617,28 @@ def _columns(g: _Group) -> list[list[_Box]]:
 
 def _describe(g: _Group) -> None:
     """The clear width of the symbol and the glass. Shutters folded beside the sashes (or the piers of the wall beside a
-    door) are plain leaves, one at each end of the row with at least one sash between them; a plain piece much narrower
-    than what remains, next to them, is a jamb. What is left is the clear width."""
+    door) are plain leaves, one at each end of the row with at least one sash between them (or, when no leaf has glazing
+    bars, alike and narrow beside the rest); a plain piece much narrower than what remains, next to them, is a jamb.
+    What is left is the clear width."""
     g.core = (g.x0, g.x1)
     columns = _columns(g)
 
     def plain(c: list[_Box]) -> bool:
-        return sum(_panes(k) for k in c) < GLAZED_MIN
+        return _slats(c) or sum(_panes(k) for k in c) < GLAZED_MIN
 
     def extent(cs: list[list[_Box]]) -> tuple[float, float]:
         return min(k.x0 for c in cs for k in c), max(k.x1 for c in cs for k in c)
 
-    if len(columns) >= 3 and plain(columns[0]) and plain(columns[-1]) and not all(plain(c) for c in columns[1:-1]):
+    def folded() -> bool:
+        """Alike leaves at both ends of a short row, much narrower than the row between them, no strips (planks) and
+        with no glass drawn in them: shutters folded beside plain sashes."""
+        first, last, middle = extent(columns[:1]), extent(columns[-1:]), extent(columns[1:-1])
+        return len(columns) <= SHUTTER_ROW and abs((first[1] - first[0]) - (last[1] - last[0])) <= ALIGN_TOL \
+            and first[1] - first[0] <= SHUTTER_SHARE * (middle[1] - middle[0]) \
+            and not any(_is_strip(k) or _has_glass(k) for c in (columns[0], columns[-1]) for k in c)
+
+    if len(columns) >= 3 and plain(columns[0]) and plain(columns[-1]) \
+            and (not all(plain(c) for c in columns[1:-1]) or folded()):
         columns = columns[1:-1]
         while len(columns) > 1:
             x0, x1 = extent(columns)
@@ -549,7 +671,7 @@ def _groups(lw: _Linework) -> list[_Group]:
     frames: list[_Box] = []
     for r in _outermost(_boxes(lw, heads)):
         _frames(r, frames)
-    groups = _merge(frames, lw.nodes)
+    groups = _plinths(_merge(frames, lw.nodes), lw.nodes)
     for g in groups:
         _describe(g)
         g.free = _bare_corners(g.x0, g.y0, g.x1, g.y1, lw.nodes)
@@ -569,14 +691,14 @@ class _Mark:
 
 
 def _marks(texts: list[RawText]) -> list[_Mark]:
-    """Level marks written in the view: "+0,00", "P.P.F. +0.00", "+ 3.20", "- 0.40 (297.40)"."""
+    """Level marks written in the view: "+0,00", "P.P.F. +0.00", "%%p0,00", "+ 3.20", "- 0.40 (297.40)"."""
     out = []
     for t in texts:
         if abs(math.sin(math.radians(t.angle))) > 0.1:
             continue
         n = len(t.lines)
         for i, line in enumerate(t.lines):
-            m = MARK_RE.search(line)
+            m = MARK_RE.search(PLUS_MINUS_RE.sub("\u00b1", line))
             if not m:
                 continue
             value = float(f"{m.group(2)}.{m.group(3)}")
@@ -622,9 +744,13 @@ def _verticals(lines: list[LineString]) -> np.ndarray:
     return np.array(rows).reshape(-1, 3)
 
 
-def _is_railing(g: _Group, verticals: np.ndarray) -> bool:
-    """A balcony or a stair rail: as many evenly spaced balusters, close together, as no window has glazing bars."""
+def _is_railing(g: _Group, verticals: np.ndarray, hsegs: list[tuple[float, float, float]]) -> bool:
+    """A balcony or a stair rail: as many evenly spaced balusters, close together, as no window has glazing bars, in a
+    group no taller than a balustrade with a handrail along its top."""
     h = g.y1 - g.y0
+    if h > RAIL_MAX or not any(abs(y - g.y1) <= ALIGN_TOL and min(b, g.x1) - max(a, g.x0) >= RAIL_TOP * (g.x1 - g.x0)
+                               for y, a, b in hsegs):
+        return False
     inside = verticals[(verticals[:, 0] > g.x0 + ALIGN_TOL) & (verticals[:, 0] < g.x1 - ALIGN_TOL)
                        & (verticals[:, 2] - verticals[:, 1] >= RAIL_HEIGHT * h) & (verticals[:, 1] >= g.y0 - ALIGN_TOL)
                        & (verticals[:, 2] <= g.y1 + ALIGN_TOL), 0]
@@ -818,13 +944,26 @@ def _on_steps(g: _Group, strips: list[_Group], floor: float) -> bool:
     return True
 
 
+def _carries(ground: float, verticals: np.ndarray) -> bool:
+    """Something tall rises from the ground line: the end of a wall, a jamb, a column. A long line with nothing on it
+    (the underline of a title, the edge of a sheet) is no ground."""
+    bottom = verticals[:, 1]
+    return bool(np.any((verticals[:, 2] - bottom >= DOOR_HEIGHT) & (bottom >= ground - GROUND_DOUBLE - FLOOR_TOL)
+                       & (bottom <= ground + FLOOR_TOL)))
+
+
 def _find_floor(door_feet: list[float], levels_found: list[tuple[float, float]], ground: float | None,
-                feet: list[float]) -> tuple[float | None, str]:
-    """The floor of the ground storey and where it comes from, in order of trust."""
+                feet: list[float], grounded: bool = False) -> tuple[float | None, str]:
+    """The floor of the ground storey and where it comes from, in order of trust. ``grounded``: walls stand on the ground
+    line, so doors a storey above it are those of an upper storey (a view with a single ground door among the french
+    windows of the floor above, or none at all) and the floor is the ground line."""
     if levels_found:
         return _mode([y - v for y, v in levels_found], FLOOR_VOTE), "quota +0,00"
     if door_feet:
-        return _level_of_doors(door_feet), "porta"
+        level = _level_of_doors(door_feet)
+        if grounded and ground is not None and level >= ground + STOREY_MIN:
+            return ground, "linea di terra"
+        return level, "porta"
     if ground is not None:
         return ground, "linea di terra"
     if feet:
@@ -856,24 +995,43 @@ def _slabs(base: float, bands: list[tuple[float, float, float, float]],
             return found
 
 
+def _shown(y: float, bands: list[tuple[float, float, float, float]], hsegs: list[tuple[float, float, float]],
+           verticals: np.ndarray, span: float) -> bool:
+    """A storey is built from this level up: a row of openings stands on it or above it, or a slab line runs along it
+    and a wall goes on above (the eaves and the ridge are marked too, but a wall ends at the eaves)."""
+    if any(t[2] >= y - SLAB_SLACK for t in bands):
+        return True
+    slab = any(abs(yy - y) <= FLOOR_SNAP and b - a >= SLAB_SHARE * span for yy, a, b in hsegs)
+    return slab and bool(np.any((verticals[:, 1] <= y + FLOOR_TOL) & (verticals[:, 2] >= y + DOOR_HEIGHT)))
+
+
 def _storeys(floor: float, levels_found: list[tuple[float, float]], upper_feet: list[float],
-             hsegs: list[tuple[float, float, float]], span: float,
+             hsegs: list[tuple[float, float, float]], verticals: np.ndarray, span: float,
              bands: list[tuple[float, float, float, float]]) -> list[float]:
-    """y of the floors of all the storeys the view shows, from the marks of the other floors ("+3,20"), from the long
-    line (a slab, a balcony) a door of an upper storey stands on, or else from the slab between two rows of openings;
-    empty if the view shows one storey."""
-    ys = [y for y, v in levels_found if v >= STOREY_MIN and abs(y - v - floor) <= FLOOR_TOL]
+    """y of the floors of all the storeys the view shows, from the marks of the other floors ("+3,20") where openings or
+    a slab show a storey, from the long line (a slab, a balcony) a door of an upper storey stands on, or else from the
+    slab between two rows of openings; empty if the view shows one storey. Each floor lies STOREY_MIN to STOREY_MAX above
+    the one under it: a wrong floor (the eaves, the ridge) would set the height of the walls of the whole building."""
+    ys = [y for y, v in levels_found if abs(y - v - floor) <= FLOOR_TOL
+          and _shown(y, bands, hsegs, verticals, span)]
     for foot in upper_feet:
         slab = [y for y, a, b in hsegs if foot - SLAB_DEPTH <= y <= foot + 2 * ROW_TOL and b - a >= SLAB_SHARE * span]
         if slab:
             ys.append(max(slab))
-    if not ys:
-        ys = _slabs(floor, bands, hsegs)
-    merged: list[float] = []
-    for y in sorted(ys):
-        if not merged or y - merged[-1] > FLOOR_TOL:
-            merged.append(y)
-    return [floor] + merged if merged else []
+
+    def spaced(found: list[float]) -> list[float]:
+        levels = [floor]
+        for y in sorted(found):
+            if y - levels[-1] > STOREY_MAX:
+                break
+            if y - levels[-1] >= STOREY_MIN:
+                levels.append(y)
+        return levels
+
+    levels = spaced(ys)
+    if len(levels) == 1:  # no mark or door shows a storey: the slab between two rows of openings may
+        levels = spaced(_slabs(floor, bands, hsegs))
+    return levels if len(levels) > 1 else []
 
 
 def _named(items: list[Item], cfg: Config) -> list[_Named]:
@@ -924,10 +1082,17 @@ def _is_low(y0: float, h: float, floor: float | None) -> bool:
     return floor is not None and y0 <= floor + LOW_ON_FLOOR and h <= LOW_HEIGHT
 
 
+def _framed(n0: float, n1: float, s0: float, s1: float) -> tuple[float, float]:
+    """The extent of a named symbol with the frame its shape draws around it: a side of the shape up to CASING outside
+    the named one is the frame of its glass; further out (a stone surround, a step) or inside it, the named side stays."""
+    return s0 if n0 - CASING <= s0 < n0 else n0, s1 if n1 < s1 <= n1 + CASING else n1
+
+
 def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None, levels: list[float]) -> list[Symbol]:
-    """The layers are the primary answer: their kind stays, and the shape of the same opening gives it the complete
-    frame (a window named by its glass only, a door named by its leaves). Shapes that match no named symbol are the
-    openings the names do not give."""
+    """The layers are the primary answer: their kind and their size stay. The shape of the same opening gives them the
+    frame around the glass (up to CASING), the apex of an arch, the glass (``pane``) and the shutters (``full_x``); it
+    gives the clear width instead where the layer names the window with its shutters folded beside it. Shapes that match
+    no named symbol are the openings the names do not give."""
     out: list[Symbol] = []
     taken: dict[int, list[_Named]] = {}
     alone: list[_Named] = []
@@ -944,11 +1109,18 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
             continue
         says = [n.sym.kind for n in taken[i] if not n.mixed]
         kind = ("door" if "door" in says else "window") if says else s.kind
-        x0, x1, full = s.x0, s.x1, s.full_x
         n0, n1 = min(n.sym.x0 for n in taken[i]), max(n.sym.x1 for n in taken[i])
-        if n0 - x0 > FRAME_BAND or x1 - n1 > FRAME_BAND:  # the shape adds a leaf the layer does not call the window
-            x0, x1, full = n0, n1, (x0, x1) if full is None else full
-        out.append(FoundSymbol(kind, x0, x1, s.y0, s.y1, "layer+forma", s.arched, s.pane, full))
+        y0, y1 = _framed(min(n.sym.y0 for n in taken[i]), max(n.sym.y1 for n in taken[i]), s.y0, s.y1)
+        if s.arched:
+            y1 = max(y1, s.y1)  # the apex of a head the layer does not draw
+        full = s.full_x
+        if n0 - s.x0 > FRAME_BAND or s.x1 - n1 > FRAME_BAND:  # the shape adds a leaf the layer does not call the window
+            x0, x1, full = n0, n1, (s.x0, s.x1) if full is None else full
+        elif full is not None and abs(full[0] - n0) <= CASING and abs(full[1] - n1) <= CASING:
+            x0, x1 = s.x0, s.x1  # the layer names the window with its shutters folded beside it: the shape has the clear width
+        else:
+            x0, x1 = _framed(n0, n1, s.x0, s.x1)
+        out.append(FoundSymbol(kind, x0, x1, y0, y1, "layer+forma", s.arched, s.pane, full))
     for n in alone:
         if n.mixed:
             n.sym.kind = _kind(n.sym.y0, n.sym.y1 - n.sym.y0, floor, levels)
@@ -989,8 +1161,8 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
     groups = [g for g in everything if g.x1 - g.x0 >= SYMBOL_MIN[0] and g.y1 - g.y0 >= SYMBOL_MIN[1]]
     strips = [g for g in everything if _is_strip(g.members[0]) and g.x1 - g.x0 > g.y1 - g.y0]
     verticals = _verticals(lw.lines)
-    shapes = _roofed([g for g in groups if _is_opening(g) and not _is_railing(g, verticals)], lw)
     hsegs = _horizontals(lw.lines, MARK_LINE_MIN)
+    shapes = _roofed([g for g in groups if _is_opening(g) and not _is_railing(g, verticals, hsegs)], lw)
     span = area[2] - area[0]
     named = _named(items, cfg)
     marks = _mark_levels(_marks(texts), hsegs, _triangles(lw))
@@ -1001,7 +1173,7 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
     lowest = [n.sym.y0 for n in named] + [g.y0 for g in shapes]
     if ground is not None and lowest and ground > min(lowest) + FLOOR_TOL:
         ground = None  # a line above the bottom of an opening is the eaves or the roof: the ground is out of the view
-    floor, source = _find_floor(door_feet, marks, ground, feet)
+    floor, source = _find_floor(door_feet, marks, ground, feet, ground is not None and _carries(ground, verticals))
     if floor is not None and source == "quota +0,00":
         near = [y for y, a, b in hsegs if b - a >= GROUND_SHARE * span and abs(y - floor) <= FLOOR_SNAP]
         floor = min(near, key=lambda y: abs(y - floor)) if near else floor
@@ -1010,7 +1182,8 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
         upper = [g.y0 for g in shapes if g.y1 - g.y0 >= DOOR_HEIGHT_UNKNOWN and g.y0 >= floor + STOREY_MIN]
         bands = [(g.core[0], g.core[1], g.y0, g.y1) for g in shapes] \
             + [(n.sym.x0, n.sym.x1, n.sym.y0, n.sym.y1) for n in named]
-        levels = _storeys(floor, marks, upper, hsegs, span, [t for t in bands if not _is_low(t[2], t[3] - t[2], floor)])
+        levels = _storeys(floor, marks, upper, hsegs, verticals, span,
+                          [t for t in bands if not _is_low(t[2], t[3] - t[2], floor)])
 
     found = []
     for g in shapes:
