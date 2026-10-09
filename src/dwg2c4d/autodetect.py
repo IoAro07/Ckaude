@@ -94,9 +94,14 @@ CAPTION = re.compile(r"^[A-Za-z' ]+?\s*(?:[-:\u2013]\s*(?:[A-Z]|\d{1,2})(?:-(?:[
 AREA_MARK = re.compile(r"(?<![A-Za-z0-9])(?:mq|m2|m\u00b2)(?![A-Za-z0-9])", re.I)  # 12,5 mq
 
 UNIT_CHOICES = ("m", "cm", "mm")
-UNIT_SURE = 2.0  # with no unit in the header, the analysis decides when its best unit leads by this many votes
+OLD_UNITS = ("in", "ft")  # a header in these is voted on as one more unit, and overruled only by a clear majority
+UNIT_SURE = 2.0  # with no unit in the header (or one in inches or feet) the analysis decides when its best unit leads by this many votes
+MIN_PLAN_SIDE = 3.0  # m: a plan thinner than this is a fragment (the title block of a sheet read in the wrong unit), not a plan
+MAX_GRID_CELLS = 4e5  # a sheet spread over more cells than this (a unit 100 times too small) is looked at through bigger cells
 DOOR_RADIUS = (0.55, 1.40)  # m: the radius of a swing arc
 DIMENSION_RANGE = (0.5, 15.0)  # m: where the median of the dimension values of a plan should lie
+DIMENSION_FAR = (15.0, 60.0)  # m: ... and where it lies in a big hall that is dimensioned overall only: unusual, but possible
+FAR_LIKELIHOOD = 0.4  # ... so a unit that puts the median there gets this share of the vote of a unit that puts it in the range
 TEXT_HEIGHT = (0.05, 0.60)  # m: where the median height of the texts of a drawing should lie
 CORE_RANGE = (1.5, 1500.0)  # m: the size of the dense core of the sheet, at least, at most (several drawings fit in it)
 GARDEN_REACH = 25.0  # m: a garden does not lie farther than this from the plan (or from the lot it is drawn in)
@@ -319,7 +324,13 @@ class UnitGuess:
 
     @property
     def differs(self) -> bool:
-        return self.declared is not None and self.unit != self.declared and self.margin >= OVERRIDE_MARGIN
+        return self.declared is not None and self.unit != self.declared and self.margin >= self.needed
+
+    @property
+    def needed(self) -> float:
+        """How far ahead the best unit must be to overrule the header: a header in feet or inches is a unit that few of
+        the drawings we meet are really in, but also one that nobody checks, so it takes a clear majority."""
+        return UNIT_SURE if self.declared in OLD_UNITS else OVERRIDE_MARGIN
 
     @property
     def margin(self) -> float:
@@ -328,40 +339,54 @@ class UnitGuess:
         return ranked[0] - ranked[1] if len(ranked) > 1 else 0.0
 
 
-def _core_extent(soup: Soup) -> float:
-    """The size of the dense core of the drawing, in drawing units: the 2nd..98th percentile of the segments."""
+def _core_size(soup: Soup) -> tuple[float, float]:
+    """The width and height of the dense core of the drawing, in drawing units: the 2nd..98th percentile of the segments."""
     if len(soup.seg) == 0:
-        return 0.0
+        return 0.0, 0.0
     xs = np.concatenate([soup.seg[:, 0], soup.seg[:, 2]])
     ys = np.concatenate([soup.seg[:, 1], soup.seg[:, 3]])
-    return float(max(np.percentile(xs, 98) - np.percentile(xs, 2), np.percentile(ys, 98) - np.percentile(ys, 2)))
+    return float(np.percentile(xs, 98) - np.percentile(xs, 2)), float(np.percentile(ys, 98) - np.percentile(ys, 2))
+
+
+def _core_extent(soup: Soup) -> float:
+    """The size of the dense core of the drawing, in drawing units (the bigger of its width and height)."""
+    return max(_core_size(soup))
 
 
 def infer_unit(soup: Soup) -> UnitGuess:
     """Vote on the unit of the numbers in the drawing: dimension values, door arcs, the height of the texts, the size of
-    the drawing, and the header (the weakest, because it is the one that is wrong most often)."""
-    if soup.declared_unit not in UNIT_CHOICES and soup.declared_unit is not None:
-        return UnitGuess(soup.declared_unit, soup.declared_unit, {}, [])  # feet and inches: not for us to second-guess
-    votes = {u: 0.0 for u in UNIT_CHOICES}
+    the drawing, and the header (the weakest, because it is the one that is wrong most often). A header in inches or feet
+    stands in the vote as one more unit, overruled by a clear majority only: a centimetre sheet that says feet (the
+    default of some converters) must not be read at the scale of feet. Whenever the header is not overruled the sheet is
+    read in the unit it declares, as the conversion will."""
+    declared = soup.declared_unit
+    if declared is not None and declared not in UNIT_CHOICES and declared not in OLD_UNITS:
+        return UnitGuess(declared, declared, {}, [])  # a unit we cannot vote on
+    choices = UNIT_CHOICES + ((declared,) if declared in OLD_UNITS else ())
+    votes = {u: 0.0 for u in choices}
     evidence: list[str] = []
 
-    def vote(median: float, low: float, high: float, weight: float, what: str) -> None:
-        fits = [u for u in UNIT_CHOICES if low <= median * UNIT_TO_METERS[u] <= high]
-        for u in fits:
-            votes[u] += weight / len(fits)
-        if fits:
-            evidence.append(f"{what} e' {median:g}: {'/'.join(fits)}")
+    def vote(median: float, low: float, high: float, weight: float, what: str, far: tuple[float, float] | None = None) -> None:
+        """Every unit that puts the median in the range shares the vote; one that puts it in the ``far`` range, where it
+        is possible but unlikely, shares it with a smaller weight."""
+        likely = {u: 1.0 for u in choices if low <= median * UNIT_TO_METERS[u] <= high}
+        if far is not None:
+            likely.update({u: FAR_LIKELIHOOD for u in choices if u not in likely and far[0] < median * UNIT_TO_METERS[u] <= far[1]})
+        for u, p in likely.items():
+            votes[u] += weight * p / sum(likely.values())
+        if likely:
+            evidence.append(f"{what} e' {median:g}: {'/'.join(likely)}")
 
     values = [d["value"] for d in soup.dims]
     if len(values) >= 3:
-        vote(statistics.median(values), *DIMENSION_RANGE, 3.0, f"la mediana delle {len(values)} quote")
+        vote(statistics.median(values), *DIMENSION_RANGE, 3.0, f"la mediana delle {len(values)} quote", DIMENSION_FAR)
     heights = [t["height"] for t in soup.texts if t["height"] > 0]
     if len(heights) >= 5:  # the letters of a drawing are 5 cm to 60 cm high, whatever the size of the sheet
         vote(statistics.median(heights), *TEXT_HEIGHT, 2.0, f"l'altezza mediana dei {len(heights)} testi")
     if len(soup.arcs):
         quarter = soup.arcs[(soup.arcs[:, 4] > 70) & (soup.arcs[:, 4] < 110)]
         if len(quarter) >= 3:
-            for u in UNIT_CHOICES:
+            for u in choices:
                 s = UNIT_TO_METERS[u]
                 share = float(np.mean((quarter[:, 2] * s >= DOOR_RADIUS[0]) & (quarter[:, 2] * s <= DOOR_RADIUS[1])))
                 votes[u] += 2.0 * share
@@ -369,15 +394,19 @@ def infer_unit(soup: Soup) -> UnitGuess:
                     evidence.append(f"{share:.0%} dei {len(quarter)} archi di 90 gradi misura quanto una porta in {u}")
     core = _core_extent(soup)
     if core > 0:  # a sheet can hold several drawings side by side: only the absurd is ruled out
-        for u in UNIT_CHOICES:
+        for u in choices:
             if CORE_RANGE[0] <= core * UNIT_TO_METERS[u] <= CORE_RANGE[1]:
                 votes[u] += 0.5
             else:
                 votes[u] -= 3.0  # smaller than a room, or bigger than a town: not in this unit
-    if soup.declared_unit in votes:
-        votes[soup.declared_unit] += 1.0
-    best = max(UNIT_CHOICES, key=lambda u: (votes[u], u == soup.declared_unit))
-    return UnitGuess(best, soup.declared_unit, votes, evidence)
+    if declared in votes:
+        votes[declared] += 1.0
+    # a tie goes to the header, else to centimetres (the unit of most sheets nothing else speaks for), never to metres
+    best = max(choices, key=lambda u: (votes[u], u == declared, u == "cm"))
+    guess = UnitGuess(best, declared, votes, evidence)
+    if declared in votes and best != declared and not guess.differs:
+        guess.unit = declared
+    return guess
 
 
 # --- the views --------------------------------------------------------------------------------
@@ -693,12 +722,21 @@ def _sane(soup: Soup, scale: float) -> Soup:
                    texts=[t for t in soup.texts if fine(t["x"], t["y"])], inserts=[i for i in soup.inserts if fine(i["x"], i["y"])])
 
 
+def _grid_scale(soup: Soup, scale: float) -> float:
+    """The scale the cells of the sheet are laid at: ``scale``, unless that spreads the core of the sheet over more than
+    MAX_GRID_CELLS cells (a plan of 14 m read in a unit 100 times too big is 1400 m of sheet, seconds of work to cut in
+    half metres and nothing to learn from): then the sheet is looked at through bigger cells, as if it were smaller."""
+    w, h = _core_size(soup)
+    cells = (w * scale / CELL) * (h * scale / CELL)
+    return scale if cells <= MAX_GRID_CELLS else scale * math.sqrt(MAX_GRID_CELLS / cells)
+
+
 def find_views(soup: Soup, scale: float) -> list[View]:
     """The views of the sheet: pieces of drawing separated by empty space, with the title near each and a type."""
     soup = _sane(soup, scale)
     titles = sorted(_title_texts(soup), key=lambda t: -t["height"])[:MAX_TITLES]
     frames = _label_frames(soup, titles, scale)
-    pieces, centre = _pieces(soup, scale, frames)
+    pieces, centre = _pieces(soup, _grid_scale(soup, scale), frames)
     views = [View(0, box, cells, outline=outline) for box, cells, outline in sorted(pieces, key=lambda p: -p[1])[:MAX_VIEWS]]
     views = _without_strays(views, [f["box"] for f in frames] + [(t["x"], t["y"], t["x"], t["y"]) for t in titles], scale)
     _renumber(views, scale)
@@ -1472,7 +1510,12 @@ def apply_analysis(doc, cfg, a: Analysis, rules=None) -> tuple["Config", list[st
         change["units"] = u.unit
         notes.insert(0, f"Il file non dichiara le unita' ma i numeri sono in '{u.unit}' "
                         f"({'; '.join(u.evidence) or 'misure e simboli lo indicano'}): uso '{u.unit}'.")
-    if cfg.area is None and a.plan is not None and len(a.views) > 1:
+    too_small = a.plan is not None and cfg.view is None and min(a.plan.size_m(a.unit.scale)) < MIN_PLAN_SIDE  # one asked for stays
+    if too_small and cfg.area is None and len(a.views) > 1:
+        w, h = a.plan.size_m(a.unit.scale)
+        notes.append(f"La vista {a.plan.id} misura solo {w:.1f} x {h:.1f} m: non e' una pianta (l'unita' del file e' "
+                     f"forse sbagliata): non ritaglio il foglio, converto tutto. Indica la pianta con --vista N o --area.")
+    elif cfg.area is None and a.plan is not None and len(a.views) > 1:
         margin = 1.0 / a.unit.scale
         x0, y0, x1, y1 = a.plan.bbox
         change["area"] = (x0 - margin, y0 - margin, x1 + margin, y1 + margin)

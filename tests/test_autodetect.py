@@ -121,6 +121,42 @@ def test_dimension_values_decide_the_unit_not_the_header():
     assert not infer_unit(_soup("cm", dims=[90, 120, 250, 310, 480, 600])).differs
 
 
+def test_a_big_hall_dimensioned_overall_only_keeps_its_centimetre_header():
+    # 60 x 30 m in centimetres, five overall dimensions of 20 to 60 m and nothing else: the median (40 m) is unusual for a
+    # plan, but millimetres (4 m) is no reason to overrule a header that says centimetres
+    guess = infer_unit(_soup("cm", dims=[4000, 6000, 3000, 2000, 5000], extent=6000.0))
+    assert guess.unit == "cm" and not guess.differs
+    # ... while a header that is wrong still loses to dimensions that fit only the other unit
+    assert infer_unit(_soup("m", dims=[90, 120, 250, 310, 480, 600], extent=2000.0)).unit == "cm"
+
+
+def test_a_tie_between_units_goes_to_the_header_else_to_centimetres():
+    # a plan 14 m wide in centimetres with nothing to measure: metres and centimetres tie, and metres used to win
+    assert infer_unit(_soup(None, extent=1400.0)).unit == "cm"
+    assert infer_unit(_soup("m", extent=1400.0)).unit == "m"  # the header breaks the tie
+    assert infer_unit(_soup("mm", extent=1400.0)).unit == "mm"
+
+
+def test_a_sheet_read_in_a_unit_a_hundred_times_too_big_is_not_cut_in_millions_of_cells():
+    import time
+
+    from dwg2c4d.autodetect import _grid_scale
+
+    rng = np.random.default_rng(1)
+    n = 5000  # the lines of a plan 14 x 9 m in centimetres...
+    x, y = rng.uniform(40, 1360, n), rng.uniform(40, 860, n)
+    seg = np.column_stack([x, y, x + rng.uniform(20, 200, n), y])
+    soup = Soup(None, ["0"], seg, np.zeros(n, dtype=int), np.zeros((0, 5)), np.zeros(0, dtype=int), np.zeros((0, 3)),
+                np.zeros((0, 4)))
+    assert _grid_scale(soup, 0.01) == 0.01 and _grid_scale(soup, 1.0) < 0.5  # ... asked at one metre a unit
+    t0 = time.time()
+    find_views(soup, 0.01)
+    right = time.time() - t0
+    t0 = time.time()
+    assert find_views(soup, 1.0)
+    assert time.time() - t0 < 10 * right + 1.0  # twenty times as long before: 4 s against 0.2
+
+
 def test_door_arcs_decide_the_unit():
     arcs = [(0, 0, 90, 0, 90)] * 4  # four 90 degree arcs of radius 90: doors in centimetres
     assert infer_unit(_soup("m", arcs=arcs, extent=1500)).unit == "cm"
@@ -346,10 +382,55 @@ def test_three_overall_dimensions_do_not_beat_a_right_header():
     assert guess.unit == "cm" and not guess.differs
 
 
-def test_a_header_in_feet_or_inches_is_not_overridden():
-    for declared in ("ft", "in"):
-        guess = infer_unit(_soup(declared, extent=40))
+def test_a_header_in_feet_or_inches_is_not_overridden_where_nothing_speaks_against_it():
+    for declared, extent in (("ft", 40.0), ("in", 600.0)):  # a 12 m and a 15 m sheet
+        guess = infer_unit(_soup(declared, extent=extent))
         assert guess.unit == declared and not guess.differs
+    # a plan really drawn in feet: its doors are 3 ft wide and its dimensions are 10 to 30 ft
+    feet = infer_unit(_soup("ft", dims=[12, 18, 25, 10, 30], arcs=[(0, 0, 3, 0, 90)] * 4, extent=60.0))
+    assert feet.unit == "ft" and not feet.differs
+
+
+def test_a_centimetre_sheet_with_a_header_in_feet_is_read_in_centimetres():
+    # converters that do not know the unit often write feet: 90 cm door arcs, 15 cm letters, dimensions of 2 to 5 m
+    arcs = [(0, 0, 90, 0, 90)] * 5
+    soup = _soup("ft", dims=[200, 350, 500, 420, 280], arcs=arcs, extent=3000.0)
+    soup.texts = [{"layer": "T", "text": "x", "x": 0, "y": 0, "height": 15.0}] * 10
+    guess = infer_unit(soup)
+    assert guess.unit == "cm" and guess.differs and guess.declared == "ft"
+
+
+def test_a_header_in_feet_is_not_enough_to_read_the_sheet_at_the_wrong_scale():
+    from dwg2c4d.autodetect import apply_analysis
+
+    doc = ezdxf.new("R2018", setup=True)
+    doc.units = 2  # feet, on a sheet of centimetres: the whole of the sheet fragmented at 30 cm a unit
+    msp = doc.modelspace()
+    from test_views import add_elevation, add_plan, add_title
+
+    add_plan(msp, 0, 0, w=1800, d=1100)
+    add_title(msp, "PIANTA PIANO TERRA", 0, -250)
+    add_elevation(msp, 3000, 0, w=1800)
+    add_title(msp, "PROSPETTO SUD", 3000, 850)
+    a = analyze(doc)
+    assert a.unit.unit == "cm" and a.unit.differs
+    assert a.plan is not None and a.plan.kind == "plan" and min(a.plan.size_m(a.unit.scale)) > 10
+    cfg, _ = apply_analysis(doc, Config(), a)
+    assert cfg.units == "cm" and cfg.area is not None and cfg.area[2] - cfg.area[0] < 2100
+
+
+def test_a_plan_too_small_to_be_one_is_not_cropped_to(tmp_path):
+    from dwg2c4d.autodetect import Analysis, UnitGuess, View, apply_analysis
+
+    doc = ezdxf.new("R2018", setup=True)
+    soup = scan(doc)
+    sliver = View(2, (0, 0, 460, 60), 80, kind="plan", doors=3)  # 4.6 x 0.6 m in centimetres: the frame of a title
+    a = Analysis(soup, UnitGuess("cm", "cm", {}, []), [View(1, (0, 0, 5000, 3000), 900), sliver], sliver)
+    cfg, notes = apply_analysis(doc, Config(), a)
+    assert cfg.area is None and any("misura solo 4.6 x 0.6 m" in n for n in notes)
+    assert apply_analysis(doc, Config(view=2), a)[0].area is not None  # ... unless it is the view the user asked for
+    sliver.bbox = (0, 0, 1000, 700)  # a 10 x 7 m plan is cropped to as before
+    assert apply_analysis(doc, Config(), a)[0].area is not None
 
 
 def test_a_missing_header_is_filled_in_from_the_arcs_and_dimensions(tmp_path):
