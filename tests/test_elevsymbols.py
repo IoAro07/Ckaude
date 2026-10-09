@@ -583,3 +583,48 @@ def test_a_line_that_leaves_the_view_and_comes_back_does_not_break_it():
     msp.add_lwpolyline([(-5, 7.5), (1, 7.5), (1, 9), (3, 9), (3, 7.5), (5, 7.5), (5, 9), (7, 9)])
     res = _read(doc)
     assert [s.kind for s in res.symbols] == ["window"]
+
+
+# --- the floor and the storeys when the doors say a storey too high ----------------------------------------------
+
+def _tall_facade(msp, height=7.0):
+    """A two-storey wall: the ground line, the two ends, the eaves."""
+    msp.add_line((-1, FLOOR), (21, FLOOR))
+    msp.add_line((0, FLOOR), (0, height))
+    msp.add_line((20, FLOOR), (20, height))
+    msp.add_line((-0.5, height), (20.5, height))
+
+
+def test_the_floor_is_the_ground_line_when_one_ground_door_sits_under_french_windows():
+    doc, msp = _doc()
+    _tall_facade(msp)
+    _lines(msp, 1, 0, 2.1, 2.2)  # the only door on the ground
+    for x in (6, 10.5):
+        _lines(msp, x, 0.9, x + 1.2, 2.2)  # windows of the ground floor
+    for k in range(4):
+        _lines(msp, 1 + 4.5 * k, 3.2, 2.4 + 4.5 * k, 5.4)  # french windows of the floor above
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 9.0), "m", 1.0)
+    assert res.floor == pytest.approx(0.0, abs=0.01)  # the busiest level of door feet is the upper one: not the floor
+    assert res.floor_source == "linea di terra"
+    assert _find(res, "door", 1.55).y0 == pytest.approx(0.0, abs=0.01)
+
+
+def test_the_floor_is_the_ground_line_when_the_only_doors_are_those_of_the_upper_storey():
+    doc, msp = _doc()
+    _tall_facade(msp)
+    for x in (6, 10.5, 14):
+        _lines(msp, x, 0.9, x + 1.2, 2.2)
+    for k in range(2):
+        _lines(msp, 1 + 4.5 * k, 3.2, 2.4 + 4.5 * k, 5.4)
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 9.0), "m", 1.0)
+    assert res.floor == pytest.approx(0.0, abs=0.01) and res.floor_source == "linea di terra"
+    assert _find(res, "window", 6.6).y0 == pytest.approx(0.9, abs=0.01)  # the sill is above the floor, not clamped
+
+
+def test_a_line_with_nothing_on_it_is_no_ground_for_the_doors_above():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 0, 4, 2.1)
+    msp.add_line((-1, -2.4), (21, -2.4))  # the underline of a title, far under the building: no wall stands on it
+    res = read_view_symbols(doc, Config(), (-2.0, -4.0, 22.0, 8.0), "m", 1.0)
+    assert res.floor == pytest.approx(0.0, abs=0.01) and res.floor_source == "porta"

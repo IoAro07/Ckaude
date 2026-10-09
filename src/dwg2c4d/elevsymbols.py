@@ -12,7 +12,8 @@ their shape and by where they stand; so does this module:
   a railing, a chimney above the roof, a pergola with its vine, a title frame) is rejected by its proportions and
   by how it is drawn;
 * the floor comes from a level mark ("+0,00", "P.P.F. +0.00") and the line it labels, else from the bottom of the
-  lowest door, the top of the ground line, or the foot of a person figure; the other storeys from their marks, or
+  lowest door (the top of the ground line when the doors found all stand a storey above a ground line that walls
+  stand on), the top of the ground line, or the foot of a person figure; the other storeys from their marks, or
   from the slab that runs between two rows of openings.
 
 Layers that do name doors and windows stay the primary answer for those symbols: the shapes complete them (a
@@ -818,13 +819,26 @@ def _on_steps(g: _Group, strips: list[_Group], floor: float) -> bool:
     return True
 
 
+def _carries(ground: float, verticals: np.ndarray) -> bool:
+    """Something tall rises from the ground line: the end of a wall, a jamb, a column. A long line with nothing on it
+    (the underline of a title, the edge of a sheet) is no ground."""
+    bottom = verticals[:, 1]
+    return bool(np.any((verticals[:, 2] - bottom >= STOREY_MIN) & (bottom >= ground - GROUND_DOUBLE - FLOOR_TOL)
+                       & (bottom <= ground + FLOOR_TOL)))
+
+
 def _find_floor(door_feet: list[float], levels_found: list[tuple[float, float]], ground: float | None,
-                feet: list[float]) -> tuple[float | None, str]:
-    """The floor of the ground storey and where it comes from, in order of trust."""
+                feet: list[float], grounded: bool = False) -> tuple[float | None, str]:
+    """The floor of the ground storey and where it comes from, in order of trust. ``grounded``: walls stand on the ground
+    line, so doors a storey above it are those of an upper storey (a view with a single ground door among the french
+    windows of the floor above, or none at all) and the floor is the ground line."""
     if levels_found:
         return _mode([y - v for y, v in levels_found], FLOOR_VOTE), "quota +0,00"
     if door_feet:
-        return _level_of_doors(door_feet), "porta"
+        level = _level_of_doors(door_feet)
+        if grounded and ground is not None and level >= ground + STOREY_MIN:
+            return ground, "linea di terra"
+        return level, "porta"
     if ground is not None:
         return ground, "linea di terra"
     if feet:
@@ -1001,7 +1015,7 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
     lowest = [n.sym.y0 for n in named] + [g.y0 for g in shapes]
     if ground is not None and lowest and ground > min(lowest) + FLOOR_TOL:
         ground = None  # a line above the bottom of an opening is the eaves or the roof: the ground is out of the view
-    floor, source = _find_floor(door_feet, marks, ground, feet)
+    floor, source = _find_floor(door_feet, marks, ground, feet, ground is not None and _carries(ground, verticals))
     if floor is not None and source == "quota +0,00":
         near = [y for y, a, b in hsegs if b - a >= GROUND_SHARE * span and abs(y - floor) <= FLOOR_SNAP]
         floor = min(near, key=lambda y: abs(y - floor)) if near else floor
