@@ -888,3 +888,54 @@ def test_a_loose_cluster_of_boxes_is_not_one_opening_and_does_not_swallow_the_wi
     win = _find(res, "window", 5.3)
     assert (win.x0, win.x1, win.y0, win.y1) == pytest.approx((4.8, 5.8, 2.0, 3.0), abs=0.01)
     assert all(s.x1 - s.x0 < 3.0 for s in res.symbols)
+
+
+# --- the layers stay primary ------------------------------------------------------------------------------------
+
+def test_a_stone_surround_on_layer_zero_does_not_enlarge_the_named_window():
+    doc, msp = _doc()
+    _facade(msp)
+    doc.layers.add("FINESTRE")
+    _lines(msp, 3.0, 1.0, 4.2, 2.4, "FINESTRE")
+    _lines(msp, 2.8, 0.8, 4.4, 2.6)  # the surround, 0.2 m wide all round
+    _lines(msp, 6, 0, 7, 2.1)
+    win = _find(_read(doc), "window", 3.6)
+    assert (win.x0, win.x1, win.y0, win.y1) == pytest.approx((3.0, 4.2, 1.0, 2.4), abs=0.01)
+
+
+def test_a_step_across_the_foot_of_a_named_door_does_not_lift_it():
+    doc, msp = _doc()
+    _facade(msp)
+    doc.layers.add("PORTE")
+    _lines(msp, 6, 0, 7, 2.1, "PORTE")
+    _lines(msp, 5.8, 0, 7.2, 0.15)  # a step rectangle that crosses the door's lower edge
+    _lines(msp, 3, 1.0, 4, 2.0)
+    door = _find(_read(doc), "door", 6.5)
+    assert (door.y0, door.y1) == pytest.approx((0.0, 2.1), abs=0.01)
+
+
+def test_the_layer_has_the_extent_the_shape_has_the_arch_and_the_glass():
+    doc, msp = _doc()
+    _facade(msp)
+    doc.layers.add("FINESTRE")
+    _lines(msp, 5, 0, 6.2, 2.0, "FINESTRE")  # named: the body of an arched door, without its head
+    msp.add_arc((5.6, 2.0), 0.6, 0, 180)
+    _lines(msp, 5.05, 0.05, 6.15, 1.95, "FINESTRE")  # and its glass
+    win = _find(_read(doc), "window", 5.6)
+    assert win.arched and win.y1 == pytest.approx(2.6, abs=0.02) and win.y0 == pytest.approx(0.0, abs=0.01)
+    assert win.pane == pytest.approx((5.05, 0.05, 6.15, 1.95), abs=0.01)
+
+
+def test_a_named_window_with_its_shutters_in_the_name_has_the_clear_width_of_the_shape():
+    doc, msp = _doc()
+    _facade(msp)
+    doc.layers.add("FINESTRE")
+    for x0, x1 in ((3.0, 3.6), (4.2, 4.8)):  # the shutters are on the window layer too
+        _ring(msp, x0, 1.0, x1, 2.4, "FINESTRE")
+        _ring(msp, x0 + 0.05, 1.05, x1 - 0.05, 2.35, "FINESTRE")
+    for x0 in (3.6, 3.9):  # two sashes with a glazing bar
+        _ring(msp, x0, 1.0, x0 + 0.3, 2.4, "FINESTRE")
+        _ring(msp, x0 + 0.04, 1.04, x0 + 0.26, 2.36, "FINESTRE")
+        msp.add_line((x0 + 0.04, 1.7), (x0 + 0.26, 1.7), dxfattribs={"layer": "FINESTRE"})
+    win = _find(_read(doc), "window", 3.9)
+    assert (win.x1 - win.x0) == pytest.approx(0.6, abs=0.01) and win.full_x == pytest.approx((3.0, 4.8), abs=0.01)

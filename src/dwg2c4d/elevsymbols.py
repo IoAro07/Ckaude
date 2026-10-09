@@ -17,9 +17,10 @@ their shape and by where they stand; so does this module:
   from the slab that runs between two rows of openings (a floor is 2.3 to 4.5 m above the one under it and has
   openings or a slab at it: the eaves and the ridge are marked too but are no floors).
 
-Layers that do name doors and windows stay the primary answer for those symbols: the shapes complete them (a
-window drawn as its inner pane only becomes the whole frame; a shutter the layer does not call part of the window
-only widens ``full_x``) and add the openings the names do not give.
+Layers that do name doors and windows stay the primary answer for those symbols and keep their size: the shapes
+complete them (the frame a few centimetres around a window drawn as its glass only; the arch the layer does not
+draw; a shutter the layer does not call part of the window only widens ``full_x``), never with a stone surround or
+a step that lies across them, and add the openings the names do not give.
 
 A sheet has many views and reading it takes seconds: ``read_view_symbols`` reads the modelspace once per drawing and
 cuts each view out of that.
@@ -59,6 +60,7 @@ ARCH_TOP = 0.8  # ... and narrower than this share of it at the apex, which is i
 ARCH_CENTRED = 0.1  # the apex is this close to the middle of the box, as a share of its width
 NEST_TOL = 0.015  # m: a rectangle this close to the edges of another one lies inside it
 FRAME_BAND = 0.30  # m: a frame is no wider than this around what it holds (more: it is a bay of the wall)
+CASING = 0.10  # m: the frame of a window is no wider than this around its glass; a stone surround or a step is wider
 MERGE_GAP = 0.20  # m: leaves this close are one symbol (the halves of a door, the panels of an entrance)
 TILING_MIN = 0.5  # the leaves of a symbol fill at least this share of the box they span
 ALIGN_TOL = 0.10  # m: leaves of one symbol line up at the top or at the bottom (or at both sides), within this
@@ -1048,10 +1050,17 @@ def _is_low(y0: float, h: float, floor: float | None) -> bool:
     return floor is not None and y0 <= floor + LOW_ON_FLOOR and h <= LOW_HEIGHT
 
 
+def _framed(n0: float, n1: float, s0: float, s1: float) -> tuple[float, float]:
+    """The extent of a named symbol with the frame its shape draws around it: a side of the shape up to CASING outside
+    the named one is the frame of its glass; further out (a stone surround, a step) or inside it, the named side stays."""
+    return s0 if n0 - CASING <= s0 < n0 else n0, s1 if n1 < s1 <= n1 + CASING else n1
+
+
 def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None, levels: list[float]) -> list[Symbol]:
-    """The layers are the primary answer: their kind stays, and the shape of the same opening gives it the complete
-    frame (a window named by its glass only, a door named by its leaves). Shapes that match no named symbol are the
-    openings the names do not give."""
+    """The layers are the primary answer: their kind and their size stay. The shape of the same opening gives them the
+    frame around the glass (up to CASING), the apex of an arch, the glass (``pane``) and the shutters (``full_x``); it
+    gives the clear width instead where the layer names the window with its shutters folded beside it. Shapes that match
+    no named symbol are the openings the names do not give."""
     out: list[Symbol] = []
     taken: dict[int, list[_Named]] = {}
     alone: list[_Named] = []
@@ -1068,11 +1077,18 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
             continue
         says = [n.sym.kind for n in taken[i] if not n.mixed]
         kind = ("door" if "door" in says else "window") if says else s.kind
-        x0, x1, full = s.x0, s.x1, s.full_x
         n0, n1 = min(n.sym.x0 for n in taken[i]), max(n.sym.x1 for n in taken[i])
-        if n0 - x0 > FRAME_BAND or x1 - n1 > FRAME_BAND:  # the shape adds a leaf the layer does not call the window
-            x0, x1, full = n0, n1, (x0, x1) if full is None else full
-        out.append(FoundSymbol(kind, x0, x1, s.y0, s.y1, "layer+forma", s.arched, s.pane, full))
+        y0, y1 = _framed(min(n.sym.y0 for n in taken[i]), max(n.sym.y1 for n in taken[i]), s.y0, s.y1)
+        if s.arched:
+            y1 = max(y1, s.y1)  # the apex of a head the layer does not draw
+        full = s.full_x
+        if n0 - s.x0 > FRAME_BAND or s.x1 - n1 > FRAME_BAND:  # the shape adds a leaf the layer does not call the window
+            x0, x1, full = n0, n1, (s.x0, s.x1) if full is None else full
+        elif full is not None and abs(full[0] - n0) <= CASING and abs(full[1] - n1) <= CASING:
+            x0, x1 = s.x0, s.x1  # the layer names the window with its shutters folded beside it: the shape has the clear width
+        else:
+            x0, x1 = _framed(n0, n1, s.x0, s.x1)
+        out.append(FoundSymbol(kind, x0, x1, y0, y1, "layer+forma", s.arched, s.pane, full))
     for n in alone:
         if n.mixed:
             n.sym.kind = _kind(n.sym.y0, n.sym.y1 - n.sym.y0, floor, levels)
