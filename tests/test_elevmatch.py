@@ -60,12 +60,14 @@ def test_every_orientation_of_the_walls_gives_two_facades():
     assert south.run == pytest.approx((1.0, 0.0)) and len(south.openings) == 4 + 3  # no walls given: all are listed
 
 
-def test_a_facade_lists_only_the_openings_nothing_stands_in_front_of():
+def test_an_opening_with_a_wall_in_front_of_it_counts_less():
     facades = facades_of(house(), walls_of_the_house())
     south = next(f for f in facades if f.side == "sud")
-    assert [round(fo.t, 2) for fo in south.openings] == [1.0, 3.0, 4.4, 7.5]  # the north wall's windows look north
+    seen = {round(fo.t, 2): fo.exposure for fo in south.openings}
+    assert [seen[t] for t in (1.0, 3.0, 4.4, 7.5)] == [1.0] * 4  # the south wall's windows look south
+    assert [fo.exposure for fo in south.openings if fo.opening.center[1] == 6.0] == [0.6] * 3  # the north wall's do not
     north = next(f for f in facades if f.side == "nord")
-    assert [round(fo.t, 2) for fo in north.openings] == [-8.5, -4.0, -2.0]  # left to right is east to west
+    assert [round(fo.t, 2) for fo in north.openings if fo.exposure == 1.0] == [-8.5, -4.0, -2.0]  # east to west
 
 
 @pytest.mark.parametrize("side,row,flip", [("sud", SOUTH, False), ("nord", NORTH, True)])

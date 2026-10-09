@@ -37,7 +37,8 @@ MIN_SHARE = 0.34  # of the symbols of the elevation (the rest are other storeys,
 MIN_SIGNIFICANCE = 2.0  # matched pairs (weighted) beyond what chance would give
 MIN_MARGIN = 0.6  # the best facade must lead the next one that says something else by this much (3 windows are weak evidence)
 SAME_HEIGHT = 0.05  # m: two readings of the same opening this close are the same height
-HIDE_DISTANCE = 25.0  # m: an opening with a wall in front of it within this distance does not face the outside
+HIDE_DISTANCE = 25.0  # m: an opening with a wall in front of it within this distance probably does not face the outside
+HIDDEN_WEIGHT = 0.6  # ...so a pair with it counts this much (walls drawn on the plan are not always the building alone)
 TITLE_BONUS = 0.5  # a title that says the side of the facade (SUD, NORD...) breaks a tie, nothing more
 
 SIDE_NAMES = ("est", "nord", "ovest", "sud")  # outward normal at 0, 90, 180, 270 degrees (x to the east, y to the north)
@@ -62,6 +63,7 @@ class FacadeOpening:
     t: float  # m along the facade, left to right seen from outside
     width: float
     depth: float  # m along the outward normal: the outermost opening of a slot is the one the elevation shows
+    exposure: float = 1.0  # 1 when nothing is built in front of it, HIDDEN_WEIGHT when a wall is
 
 
 @dataclass
@@ -94,13 +96,15 @@ class Pair:
     symbol: Symbol
     opening: Opening
     residual: float  # m
+    exposure: float = 1.0
 
     @property
     def weight(self) -> float:
-        """1 for a symbol at the very place of the opening and as wide as it, less as it is off or of another width."""
+        """1 for a symbol at the very place of the opening and as wide as it, less as it is off, of another width, or
+        paired with an opening that has a wall in front of it."""
         wide = self.symbol.x1 - self.symbol.x0
         like = min(wide, self.opening.width) / max(wide, self.opening.width, 1e-9)
-        return max(0.0, 1.0 - (self.residual / CENTRE_TOLERANCE) ** 2) * (0.6 + 0.4 * like)
+        return max(0.0, 1.0 - (self.residual / CENTRE_TOLERANCE) ** 2) * (0.6 + 0.4 * like) * self.exposure
 
 
 @dataclass
@@ -126,22 +130,22 @@ class ElevationMatch:
 
 # --- the facades of the plan ------------------------------------------------------------------
 
-def _faces_out(o: Opening, normal: tuple[float, float], walls: BaseGeometry | None) -> bool:
-    """Is there nothing built in front of the opening, on the side the facade looks to? The window of a west wall does not
-    face east: the whole house, with its east wall, stands in front of it."""
+def _exposure(o: Opening, normal: tuple[float, float], walls: BaseGeometry | None) -> float:
+    """1 when nothing is built in front of the opening on the side the facade looks to, HIDDEN_WEIGHT when a wall is: the
+    window of a west wall does not face east, the whole house with its east wall stands in front of it. (Not a veto: the
+    walls of a plan are not only the building.)"""
     if walls is None or walls.is_empty:
-        return True
+        return 1.0
     reach = o.thickness / 2.0 + 0.03  # beyond the outer face of its own wall
     start = (o.center[0] + normal[0] * reach, o.center[1] + normal[1] * reach)
     end = (start[0] + normal[0] * HIDE_DISTANCE, start[1] + normal[1] * HIDE_DISTANCE)
-    return not walls.intersects(LineString([start, end]))
+    return HIDDEN_WEIGHT if walls.intersects(LineString([start, end])) else 1.0
 
 
 def facades_of(openings: list[Opening], walls: BaseGeometry | None = None) -> list[Facade]:
-    """Every orientation of the walls that carry openings gives two facades (one for each way the wall may face). The
-    openings of a facade are those with nothing built in front of them (``walls``: the walls of the plan; without them
-    every opening of the orientation is listed). Where two are at the same place along the facade the outermost is the
-    one a symbol is paired with."""
+    """Every orientation of the walls that carry openings gives two facades (one for each way the wall may face). All the
+    openings of the orientation are listed; those with a wall in front of them (``walls``: the walls of the plan) count
+    less. Where two are at the same place along the facade the outermost is the one a symbol is paired with."""
     usable = [o for o in openings if o.kind in ("door", "window") and o.keep and o.width > 0.2]
     angles: list[list[float]] = []  # orientation clusters: [mean angle, weight]
     for o in usable:
@@ -165,8 +169,8 @@ def facades_of(openings: list[Opening], walls: BaseGeometry | None = None) -> li
             f = Facade(n)
             r = f.run
             f.openings = sorted((FacadeOpening(o, o.center[0] * r[0] + o.center[1] * r[1], o.width,
-                                               o.center[0] * n[0] + o.center[1] * n[1])
-                                 for o in chosen if _faces_out(o, n, walls)), key=lambda fo: fo.t)
+                                               o.center[0] * n[0] + o.center[1] * n[1], _exposure(o, n, walls))
+                                 for o in chosen), key=lambda fo: fo.t)
             if f.openings:
                 out.append(f)
     return out
@@ -191,7 +195,7 @@ def _pair_up(symbols: list[Symbol], facade: Facade, shift: float) -> list[Pair]:
                 continue
             if not _compatible(s.x1 - s.x0, fo.width):
                 continue
-            cands.append((abs(res) - 1e-4 * fo.depth, i, j))  # equal residuals: the outer one wins
+            cands.append((abs(res) - 1e-4 * fo.depth - 1e-3 * fo.exposure, i, j))  # equal: the outer, the exposed one wins
     cands.sort()
     used_s: set[int] = set()
     used_o: set[int] = set()
@@ -202,7 +206,7 @@ def _pair_up(symbols: list[Symbol], facade: Facade, shift: float) -> list[Pair]:
         used_s.add(i)
         used_o.add(j)
         s, fo = symbols[i], facade.openings[j]
-        pairs.append(Pair(s, fo.opening, (s.x0 + s.x1) / 2.0 + shift - fo.t))
+        pairs.append(Pair(s, fo.opening, (s.x0 + s.x1) / 2.0 + shift - fo.t, fo.exposure))
     return pairs
 
 
@@ -210,7 +214,8 @@ def _expected(symbols: int, facade: Facade) -> float:
     """What a random drawing would still score: the density of openings along the facade times the window of the match
     (2/3 of a pair on average inside it, because of the weights)."""
     span = max(facade.span + 2.0, 4.0)
-    return symbols * min(1.0, len(facade.openings) * 2.0 * CENTRE_TOLERANCE / span) * 2.0 / 3.0
+    weight = sum(fo.exposure for fo in facade.openings)
+    return symbols * min(1.0, weight * 2.0 * CENTRE_TOLERANCE / span) * 2.0 / 3.0
 
 
 def _best_shift(symbols: list[Symbol], facade: Facade) -> tuple[float, list[Pair]] | None:
