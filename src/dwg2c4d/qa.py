@@ -37,7 +37,8 @@ def summary_lines(report) -> list[str]:
     out.append(f"  Porte / finestre   : {report.doors} / {report.windows}")
     if report.passages:
         out.append(f"  Vani senza simbolo : {report.passages} (dedotti dai muri: verifica nella tabella)")
-    src = {"scritta": "dalla scritta 'h' nei locali", "indicata": "indicata", "predefinita": "predefinita"}
+    src = {"scritta": "dalla scritta 'h' nei locali", "indicata": "indicata", "predefinita": "predefinita",
+           "prospetto": "dalla linea di gronda dei prospetti"}
     out.append(f"  Altezza muri       : {report.wall_height:g} m ({src[report.wall_height_source]})")
     if report.labels:
         out.append(f"  Scritte            : quote lette per {report.labels} aperture su "

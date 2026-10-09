@@ -9,7 +9,8 @@ from shapely.geometry import Polygon
 from dwg2c4d import convert
 from dwg2c4d.config import Config
 from dwg2c4d.elevation import Symbol
-from dwg2c4d.elevmatch import (apply_match, facades_of, match_symbols, storey_of, title_side)
+from dwg2c4d.elevmatch import (_north_of_the_sheet, apply_match, facades_of, match_symbols, storey_of,
+                               title_side)
 from dwg2c4d.openings import Opening
 
 
@@ -128,8 +129,11 @@ def test_a_symmetric_house_can_say_which_side_by_its_title_only():
     drawn = symbols([x + 50.0 for x in row], [1.0] * 4)
     facades = facades_of(ops, walls_of_the_house())
     assert match_symbols(drawn, facades) is None  # the heights would land on the wrong wall half of the time
-    titled = match_symbols(drawn, facades, "PROSPETTO NORD")
+    assert match_symbols(drawn, facades, "PROSPETTO NORD") is None  # a title alone is not enough: the sheet may be turned
+    titled = match_symbols(drawn, facades, "PROSPETTO NORD", rotation=0.0)
     assert titled is not None and titled.facade.side == "nord" and titled.by_title
+    turned = match_symbols(drawn, facades, "PROSPETTO NORD", rotation=180.0)  # the north of this sheet points down
+    assert turned is not None and turned.facade.side == "sud"
 
 
 def test_the_same_row_read_from_either_side_of_one_wall_gives_the_same_heights():
@@ -192,7 +196,7 @@ def _rect(msp, x0, y0, x1, y1, layer):
     msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
 
 
-def sheet_with_free_elevations(path, with_north=True):
+def sheet_with_free_elevations(path, with_north=True, turn_plan=False, tall=False):
     """A 10 x 6 m plan (cm) and, 40 m to the right, the south elevation (windows 90-220 above the ground) and, further
     right, the north one (drawn from outside: its x runs from east to west; windows 110-240)."""
     doc = ezdxf.new("R2018", setup=True)
@@ -200,19 +204,30 @@ def sheet_with_free_elevations(path, with_north=True):
     for name in ("MURI", "PORTE", "FINESTRE", "TESTI"):
         doc.layers.add(name)
     msp = doc.modelspace()
-    _rect(msp, 0, 0, 1000, 600, "MURI")
-    _rect(msp, 30, 30, 970, 570, "MURI")
+
+    def plan_rect(x0, y0, x1, y1, layer):  # the plan, turned a quarter turn counter-clockwise when asked
+        pts = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        if turn_plan:
+            pts = [(-y, x) for x, y in pts]
+        msp.add_lwpolyline(pts, close=True, dxfattribs={"layer": layer})
+
+    plan_rect(0, 0, 1000, 600, "MURI")
+    plan_rect(30, 30, 970, 570, "MURI")
     for c, w in S_ROW:
-        _rect(msp, c - w / 2, 0, c + w / 2, 30, "FINESTRE")
-    _rect(msp, S_DOOR[0] - 45, 0, S_DOOR[0] + 45, 30, "PORTE")
+        plan_rect(c - w / 2, 0, c + w / 2, 30, "FINESTRE")
+    plan_rect(S_DOOR[0] - 45, 0, S_DOOR[0] + 45, 30, "PORTE")
     for c, w in N_ROW:
-        _rect(msp, c - w / 2, 570, c + w / 2, 600, "FINESTRE")
-    _rect(msp, N_DOOR[0] - 45, 570, N_DOOR[0] + 45, 600, "PORTE")
-    msp.add_text("PIANTA PIANO TERRA", height=20, dxfattribs={"layer": "TESTI", "insert": (350, -150)})
+        plan_rect(c - w / 2, 570, c + w / 2, 600, "FINESTRE")
+    plan_rect(N_DOOR[0] - 45, 570, N_DOOR[0] + 45, 600, "PORTE")
+    msp.add_text("PIANTA PIANO TERRA", height=20,
+                 dxfattribs={"layer": "TESTI", "insert": (350, -150) if not turn_plan else (150, 350)})
     # the south elevation: x as in the plan plus 4000; ground at y = -3000
     ground = -3000
     for c, w in S_ROW:
-        _rect(msp, c + 4000 - w / 2, ground + 90, c + 4000 + w / 2, ground + 220, "FINESTRE")
+        _rect(msp, c + 4000 - w / 2, ground + (200 if tall else 90), c + 4000 + w / 2, ground + (300 if tall else 220),
+              "FINESTRE")
+    if tall:  # the line that closes the wall at the top: 4.95 m above the floor, along the whole facade
+        msp.add_line((3970, ground + 495), (5030, ground + 495), dxfattribs={"layer": "0"})
     _rect(msp, S_DOOR[0] + 4000 - 45, ground, S_DOOR[0] + 4000 + 45, ground + 210, "PORTE")
     msp.add_line((3900, ground), (5100, ground), dxfattribs={"layer": "0"})
     msp.add_text("PROSPETTO SUD", height=20, dxfattribs={"layer": "TESTI", "insert": (4350, ground - 150)})
@@ -253,3 +268,55 @@ def test_a_row_of_windows_that_fits_no_facade_is_reported_and_changes_nothing(tm
     report = convert(path, tmp_path / "g.obj", Config(auto=True))
     assert not any(o.from_elevation for o in report.openings)
     assert any("non corrisponde a nessuna facciata" in w for w in report.warnings)
+
+
+def test_the_north_of_the_sheet_comes_from_the_elevations_that_say_their_side():
+    facades = facades_of(house(), walls_of_the_house())
+    south = match_symbols(symbols([x + 4000 for x, _ in SOUTH], [w for _, w in SOUTH]), facades)
+    north = match_symbols(symbols([-x + 12000 for x, _ in NORTH], [w for _, w in NORTH]), facades)
+    assert south is not None and north is not None
+    assert _north_of_the_sheet([(south, "sud"), (north, "nord")]) == pytest.approx(0.0, abs=1e-6)
+    assert _north_of_the_sheet([(south, "nord"), (north, "sud")]) == pytest.approx(180.0, abs=1e-6)
+    assert _north_of_the_sheet([(south, "sud"), (north, "sud")]) is None  # two titles that cannot both be right
+    assert _north_of_the_sheet([]) is None
+
+
+def test_a_plan_drawn_turned_on_the_sheet_still_gives_every_elevation_its_facade(tmp_path):
+    path = sheet_with_free_elevations(tmp_path / "turned.dxf", turn_plan=True)
+    report = convert(path, tmp_path / "t.obj", Config(auto=True))
+    assert sorted(ev["side"] for ev in report.elevations) == ["nord", "sud"]  # the sheet's sides, not the drawing's
+    assert all(ev["north_known"] for ev in report.elevations)
+    heights = sorted((round(o.z0, 2), round(o.z1, 2)) for o in report.openings if o.from_elevation and o.kind == "window")
+    assert heights == [(0.9, 2.2)] * 4 + [(1.1, 2.4)] * 3
+
+
+def test_two_elevations_of_the_same_facade_set_it_once(tmp_path):
+    path = sheet_with_free_elevations(tmp_path / "twice.dxf", with_north=False)
+    doc = ezdxf.readfile(path)
+    msp = doc.modelspace()
+    ground = -3000
+    for c, w in S_ROW:  # a second drawing of the same south facade, further right, with other heights
+        _rect(msp, c + 9000 - w / 2, ground + 150, c + 9000 + w / 2, ground + 250, "FINESTRE")
+    _rect(msp, S_DOOR[0] + 9000 - 45, ground, S_DOOR[0] + 9000 + 45, ground + 210, "PORTE")
+    msp.add_line((8900, ground), (10100, ground), dxfattribs={"layer": "0"})
+    msp.add_text("PROSPETTO SUD", height=20, dxfattribs={"layer": "TESTI", "insert": (9350, ground - 150)})
+    doc.saveas(path)
+    report = convert(path, tmp_path / "w.obj", Config(auto=True))
+    assert len(report.elevations) == 1  # the first one (best, then the other is the same facade again)
+    assert any("stessa facciata" in w for w in report.warnings)
+
+
+def test_windows_higher_than_the_walls_in_use_give_the_wall_height_from_the_eaves_line(tmp_path):
+    path = sheet_with_free_elevations(tmp_path / "tall.dxf", with_north=False, tall=True)
+    report = convert(path, tmp_path / "h.obj", Config(auto=True))
+    assert report.wall_height == pytest.approx(4.95) and report.wall_height_source == "prospetto"
+    windows = [o for o in report.openings if o.from_elevation and o.kind == "window"]
+    assert len(windows) == 4 and all(o.z0 == pytest.approx(2.0) and o.z1 == pytest.approx(3.0) for o in windows)
+
+
+def test_the_wall_height_written_or_given_is_never_replaced_by_the_elevation(tmp_path):
+    path = sheet_with_free_elevations(tmp_path / "tall2.dxf", with_north=False, tall=True)
+    report = convert(path, tmp_path / "i.obj", Config(auto=True, wall_height=3.2))
+    assert report.wall_height == 3.2 and report.wall_height_source == "indicata"
+    windows = [o for o in report.openings if o.from_elevation and o.kind == "window"]
+    assert all(o.z1 == pytest.approx(3.0) for o in windows)

@@ -52,7 +52,7 @@ class ConversionReport:
     rooms: list[dict] = field(default_factory=list)  # name, area_m2, height (m or None)
     labels: int = 0  # openings whose size/sill was read from a written text
     wall_height: float = 0.0
-    wall_height_source: str = "predefinita"  # predefinita | indicata | scritta
+    wall_height_source: str = "predefinita"  # predefinita | indicata | scritta | prospetto
     plan: object | None = None  # the Plan (walls, partitions, floors...): for the check picture
     room_objects: list = field(default_factory=list)  # the Room objects (polygons)
     preview_path: Path | None = None
@@ -254,10 +254,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     unaligned_views: list[tuple[float, float, float, float]] = []
     if cfg.analysis is not None and cfg.elevations_auto and not cfg.elevations:
         taken = [tuple(spec[:4]) for spec, _ in specs]  # read in line with the plan above
-        more, more_report = match_views(doc, cfg, cfg.analysis, openings, solid, result.unit, result.unit_scale, taken,
-                                        warnings)
+        more, more_report, height = match_views(doc, cfg, cfg.analysis, openings, solid, result.unit,
+                                                result.unit_scale, taken, warnings)
         elevations.extend(more)
         elevation_report.extend(more_report)
+        if height is not None:  # the windows of the elevations reach higher than the walls in use: the elevation knows
+            cfg = replace(cfg, wall_height=height, wall_height_auto=False)
+            wall_height_source = "prospetto"
         unaligned_views = [v.bbox for v in cfg.analysis.views if v.kind in ("elevation", "section", "roof", "detail")
                            and v is not cfg.analysis.plan]
 
