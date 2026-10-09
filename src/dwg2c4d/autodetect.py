@@ -63,6 +63,7 @@ SITE_SIZE = 30.0  # m: ... and it is a site if it is this wide
 NEST_DOORS = 5  # a building drawn in a bigger view has at least this many swing doors, all in one place
 NEST_LINK = 10.0  # m: swing doors this close to one another are in the same building
 NEST_MARGIN = 3.0  # m: a building reaches this far beyond its outermost swing doors
+NEST_ORTHO = 0.9  # a view of which more of the lines than this run along two directions is a plan, not a lot with a house on it
 NEST_AREA = 0.3  # a plan in a view takes up less than this share of the box of the view...
 NEST_DENSITY = 1.3  # ... and holds this many times more drawing per square metre than the rest of it
 COPY_TEXTS = 3  # the texts propose a copy: this many different words of a drawing land on the same words, all moved alike
@@ -766,7 +767,8 @@ def _without_strays(views: list[View], marks: list[tuple], scale: float) -> list
 def _plans_inside(views: list[View], soup: Soup, scale: float, centre: np.ndarray) -> list[View]:
     """A plan drawn on its lot (or a copy of a plan in a site): when all the swing doors of a view lie together in one
     place that takes up less than a third of it and is much denser than the rest, that place is a plan of its own. Two
-    places with doors (the wings of a long building, two houses) say nothing: the view is left as it is."""
+    places with doors (the wings of a long building, two houses) say nothing, and neither does a view that is all straight
+    lines along two directions, like a plan: the lot around a house has contours, trees, boundaries running every way."""
     from scipy.spatial import cKDTree
 
     arcs = soup.arcs
@@ -776,7 +778,7 @@ def _plans_inside(views: list[View], soup: Soup, scale: float, centre: np.ndarra
     for v in views:
         x0, y0, x1, y1 = v.bbox
         at = door & (arcs[:, 0] >= x0) & (arcs[:, 0] <= x1) & (arcs[:, 1] >= y0) & (arcs[:, 1] <= y1)
-        if v.outline or v.kind in ("elevation", "section", "detail") or at.sum() < NEST_DOORS:
+        if v.outline or v.kind in ("elevation", "section", "detail") or at.sum() < NEST_DOORS or v.ortho >= NEST_ORTHO:
             continue
         hinge, radius = arcs[at, :2], arcs[at, 2]
         group = _components(cKDTree(hinge), NEST_LINK / scale)

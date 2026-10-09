@@ -370,6 +370,29 @@ def test_a_long_hall_with_all_its_doors_at_one_end_is_one_plan_not_a_plan_on_a_l
     assert v.kind == "plan" and v.parent is None and v.size_m(S)[0] > 39
 
 
+def test_a_plan_with_all_its_doors_along_one_wall_is_one_plan_not_a_plan_on_a_lot():
+    doc, msp = new_sheet()
+    add_plan(msp, 0, 0, w=1700, d=1400, doors=7, furniture=0)  # seven doors in a row on the south wall...
+    for off in (0, 30):
+        for x in range(300, 1500, 400):
+            msp.add_line((x + off, 0), (x + off, 1400))
+    for k in range(14):  # ... and rooms and furniture all over it
+        msp.add_lwpolyline([(100 + k * 110, 400 + k % 3 * 300), (180 + k * 110, 400 + k % 3 * 300), (180 + k * 110, 480 + k % 3 * 300)])
+    (v,) = views_of(doc)
+    assert v.kind == "plan" and v.parent is None and v.size_m(S)[0] > 16 and v.ortho > 0.9
+
+
+def test_the_box_of_a_view_is_the_box_of_its_ink_wherever_the_sheet_lies():
+    boxes = []
+    for dx, dy in ((0, 0), (37, 12), (211, 349)):  # a fraction of a cell (0.5 m) off the grid
+        doc, msp = new_sheet()
+        add_elevation(msp, 5000 + dx, 3000 + dy, w=1500, windows=4)
+        (v,) = views_of(doc)
+        boxes.append(tuple(c - o for c, o in zip(box_m(v), (dx * S, dy * S, dx * S, dy * S))))
+    assert boxes[1] == pytest.approx(boxes[0], abs=0.01) and boxes[2] == pytest.approx(boxes[0], abs=0.01)
+    assert boxes[0] == pytest.approx((48.0, 30.0, 67.0, 37.5), abs=0.15)  # the ground line, 2 m beyond the wall, to the ridge of the roof
+
+
 def test_a_wide_and_low_drawing_with_no_marks_is_a_facade_and_a_squarish_one_is_not_told():
     doc, msp = new_sheet()
     add_elevation(msp, 0, 0, w=2000, marks=False)
