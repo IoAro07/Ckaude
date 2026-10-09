@@ -1132,8 +1132,10 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
 
 def _roofed(groups: list[_Group], lw: _Linework) -> list[_Group]:
     """The symbols with a roof, an eave or the top of the wall above them: a line as long as a roof, not the cap of a
-    chimney. What stands in the open sky above the roof (a chimney pot, a stack) is no opening."""
+    chimney, or the edge of a hatch or a solid as wide (a roof drawn as a fill has no line). What stands in the open
+    sky above the roof (a chimney pot, a stack) is no opening."""
     long_lines = [g for g in lw.lines if g.bounds[2] - g.bounds[0] >= ROOF_SPAN]
+    long_lines += [LineString(g.exterior.coords) for g in lw.glass if g.bounds[2] - g.bounds[0] >= ROOF_SPAN]
     if not long_lines:
         return []
     tree = STRtree(long_lines)
@@ -1162,7 +1164,11 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
     strips = [g for g in everything if _is_strip(g.members[0]) and g.x1 - g.x0 > g.y1 - g.y0]
     verticals = _verticals(lw.lines)
     hsegs = _horizontals(lw.lines, MARK_LINE_MIN)
-    shapes = _roofed([g for g in groups if _is_opening(g) and not _is_railing(g, verticals, hsegs)], lw)
+    candidates = [g for g in groups if _is_opening(g) and not _is_railing(g, verticals, hsegs)]
+    shapes = _roofed(candidates, lw)
+    roofless = bool(candidates) and not shapes
+    if roofless:  # no roof, eave or wall top over any of them: an elevation drawn without one, not a view of details
+        shapes = candidates
     span = area[2] - area[0]
     named = _named(items, cfg)
     marks = _mark_levels(_marks(texts), hsegs, _triangles(lw))
@@ -1196,6 +1202,9 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
         found.append(FoundSymbol(kind, g.core[0], g.core[1], g.y0, g.y1, "forma", g.arched, g.pane,
                                  (g.x0, g.x1) if g.core != (g.x0, g.x1) else None))
     notes = _floor_notes(floor, source, door_feet)
+    if roofless:
+        notes.append("Nessun tetto, gronda o sommita' del muro sopra le aperture: le forme sono prese senza la prova "
+                     "del tetto (comignoli e dettagli non si distinguono), meno sicure.")
     if len(groups) > len(found):
         notes.append(f"{len(groups) - len(found)} figure scartate: fasce, specchiature di parete, vasi, gradini, "
                      "comignoli: non sono porte o finestre.")

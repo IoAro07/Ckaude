@@ -429,6 +429,36 @@ def test_a_chimney_stack_above_the_roof_is_not_a_window_but_a_gable_window_is():
     assert sorted(round((s.x0 + s.x1) / 2, 1) for s in res.symbols) == [3.5, 10.0]
 
 
+def _three_openings(msp):
+    _lines(msp, 3, 1.0, 4.2, 2.4)
+    _lines(msp, 8, 1.0, 9.2, 2.4)
+    _lines(msp, 12, 0, 13, 2.1)
+
+
+@pytest.mark.parametrize("roof", ["hatch", "solid"])
+def test_a_roof_drawn_as_a_fill_still_roofs_the_openings(roof):
+    doc, msp = _doc()
+    _facade(msp, roof=False)
+    outline = [(-0.5, 5), (20.5, 5), (20.5, 5.6), (10, 6.5), (-0.5, 5.6)]
+    if roof == "hatch":
+        msp.add_hatch(color=8).paths.add_polyline_path(outline, is_closed=True)
+    else:
+        msp.add_solid([(-0.5, 5), (20.5, 5), (-0.5, 5.6), (20.5, 5.6)])
+    _three_openings(msp)
+    res = _read(doc)
+    assert len(res.symbols) == 3 and res.floor_source == "porta"
+    assert not any("tetto" in n for n in res.notes)
+
+
+def test_a_view_without_any_roof_keeps_its_openings_and_says_so():
+    doc, msp = _doc()
+    _facade(msp, roof=False)
+    _three_openings(msp)
+    res = _read(doc)
+    assert len(res.symbols) == 3 and res.floor_source == "porta"
+    assert any("tetto" in n for n in res.notes)
+
+
 def test_a_named_window_keeps_its_own_width_when_the_shape_adds_a_shutter():
     doc, msp = _doc()
     _facade(msp)
