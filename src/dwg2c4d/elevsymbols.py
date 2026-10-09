@@ -14,7 +14,8 @@ their shape and by where they stand; so does this module:
 * the floor comes from a level mark ("+0,00", "P.P.F. +0.00") and the line it labels, else from the bottom of the
   lowest door (the top of the ground line when the doors found all stand a storey above a ground line that walls
   stand on), the top of the ground line, or the foot of a person figure; the other storeys from their marks, or
-  from the slab that runs between two rows of openings.
+  from the slab that runs between two rows of openings (a floor is 2.3 to 4.5 m above the one under it and has
+  openings or a slab at it: the eaves and the ridge are marked too but are no floors).
 
 Layers that do name doors and windows stay the primary answer for those symbols: the shapes complete them (a
 window drawn as its inner pane only becomes the whole frame; a shutter the layer does not call part of the window
@@ -119,8 +120,8 @@ GROUND_DOUBLE = 0.25  # m: a second line this close above the ground line makes 
 FLOOR_TOL = 0.15  # m: floors found by two sources agree within this
 FLOOR_VOTE = 0.04  # m: marks whose floors differ by less than this say the same
 FLOOR_SNAP = 0.08  # m: a floor from a mark is moved onto a long line this close to it (the slab the mark stands on)
-STOREY_MIN = 1.8  # m: a mark this far above the floor is the floor of another storey
-STOREY_MAX = 4.5  # m: a storey is no taller than this from floor to floor
+STOREY_MIN = 2.3  # m: a storey is at least this tall from floor to floor (a mark closer is a lintel or a landing)
+STOREY_MAX = 4.5  # m: ... and no taller than this (a mark higher is the eaves or the ridge, or a storey is missing)
 SLAB_SHARE = 0.3  # a line under the foot of an upper door is a slab if it is this share of the width of the building
 SLAB_DEPTH = 0.08  # m: ... and lies this close under the foot
 SLAB_SLACK = 0.1  # m: openings stand on a slab, or hang under it, within this
@@ -823,7 +824,7 @@ def _carries(ground: float, verticals: np.ndarray) -> bool:
     """Something tall rises from the ground line: the end of a wall, a jamb, a column. A long line with nothing on it
     (the underline of a title, the edge of a sheet) is no ground."""
     bottom = verticals[:, 1]
-    return bool(np.any((verticals[:, 2] - bottom >= STOREY_MIN) & (bottom >= ground - GROUND_DOUBLE - FLOOR_TOL)
+    return bool(np.any((verticals[:, 2] - bottom >= DOOR_HEIGHT) & (bottom >= ground - GROUND_DOUBLE - FLOOR_TOL)
                        & (bottom <= ground + FLOOR_TOL)))
 
 
@@ -870,24 +871,43 @@ def _slabs(base: float, bands: list[tuple[float, float, float, float]],
             return found
 
 
+def _shown(y: float, bands: list[tuple[float, float, float, float]], hsegs: list[tuple[float, float, float]],
+           verticals: np.ndarray, span: float) -> bool:
+    """A storey is built from this level up: a row of openings stands on it or above it, or a slab line runs along it
+    and a wall goes on above (the eaves and the ridge are marked too, but a wall ends at the eaves)."""
+    if any(t[2] >= y - SLAB_SLACK for t in bands):
+        return True
+    slab = any(abs(yy - y) <= FLOOR_SNAP and b - a >= SLAB_SHARE * span for yy, a, b in hsegs)
+    return slab and bool(np.any((verticals[:, 1] <= y + FLOOR_TOL) & (verticals[:, 2] >= y + DOOR_HEIGHT)))
+
+
 def _storeys(floor: float, levels_found: list[tuple[float, float]], upper_feet: list[float],
-             hsegs: list[tuple[float, float, float]], span: float,
+             hsegs: list[tuple[float, float, float]], verticals: np.ndarray, span: float,
              bands: list[tuple[float, float, float, float]]) -> list[float]:
-    """y of the floors of all the storeys the view shows, from the marks of the other floors ("+3,20"), from the long
-    line (a slab, a balcony) a door of an upper storey stands on, or else from the slab between two rows of openings;
-    empty if the view shows one storey."""
-    ys = [y for y, v in levels_found if v >= STOREY_MIN and abs(y - v - floor) <= FLOOR_TOL]
+    """y of the floors of all the storeys the view shows, from the marks of the other floors ("+3,20") where openings or
+    a slab show a storey, from the long line (a slab, a balcony) a door of an upper storey stands on, or else from the
+    slab between two rows of openings; empty if the view shows one storey. Each floor lies STOREY_MIN to STOREY_MAX above
+    the one under it: a wrong floor (the eaves, the ridge) would set the height of the walls of the whole building."""
+    ys = [y for y, v in levels_found if abs(y - v - floor) <= FLOOR_TOL
+          and _shown(y, bands, hsegs, verticals, span)]
     for foot in upper_feet:
         slab = [y for y, a, b in hsegs if foot - SLAB_DEPTH <= y <= foot + 2 * ROW_TOL and b - a >= SLAB_SHARE * span]
         if slab:
             ys.append(max(slab))
-    if not ys:
-        ys = _slabs(floor, bands, hsegs)
-    merged: list[float] = []
-    for y in sorted(ys):
-        if not merged or y - merged[-1] > FLOOR_TOL:
-            merged.append(y)
-    return [floor] + merged if merged else []
+
+    def spaced(found: list[float]) -> list[float]:
+        levels = [floor]
+        for y in sorted(found):
+            if y - levels[-1] > STOREY_MAX:
+                break
+            if y - levels[-1] >= STOREY_MIN:
+                levels.append(y)
+        return levels
+
+    levels = spaced(ys)
+    if len(levels) == 1:  # no mark or door shows a storey: the slab between two rows of openings may
+        levels = spaced(_slabs(floor, bands, hsegs))
+    return levels if len(levels) > 1 else []
 
 
 def _named(items: list[Item], cfg: Config) -> list[_Named]:
@@ -1024,7 +1044,8 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
         upper = [g.y0 for g in shapes if g.y1 - g.y0 >= DOOR_HEIGHT_UNKNOWN and g.y0 >= floor + STOREY_MIN]
         bands = [(g.core[0], g.core[1], g.y0, g.y1) for g in shapes] \
             + [(n.sym.x0, n.sym.x1, n.sym.y0, n.sym.y1) for n in named]
-        levels = _storeys(floor, marks, upper, hsegs, span, [t for t in bands if not _is_low(t[2], t[3] - t[2], floor)])
+        levels = _storeys(floor, marks, upper, hsegs, verticals, span,
+                          [t for t in bands if not _is_low(t[2], t[3] - t[2], floor)])
 
     found = []
     for g in shapes:

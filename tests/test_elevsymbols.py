@@ -628,3 +628,85 @@ def test_a_line_with_nothing_on_it_is_no_ground_for_the_doors_above():
     msp.add_line((-1, -2.4), (21, -2.4))  # the underline of a title, far under the building: no wall stands on it
     res = read_view_symbols(doc, Config(), (-2.0, -4.0, 22.0, 8.0), "m", 1.0)
     assert res.floor == pytest.approx(0.0, abs=0.01) and res.floor_source == "porta"
+
+
+def _mark(msp, y, text, x=21.2):
+    """A level mark: its text sits on a tick line to the right of the facade."""
+    msp.add_line((x - 0.2, y), (x + 2.3, y))
+    msp.add_text(text, dxfattribs={"height": 0.2, "insert": (x, y + 0.05)})
+
+
+def _gable_house(msp, upper_row=False):
+    """A wall 3.0 m to the eaves with a gable roof up to 5.5 m, ground floor openings, optionally a row above."""
+    msp.add_line((-1, FLOOR), (21, FLOOR))
+    msp.add_line((0, FLOOR), (0, 3.0))
+    msp.add_line((20, FLOOR), (20, 3.0))
+    msp.add_line((-0.5, 3.0), (20.5, 3.0))  # the eaves
+    msp.add_line((-0.5, 3.0), (10, 5.5))
+    msp.add_line((10, 5.5), (20.5, 3.0))
+    _lines(msp, 3, 0, 4, 2.4)
+    _lines(msp, 8, 0.9, 9.2, 2.3)
+    _lines(msp, 12, 0, 13, 2.4)
+    if upper_row:
+        msp.add_line((0, 3.0), (20, 3.0))
+        for x in (3, 8, 12):
+            _lines(msp, x, 3.9, x + 1.0, 5.0)
+
+
+def test_the_ridge_mark_of_a_gable_roof_is_no_floor():
+    doc, msp = _doc()
+    _gable_house(msp)
+    _mark(msp, 0.0, "+0,00")
+    _mark(msp, 5.5, "+5,50")  # the ridge: 5.5 m above the floor is no storey of this house
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 8.0), "m", 1.0)
+    assert res.floor == pytest.approx(0.0, abs=0.01) and res.levels == []
+
+
+def test_a_mark_with_no_row_of_openings_above_it_is_no_floor_but_one_with_a_row_is():
+    doc, msp = _doc()
+    _gable_house(msp)
+    _mark(msp, 0.0, "+0,00")
+    _mark(msp, 2.4, "+2,40")  # the head of the doors: nothing stands on or above it
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 8.0), "m", 1.0)
+    assert res.levels == []
+    doc, msp = _doc()
+    _gable_house(msp, upper_row=True)
+    _mark(msp, 0.0, "+0,00")
+    _mark(msp, 3.0, "+3,00")
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 8.0), "m", 1.0)
+    assert res.levels == pytest.approx([0.0, 3.0], abs=0.01)
+
+
+def test_floors_lie_between_two_and_a_half_and_four_and_a_half_metres_apart():
+    doc, msp = _doc()
+    msp.add_line((-1, FLOOR), (21, FLOOR))
+    msp.add_line((0, FLOOR), (0, 12))
+    msp.add_line((20, FLOOR), (20, 12))
+    msp.add_line((-0.5, 12), (20.5, 12))
+    for y in (3.2, 5.0, 8.4):  # a row of windows above each mark
+        for x in (3, 8, 13):
+            _lines(msp, x, y + 0.9, x + 1.0, y + 2.0)
+    _lines(msp, 3, 0.9, 4, 2.0)
+    for y, text in ((0.0, "+0,00"), (3.2, "+3,20"), (5.0, "+5,00"), (8.4, "+8,40")):
+        _mark(msp, y, text)
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 13.0), "m", 1.0)
+    # +5,00 is only 1.8 m above +3,20 (a parapet, a landing); +8,40 is 5.2 m above it (a storey is missing)
+    assert res.levels == pytest.approx([0.0, 3.2], abs=0.01)
+
+
+def test_the_eaves_line_is_no_slab_for_its_mark_because_no_wall_goes_on_above_it():
+    doc, msp = _doc()
+    _gable_house(msp)
+    _mark(msp, 0.0, "+0,00")
+    _mark(msp, 3.0, "+3,00")  # the eaves: a line as long as the building, but the wall ends there
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 8.0), "m", 1.0)
+    assert res.floor == pytest.approx(0.0, abs=0.01) and res.levels == []
+
+
+def test_a_mark_under_the_floor_does_not_hide_the_slab_between_two_rows_of_openings():
+    doc, msp = _doc()
+    _two_storeys(msp)
+    _mark(msp, -0.4, "-0,40")  # the ground level: it says where the floor is, not a storey above it
+    res = read_view_symbols(doc, Config(), (-2.0, -2.0, 24.0, 8.0), "m", 1.0)
+    assert res.floor == pytest.approx(0.0, abs=0.01) and res.floor_source == "quota +0,00"
+    assert res.levels == pytest.approx([0.0, 3.2], abs=0.01)
