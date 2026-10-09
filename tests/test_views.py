@@ -496,6 +496,28 @@ def test_contour_lines_make_a_site_and_the_house_on_it_is_a_view_inside_it():
     assert a.plan.bbox == house.bbox  # the plan to convert is the house, not the hillside
 
 
+def test_a_house_on_its_lot_with_all_its_doors_on_one_wall_is_found_whole_not_cut_at_the_doors():
+    doc, msp = new_sheet()
+    _site(msp, None)
+    add_plan(msp, 2700, 2000, doors=6)  # a house of 14 x 9 m (x 27..41, y 20..29) with six doors on its south wall
+    views = views_of(doc)
+    site = next(v for v in views if v.kind == "site")
+    house = next(v for v in views if v.parent == site.id)
+    x0, y0, x1, y1 = box_m(house)
+    assert (x0, y0, x1, y1) == pytest.approx((27.0, 20.0, 41.0, 29.0), abs=1.2)  # the doors alone said y 17 to 24
+    assert analyze(doc).plan.bbox == house.bbox
+
+
+def test_walls_that_go_on_to_the_lot_do_not_make_the_house_bigger():
+    doc, msp = new_sheet()
+    _site(msp, None)
+    add_plan(msp, 2700, 2000, doors=6)
+    msp.add_line((4100, 2030), (7000, 2030))  # a garden wall that starts at the corner of the house and runs along the lot
+    msp.add_line((7000, 2030), (7000, 4800))
+    house = next(v for v in views_of(doc) if v.kind == "plan")
+    assert box_m(house)[2] - box_m(house)[0] < 25  # the house, not the house and the walls of the garden
+
+
 def test_contour_lines_alone_are_a_site():
     doc, msp = new_sheet()
     _site(msp, None)

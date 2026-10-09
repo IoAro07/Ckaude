@@ -68,7 +68,8 @@ SITE_ORTHO = 0.4  # a view where fewer lines than this share run along two direc
 SITE_SIZE = 30.0  # m: ... and it is a site if it is this wide
 NEST_DOORS = 5  # a building drawn in a bigger view has at least this many swing doors, all in one place
 NEST_LINK = 10.0  # m: swing doors this close to one another are in the same building
-NEST_MARGIN = 3.0  # m: a building reaches this far beyond its outermost swing doors
+NEST_MARGIN = 3.0  # m: a building reaches this far beyond its outermost swing doors, at least...
+NEST_TOUCH = 0.15  # m: ... and as far as the walls that end on one another go from the doors (lines that end this close are joined)
 NEST_ORTHO = 0.9  # a view of which more of the lines than this run along two directions is a plan, not a lot with a house on it
 NEST_AREA = 0.3  # a plan in a view takes up less than this share of the box of the view...
 NEST_DENSITY = 1.3  # ... and holds this many times more drawing per square metre than the rest of it
@@ -862,6 +863,54 @@ def _without_strays(views: list[View], marks: list[tuple], scale: float) -> list
     return keep
 
 
+def _walls_around(box: tuple, limit: tuple, soup: Soup, scale: float, hinges: np.ndarray) -> tuple:
+    """``box`` (the swing doors of a house, and a margin) grown to the walls connected to it. Doors along one wall say
+    where the house is, not how far it goes: the lines that run along the main direction of the drawing around the doors
+    (or across it), ending on one another, are the walls of the house, and its box is the box of those if the doors
+    (their ``hinges``) are in it, else those and ``box``. The box does not leave ``limit`` (the view the house is drawn in)."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    from scipy.spatial import cKDTree
+
+    seg = soup.seg
+    mx, my = (seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2
+    ids = np.flatnonzero((mx >= limit[0]) & (mx <= limit[2]) & (my >= limit[1]) & (my <= limit[3]))
+    s = seg[ids]
+    low, high = np.minimum(s[:, [0, 1]], s[:, [2, 3]]), np.maximum(s[:, [0, 1]], s[:, [2, 3]])
+    by_doors = (low[:, 0] <= box[2]) & (high[:, 0] >= box[0]) & (low[:, 1] <= box[3]) & (high[:, 1] >= box[1])
+    length = np.hypot(s[:, 2] - s[:, 0], s[:, 3] - s[:, 1])
+    angle = np.degrees(np.arctan2(s[:, 3] - s[:, 1], s[:, 2] - s[:, 0])) % 90.0
+    if not by_doors.any():
+        return box
+    main, _ = _direction(angle[by_doors], length[by_doors])
+    wall = np.abs((angle - main + 45.0) % 90.0 - 45.0) <= ORTHO_TOLERANCE  # along the main direction, or across it
+    if not (wall & by_doors).any():
+        return box
+    w = np.flatnonzero(wall)
+    ends = np.concatenate([s[w][:, :2], s[w][:, 2:]])
+    owner = np.concatenate([np.arange(len(w)), np.arange(len(w))])
+    pairs = cKDTree(ends).query_pairs(NEST_TOUCH / scale, output_type="ndarray")
+    edge = np.column_stack([owner[pairs[:, 0]], owner[pairs[:, 1]]]) if len(pairs) else np.empty((0, 2), dtype=int)
+    graph = coo_matrix((np.ones(len(edge)), (edge[:, 0], edge[:, 1])), shape=(len(w), len(w)))
+    label = connected_components(graph, directed=False)[1]
+    mine = np.isin(label, np.unique(label[by_doors[w]]))
+    walls = (float(low[w][mine, 0].min()), float(low[w][mine, 1].min()), float(high[w][mine, 0].max()), float(high[w][mine, 1].max()))
+    touch = NEST_TOUCH / scale
+    if not ((hinges[:, 0] >= walls[0] - touch) & (hinges[:, 0] <= walls[2] + touch) & (hinges[:, 1] >= walls[1] - touch)
+            & (hinges[:, 1] <= walls[3] + touch)).all():
+        walls = (min(walls[0], box[0]), min(walls[1], box[1]), max(walls[2], box[2]), max(walls[3], box[3]))  # not around the doors
+    return max(limit[0], walls[0]), max(limit[1], walls[1]), min(limit[2], walls[2]), min(limit[3], walls[3])
+
+
+def _holds_house(v: View, box: tuple, centre: np.ndarray) -> int | None:
+    """The cells of drawing in ``box`` if it is a house on the lot ``v``: it takes up a part of the view and is much denser."""
+    if _area(box) >= NEST_AREA * _area(v.bbox):
+        return None
+    held = int(((centre[:, 0] >= box[0]) & (centre[:, 0] <= box[2]) & (centre[:, 1] >= box[1]) & (centre[:, 1] <= box[3])).sum())
+    around = max(v.cells - held, 1) / max(_area(v.bbox) - _area(box), 1e-9)  # drawing per unit of area
+    return held if held / _area(box) >= NEST_DENSITY * around else None
+
+
 def _plans_inside(views: list[View], soup: Soup, scale: float, centre: np.ndarray) -> list[View]:
     """A plan drawn on its lot (or a copy of a plan in a site): when all the swing doors of a view lie together in one
     place that takes up less than a third of it and is much denser than the rest, that place is a plan of its own. Two
@@ -886,12 +935,13 @@ def _plans_inside(views: list[View], soup: Soup, scale: float, centre: np.ndarra
         mine = group == int(np.argmax(sizes))
         box = (max(x0, float((hinge[mine, 0] - radius[mine]).min()) - margin), max(y0, float((hinge[mine, 1] - radius[mine]).min()) - margin),
                min(x1, float((hinge[mine, 0] + radius[mine]).max()) + margin), min(y1, float((hinge[mine, 1] + radius[mine]).max()) + margin))
-        if _area(box) >= NEST_AREA * _area(v.bbox):
+        inside = _holds_house(v, box, centre)
+        if inside is None:
             continue
-        inside = int(((centre[:, 0] >= box[0]) & (centre[:, 0] <= box[2]) & (centre[:, 1] >= box[1]) & (centre[:, 1] <= box[3])).sum())
-        around = max(v.cells - inside, 1) / max(_area(v.bbox) - _area(box), 1e-9)  # drawing per unit of area
-        if inside / _area(box) >= NEST_DENSITY * around:  # a house on its lot is far denser than the lot
-            plans.append(View(0, box, inside))
+        grown = _walls_around(box, v.bbox, soup, scale, hinge[mine])
+        if grown != box and (more := _holds_house(v, grown, centre)) is not None:  # walls that go on to the lot: not so dense
+            box, inside = grown, more
+        plans.append(View(0, box, inside))
     return plans
 
 
@@ -1119,12 +1169,13 @@ def _nest(views: list[View]) -> None:
         v.parent = min(hosts, key=lambda w: _area(w.bbox)).id if hosts else None
 
 
-def _orthogonality(angle: np.ndarray, length: np.ndarray) -> float:
-    """The share of the lines (by length) that run along the main direction of the drawing, or across it, whatever that
-    direction is: 1 for a building, about 0.2 for contour lines."""
+def _direction(angle: np.ndarray, length: np.ndarray) -> tuple[float, float]:
+    """The main direction of the lines of a drawing (degrees, 0 to 90: a line across it counts as along it; the degree that
+    holds most of them) and the share of the lines (by length) that run along it or across it, within ORTHO_TOLERANCE:
+    1 for a building, about 0.2 for contour lines."""
     hist = np.bincount(np.minimum(angle.astype(int), 89), weights=length, minlength=90)
     smooth = sum(np.roll(hist, k) for k in range(-ORTHO_TOLERANCE, ORTHO_TOLERANCE + 1))
-    return float(smooth.max() / max(hist.sum(), 1e-12))
+    return float(hist.argmax()) + 0.5, float(smooth.max() / max(hist.sum(), 1e-12))
 
 
 def _measure(views: list[View], soup: Soup, scale: float) -> None:
@@ -1160,7 +1211,7 @@ def _measure(views: list[View], soup: Soup, scale: float) -> None:
 
         here = within(mx, my)
         v.segments = int(here.sum())
-        v.ortho = _orthogonality(angle[here], length[here]) if v.segments else 0.0
+        v.ortho = _direction(angle[here], length[here])[1] if v.segments else 0.0
         at = within(arcs[:, 0], arcs[:, 1])
         v.arcs, v.doors = int(at.sum()), int((at & door).sum())
         v.curves = int(within(cx, cy).sum())
