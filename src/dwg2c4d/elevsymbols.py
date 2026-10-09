@@ -120,6 +120,7 @@ SLAB_SPAN = 0.5  # a slab between two rows of openings is a line at least this s
 SAME_SYMBOL = (1 / 3, 3.0)  # a named symbol and a shape are the same opening if their areas are this close
 SAME_OVERLAP = 0.5  # ... and the smaller one lies this much within the other
 INSIDE = 0.9  # a named symbol lying this much within a shape is a part of it
+PART_RATIO = 3.0  # a shape lying within a named symbol this many times as large is a piece of it
 CUT_LINE = (0.2, 0.3)  # m: a symbol the layers name that is narrower or lower than this is a cut mark, not an opening
 FLOOR_FROM = {  # floor_source -> what to say in the notes
     "quota +0,00": "dal segno di quota",
@@ -890,6 +891,13 @@ def _covers(named: Symbol, shape: FoundSymbol) -> bool:
     return inter >= SAME_OVERLAP * min(area_n, area_s) and SAME_SYMBOL[0] <= area_n / area_s <= SAME_SYMBOL[1]
 
 
+def _part_of(shape: FoundSymbol, named: Symbol) -> bool:
+    """The shape is a piece of an opening the layers name (a leaf cut out by a railing in front of it), far smaller."""
+    area_s, area_n = (shape.x1 - shape.x0) * (shape.y1 - shape.y0), (named.x1 - named.x0) * (named.y1 - named.y0)
+    inter = max(0.0, min(shape.x1, named.x1) - max(shape.x0, named.x0)) * max(0.0, min(shape.y1, named.y1) - max(shape.y0, named.y0))
+    return inter >= INSIDE * area_s and area_n >= PART_RATIO * area_s
+
+
 def _is_low(y0: float, h: float, floor: float | None) -> bool:
     """A window whose bottom is on the floor (or lower) and no taller than a metre or so is a planter, a step or a vent."""
     return floor is not None and y0 <= floor + LOW_ON_FLOOR and h <= LOW_HEIGHT
@@ -902,6 +910,7 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
     out: list[Symbol] = []
     taken: dict[int, list[_Named]] = {}
     alone: list[_Named] = []
+    shapes = [s for s in shapes if not any(_part_of(s, n.sym) for n in named)]
     for n in named:
         twins = [i for i, s in enumerate(shapes) if _covers(n.sym, s)]
         if twins:
@@ -984,8 +993,8 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
     found = []
     for g in shapes:
         kind = _kind(g.y0, g.y1 - g.y0, floor, levels)
-        if kind == "window" and _is_low(g.y0, g.y1 - g.y0, floor):
-            continue
+        if kind == "window" and _is_low(g.y0, g.y1 - g.y0, floor) and not g.arched:  # an arch is an opening, whatever
+            continue  # the ground hides of it
         if kind == "window" and floor is not None and g.y1 - g.y0 >= DOOR_HEIGHT and g.y0 - floor <= STEPS_MAX \
                 and _on_steps(g, strips, floor):
             kind = "door"
