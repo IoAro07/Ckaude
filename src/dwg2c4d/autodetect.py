@@ -35,6 +35,7 @@ LONG_LINE = 12.0  # m: a straight line this long (ground line, section mark, bor
 BARE_RUN = 4.0  # m: ... where it runs through empty space for this long (more than a gap in a drawing) it is cut out
 MIN_VIEW_CELLS = 40  # a piece of fewer cells than this (10 m2 of drawing) is a crumb, not a view
 MIN_VIEW_SIDE = 2.5  # m: a piece thinner than this is a strip of text or a line, not a view
+FLOAT_PAD = 0.001  # m: a view holds what lies this close to its box too (the box is the box of the ink: a hinge sits on its edge)
 MAX_CELLS = 1e8  # a coordinate more cells than this from the origin is damage (NaN, 1e300), not drawing: it is left out
 MAX_VIEWS = 200  # a sheet is not read as having more views than this (the biggest are kept): the views are compared in pairs
 MAX_TITLES = 300  # ... nor as having more titles than this (the tallest letters are kept): each is looked for among all the lines
@@ -1042,8 +1043,9 @@ def _measure(views: list[View], soup: Soup, scale: float) -> None:
     room = [m.group() if (m := room_re.search(t["text"].upper())) else "" for t in soup.texts]
     ix = np.array([i["x"] for i in soup.inserts])
     iy = np.array([i["y"] for i in soup.inserts])
+    pad = FLOAT_PAD / scale
     for v in views:
-        x0, y0, x1, y1 = v.bbox
+        x0, y0, x1, y1 = v.bbox[0] - pad, v.bbox[1] - pad, v.bbox[2] + pad, v.bbox[3] + pad
 
         def within(x: np.ndarray, y: np.ndarray) -> np.ndarray:
             return (x >= x0) & (x <= x1) & (y >= y0) & (y <= y1)
