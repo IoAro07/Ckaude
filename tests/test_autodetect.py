@@ -117,7 +117,7 @@ def _soup(declared, dims=(), arcs=(), extent=2000.0):
 def test_dimension_values_decide_the_unit_not_the_header():
     guess = infer_unit(_soup("mm", dims=[90, 120, 250, 310, 480, 600]))
     assert guess.unit == "cm" and guess.differs and guess.declared == "mm"
-    assert infer_unit(_soup("m", dims=[900, 1200, 2500, 3100, 4800, 6000])).unit == "mm"
+    assert infer_unit(_soup("m", dims=[900, 1200, 2500, 3100, 4800, 6000], extent=12000)).unit == "mm"
     assert not infer_unit(_soup("cm", dims=[90, 120, 250, 310, 480, 600])).differs
 
 
@@ -249,3 +249,198 @@ def test_a_failing_analysis_never_stops_the_conversion(sheet, tmp_path, monkeypa
     cfg = Config(auto=True, units="cm", layers=LayerRules({"wall": ["LINEE"]}))
     report = convert(sheet, tmp_path / "f.obj", cfg)
     assert report.wall_area_m2 > 5.0 and any("Analisi del foglio non riuscita" in w for w in report.warnings)
+
+
+# --- what the review of the first version found ---------------------------------------------------
+
+def _opened(path, cfg=None):
+    """convert() as the command line calls it: the analysis on."""
+    import tempfile
+    from pathlib import Path
+
+    out = Path(tempfile.mkdtemp()) / "o.obj"
+    return convert(path, out, cfg or Config(auto=True))
+
+
+def _titled_building(tmp_path, wall_layers=("MURI",), title="PIANTA PIANO TERRA", units=5):
+    """The 10 x 6 m building of the other tests, a door and a window on their layers, and a title under it."""
+    from builders import building
+
+    doc, msp = building(units)
+    for name in wall_layers:
+        if not doc.layers.has_entry(name):
+            doc.layers.add(name)
+    msp.add_text(title, height=20, dxfattribs={"layer": "TESTI", "insert": (350, -150)})
+    path = tmp_path / "b.dxf"
+    doc.saveas(path)
+    return doc, path
+
+
+@pytest.mark.parametrize("names", [("MURI_ESTERNI", "MURI_INTERNI"), ("Muri esterni", "Tramezzi"),
+                                   ("A-WALL-EXTERIOR", "A-WALL-INT")])
+def test_walls_whose_names_say_outside_are_still_walls(tmp_path, names):
+    import ezdxf as _ezdxf
+
+    from builders import W, D, T, DOOR, WIN_S, _rect
+
+    doc = _ezdxf.new("R2018", setup=True)
+    doc.units = 5
+    for name in (*names, "PORTE", "FINESTRE"):
+        doc.layers.add(name)
+    msp = doc.modelspace()
+    _rect(msp, 0, 0, W, D, names[0])  # the outer faces on the "outside" layer
+    _rect(msp, T, T, W - T, D - T, names[1])
+    _rect(msp, DOOR[0], 0, DOOR[1], T, "PORTE")
+    _rect(msp, WIN_S[0], 0, WIN_S[1], T, "FINESTRE")
+    msp.add_text("PIANTA PIANO TERRA", height=20, dxfattribs={"insert": (350, -150)})
+    path = tmp_path / "e.dxf"
+    doc.saveas(path)
+    on, off = _opened(path), _opened(path, Config())
+    assert on.size_m == pytest.approx(off.size_m) and 9.5 < on.size_m[0] < 11.0
+    assert (on.doors, on.windows) == (off.doors, off.windows) == (1, 1)
+
+
+def test_a_group_of_walls_without_openings_between_two_plans_does_not_loop_forever(tmp_path):
+    import ezdxf as _ezdxf
+
+    from builders import W, D, T, DOOR, WIN_S, _rect
+
+    doc = _ezdxf.new("R2018", setup=True)
+    doc.units = 5
+    for name in ("MURI", "PORTE", "FINESTRE"):
+        doc.layers.add(name)
+    msp = doc.modelspace()
+    for k, dx in enumerate((0, 1700, 3400)):
+        _rect(msp, dx, 0, dx + W, D, "MURI")
+        _rect(msp, dx + T, T, dx + W - T, D - T, "MURI")
+        if k != 1:  # the middle one has neither door nor window
+            _rect(msp, dx + DOOR[0], 0, dx + DOOR[1], T, "PORTE")
+            _rect(msp, dx + WIN_S[0], 0, dx + WIN_S[1], T, "FINESTRE")
+    path = tmp_path / "three.dxf"
+    doc.saveas(path)
+    report = _opened(path, Config())
+    assert report.doors == 2 and report.windows == 2
+
+
+def test_a_cadastral_plan_is_the_site_not_the_building(tmp_path):
+    doc, path = _titled_building(tmp_path)
+    doc = ezdxf.readfile(path)
+    doc.layers.add("CATASTO")
+    msp = doc.modelspace()
+    msp.add_lwpolyline([(5000, -6000), (11000, -6000), (11000, -2000), (5000, -2000)], close=True,
+                       dxfattribs={"layer": "CATASTO"})
+    msp.add_lwpolyline([(5100, -5900), (10900, -5900), (10900, -2100), (5100, -2100)], close=True,
+                       dxfattribs={"layer": "CATASTO"})
+    msp.add_text("PLANIMETRIA CATASTALE", height=20, dxfattribs={"layer": "TESTI", "insert": (7000, -6300)})
+    doc.saveas(path)
+    a = analyze(ezdxf.readfile(path))
+    assert a.plan is not None and a.plan.bbox[0] < 2000  # the building, not the 60 x 40 m parcel
+    assert sorted(v.kind for v in a.views) == ["plan", "site"]
+    report = _opened(path)
+    assert 9.5 < report.size_m[0] < 11.0 and (report.doors, report.windows) == (1, 2)
+
+
+def test_three_overall_dimensions_do_not_beat_a_right_header():
+    # a 8 x 6 m plan in centimetres: its overall dimensions (800, 800, 600) would fit "mm" as 0.8 m...
+    guess = infer_unit(_soup("cm", dims=[800, 800, 600], extent=800))
+    assert guess.unit == "cm" and not guess.differs
+
+
+def test_a_header_in_feet_or_inches_is_not_overridden():
+    for declared in ("ft", "in"):
+        guess = infer_unit(_soup(declared, extent=40))
+        assert guess.unit == declared and not guess.differs
+
+
+def test_a_missing_header_is_filled_in_from_the_arcs_and_dimensions(tmp_path):
+    # no $INSUNITS: a 4 x 3 m room in millimetres with door arcs and dimensions
+    doc = ezdxf.new("R2018", setup=True)
+    doc.header["$INSUNITS"] = 0
+    msp = doc.modelspace()
+    for pts in ([(0, 0), (4000, 0), (4000, 3000), (0, 3000)],):
+        msp.add_lwpolyline(pts, close=True)
+    for x in (500, 1500, 2500):
+        msp.add_arc((x, 0), 800, 0, 90)
+    for p1, p2 in (((0, 0), (800, 0)), ((800, 0), (2000, 0)), ((0, 0), (0, 1500)), ((0, 1500), (0, 3000))):
+        msp.add_linear_dim(base=(0, -300), p1=p1, p2=p2).render()
+    path = tmp_path / "noheader.dxf"
+    doc.saveas(path)
+    a = analyze(ezdxf.readfile(path))
+    assert a.unit.unit == "mm" and a.unit.declared is None and a.unit.margin >= 2.0
+
+
+def test_the_unit_the_user_gave_is_never_guessed(sheet):
+    a = analyze(ezdxf.readfile(sheet), None, None, "m")
+    assert a.unit.unit == "m" and a.unit.evidence == ["indicata da te"]
+
+
+def test_a_curved_piece_of_furniture_is_no_door_where_the_layers_name_the_doors(tmp_path):
+    doc, path = _titled_building(tmp_path)
+    doc = ezdxf.readfile(path)
+    doc.layers.add("SANITARI")
+    # a quarter-round shower in the south-west corner, hinged on the wall: it sweeps 90 degrees with a radius of 90
+    doc.modelspace().add_arc((30, 30), 90, 0, 90, dxfattribs={"layer": "SANITARI"})
+    doc.saveas(path)
+    on, off = _opened(path), _opened(path, Config())
+    assert on.doors == off.doors == 1
+
+
+def test_a_gap_in_the_outside_wall_stays_a_doorway_where_the_layers_name_the_openings(tmp_path):
+    from builders import W, D, T, _rect
+
+    import ezdxf as _ezdxf
+
+    doc = _ezdxf.new("R2018", setup=True)
+    doc.units = 5
+    for name in ("MURI", "PORTE"):
+        doc.layers.add(name)
+    msp = doc.modelspace()
+    for y0, y1 in ((0, T), (D - T, D)):  # walls with a 1.2 m gap in the south one, no symbol
+        pass
+    at = {"layer": "MURI"}
+    for x0, x1 in ((0, 400), (520, W)):
+        msp.add_line((x0, 0), (x1, 0), dxfattribs=at)
+        msp.add_line((x0, T), (x1, T), dxfattribs=at)
+    for a, b in (((0, D), (W, D)), ((0, D - T), (W, D - T)), ((0, 0), (0, D)), ((T, 0), (T, D)),
+                 ((W, 0), (W, D)), ((W - T, 0), (W - T, D))):
+        msp.add_line(a, b, dxfattribs=at)
+    _rect(msp, 100, 0, 190, T, "PORTE")  # a door symbol exists: the names say what the openings are
+    path = tmp_path / "gap.dxf"
+    doc.saveas(path)
+    on, off = _opened(path), _opened(path, Config())
+    assert (on.windows, on.passages) == (off.windows, off.passages) and on.windows == 0
+
+
+def test_a_sheet_with_a_lot_of_scattered_drawing_is_not_quadratic():
+    import time
+
+    rng = np.random.default_rng(1)
+    n = 60000
+    p = rng.uniform(0, 400000, (n, 2))
+    seg = np.hstack([p, p + rng.uniform(-50, 50, (n, 2))])
+    soup = Soup("cm", ["0"], seg, np.zeros(n, dtype=int), np.zeros((0, 5)), np.zeros(0, dtype=int), np.zeros((0, 3)),
+                np.zeros((0, 4)))
+    t0 = time.time()
+    views = find_views(soup, 0.01)
+    assert time.time() - t0 < 10.0 and isinstance(views, list)
+
+
+def test_old_style_polylines_solids_and_mirrored_arcs_are_seen_by_the_scan(tmp_path):
+    doc = ezdxf.new("R12")
+    msp = doc.modelspace()
+    msp.add_polyline2d([(0, 0), (500, 0), (500, 300), (0, 300)], close=True)
+    msp.add_solid([(1000, 0), (1100, 0), (1000, 100), (1100, 100)])
+    arc = msp.add_arc((100, 0), 90, 0, 90)
+    path = tmp_path / "r12.dxf"
+    doc.saveas(path)
+    soup = scan(ezdxf.readfile(path))
+    assert len(soup.seg) == 8 and len(soup.arcs) == 1
+
+    doc = ezdxf.new("R2018")
+    doc.modelspace().add_arc((100, 50), 90, 10, 100, dxfattribs={"extrusion": (0, 0, -1)})
+    doc.modelspace().add_lwpolyline([(0, 0), (200, 0)], dxfattribs={"extrusion": (0, 0, -1)})
+    path = tmp_path / "mirror.dxf"
+    doc.saveas(path)
+    soup = scan(ezdxf.readfile(path))
+    assert soup.arcs[0, 0] == pytest.approx(-100) and soup.seg[0, 0] == pytest.approx(0) and soup.seg[0, 2] == pytest.approx(-200)
+    assert soup.arcs[0, 3] == pytest.approx(80) and soup.arcs[0, 4] == pytest.approx(90)

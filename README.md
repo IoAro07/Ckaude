@@ -470,7 +470,9 @@ layer, il programma **guarda il foglio** come lo guarderebbe una persona (`--no-
 5. **Le porte dall'arco di rotazione**: un quarto di cerchio con raggio 0,55-1,40 m che ruota attorno a una testata
    di muro è una porta, su qualunque layer sia disegnato (l'arco di una parete curva o di un'anta d'armadio in mezzo
    a una stanza no). Larghezza, cerniera e verso di apertura vengono dall'arco. **Un varco in un muro esterno senza
-   nessun simbolo diventa una finestra** (davanzale e altezza predefiniti), uno interno un vano.
+   nessun simbolo diventa una finestra** (davanzale e altezza predefiniti), uno interno un vano. Questo vale solo se
+   i nomi dei layer e dei blocchi non dicono già dove sono porte e finestre: se il disegno ha un layer `Porte` o
+   `Finestre`, o blocchi che si chiamano così, si leggono solo quelli.
 
 Tutto ciò che è dedotto così porta una nota nella tabella `NOME_aperture.csv` e nel report (*riconosciuta dalla
 forma*): correggila con le colonne `MODIFICA_*`. **Quello che indichi tu vince sempre**: `--unita`, `--muri`,

@@ -134,17 +134,17 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     analysis_failed = ""
     if cfg.auto:  # the sheet first: the unit, which view is the plan, which layers are the walls
         try:
-            analysis = analyze(doc, lambda layer: layer_used(doc, cfg, layer), cfg.view)
+            analysis = analyze(doc, lambda layer: layer_used(doc, cfg, layer), cfg.view, cfg.units)
             cfg, _ = apply_analysis(doc, cfg, analysis)
         except Exception as exc:  # the analysis is a help: when it fails the layer names and the options decide
             analysis_failed = f"Analisi del foglio non riuscita ({type(exc).__name__}: {exc}): uso i nomi dei layer."
-            cfg = replace(cfg, auto=False)
+            cfg = replace(cfg, auto=False, analysis_notes=[analysis_failed])
     found = storeys(doc)
     if cfg.floor is not None and found and cfg.floor not in found:
         raise ConversionError(f"Il piano {cfg.floor} non esiste: i layer nominano i piani "
                               f"{', '.join(map(str, found))}.")
     result = read_items(doc, cfg)
-    warnings = ([analysis_failed] if analysis_failed else []) + list(cfg.analysis_notes) + list(result.warnings)
+    warnings = list(cfg.analysis_notes) + list(result.warnings)
     if len(found) > 1 and cfg.floor is None:
         warnings.append(f"I layer nominano {len(found)} piani ({', '.join(f'P{n}' for n in found)}): ho letto il "
                         f"piano {found[0]}. Per un altro usa --piano N.")
@@ -183,6 +183,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     groups = _wall_groups(solid, openings)
     if groups:
         real = [g for g in groups if g["openings"] > 0]
+        area = None
         if (cfg.area is None or cfg.area_auto) and 0 < len(real) < len(groups):
             # Only some groups have doors/windows: the others are a roof plan, a section... drawn on the same
             # layer. Read the drawing again cropped to the groups that are plans.
@@ -192,6 +193,9 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             x1 = max(g["bounds"][2] for g in real) + margin
             y1 = max(g["bounds"][3] for g in real) + margin
             area = tuple(v / result.unit_scale for v in (x0, y0, x1, y1))
+            if cfg.area is not None and all(abs(p - q) < 1e-6 for p, q in zip(cfg.area, area)):
+                area = None  # this window was already tried: a group without openings inside it stays (no endless loop)
+        if area is not None:
             dropped = [g for g in groups if g["openings"] == 0]
             skip = [tuple((v + d) / result.unit_scale for v, d in zip(g["bounds"], (-0.5, -0.5, 0.5, 0.5)))
                     for g in dropped]  # a roof plan or a section is not the garden either
