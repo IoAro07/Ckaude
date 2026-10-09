@@ -939,3 +939,43 @@ def test_a_named_window_with_its_shutters_in_the_name_has_the_clear_width_of_the
         msp.add_line((x0 + 0.04, 1.7), (x0 + 0.26, 1.7), dxfattribs={"layer": "FINESTRE"})
     win = _find(_read(doc), "window", 3.9)
     assert (win.x1 - win.x0) == pytest.approx(0.6, abs=0.01) and win.full_x == pytest.approx((3.0, 4.8), abs=0.01)
+
+
+# --- doors and windows with many bars are no railings ------------------------------------------------------------
+
+def _barred(msp, x0, y0, x1, y1, pitch):
+    """A closed outline with vertical lines every ``pitch`` m: planks of a barn door, slats of a louvred window."""
+    _ring(msp, x0, y0, x1, y1)
+    x = x0 + pitch
+    while x < x1 - 1e-6:
+        msp.add_line((x, y0), (x, y1))
+        x += pitch
+
+
+@pytest.mark.parametrize("pitch", [0.15, 0.2, 0.25])
+def test_a_plank_door_and_a_louvred_window_of_their_size_are_not_railings(pitch):
+    doc, msp = _doc()
+    _facade(msp)
+    _barred(msp, 6, 0, 8.4, 2.6, pitch)  # a plank door 2.4 x 2.6
+    _barred(msp, 11, 1.0, 12.6, 2.4, pitch)  # a louvred window 1.6 x 1.4
+    res = _read(doc)
+    door, win = _find(res, "door", 7.2), _find(res, "window", 11.8)
+    assert (door.x0, door.x1) == pytest.approx((6.0, 8.4), abs=0.01)  # not cut down to a pair of planks
+    assert (win.x0, win.x1, win.y0, win.y1) == pytest.approx((11.0, 12.6, 1.0, 2.4), abs=0.01)
+
+
+def test_an_arched_head_over_a_barred_window_is_no_balustrade():
+    doc, msp = _doc()
+    _facade(msp)
+    _barred(msp, 6, 1.0, 7.0, 1.78, 0.12)  # 8 bars: 1.28 m from the foot to the apex of the arch
+    msp.add_arc((6.5, 1.78), 0.5, 0, 180)
+    win = _find(_read(doc), "window", 6.5)
+    assert win.arched and win.y1 == pytest.approx(2.28, abs=0.02)
+
+
+def test_four_narrow_planks_are_one_door_not_a_window_between_shutters():
+    doc, msp = _doc()
+    _facade(msp)
+    _barred(msp, 14, 0, 14.8, 2.6, 0.2)  # planks 0.2 m wide: the two outer ones are strips, not shutters
+    door = _find(_read(doc), "door", 14.4)
+    assert (door.x0, door.x1) == pytest.approx((14.0, 14.8), abs=0.01) and door.full_x is None

@@ -77,7 +77,8 @@ SLAT_MIN = 3  # a leaf cut across by at least this many lines ...
 SLAT_PITCH = 0.30  # m: ... no further apart than this, its cells ...
 SLAT_ASPECT = 1.5  # ... at least this many times as wide as tall, is louvred: a shutter, not glazed
 SHUTTER_SHARE = 0.6  # alike plain leaves at both ends of a row of plain ones are shutters if each is at most this share
-#                      of the width between them (two shutters close one window: half of it each)
+#                      of the width between them (two shutters close one window: half of it each) ...
+SHUTTER_ROW = 4  # ... and the row has no more leaves than this (a window of one or two sashes: not planks or slats)
 TOUCH = 0.03  # m: leaves this close, or overlapping, touch
 CAP_GAP = 0.05  # m: the faces of an arch's head start this close to the top of the frame ...
 CAP_RISE = 0.55  # ... rise no more than this share of its width and together span it
@@ -109,6 +110,8 @@ RAIL_BARS = 7  # a run of at least this many bars, evenly spaced ...
 RAIL_PITCH = 0.25  # m: ... no further apart than this ...
 RAIL_REGULAR = 0.15  # ... with spacings equal within this share ...
 RAIL_HEIGHT = 0.6  # ... and as tall as this share of the symbol, is a railing, not glazing bars
+RAIL_MAX = 1.3  # m: ... if the symbol is no taller than a balustrade (a plank door or a louvred window is) ...
+RAIL_TOP = 0.8  # ... and a line along the top, this share of its width at least, is the handrail
 BAR_MERGE = 0.03  # m: lines this close are one bar (a bar drawn as two lines)
 SKY = 60.0  # m: how far above a symbol the drawing is searched for a roof
 ROOF_SPAN = 2.0  # m: a roof, an eave or a wall top runs at least this far sideways; the cap of a chimney does not
@@ -602,12 +605,12 @@ def _describe(g: _Group) -> None:
         return min(k.x0 for c in cs for k in c), max(k.x1 for c in cs for k in c)
 
     def folded() -> bool:
-        """Alike leaves at both ends, much narrower than the row between them and with no glass drawn in them:
-        shutters folded beside plain sashes."""
+        """Alike leaves at both ends of a short row, much narrower than the row between them, no strips (planks) and
+        with no glass drawn in them: shutters folded beside plain sashes."""
         first, last, middle = extent(columns[:1]), extent(columns[-1:]), extent(columns[1:-1])
-        return abs((first[1] - first[0]) - (last[1] - last[0])) <= ALIGN_TOL \
+        return len(columns) <= SHUTTER_ROW and abs((first[1] - first[0]) - (last[1] - last[0])) <= ALIGN_TOL \
             and first[1] - first[0] <= SHUTTER_SHARE * (middle[1] - middle[0]) \
-            and not any(_has_glass(k) for c in (columns[0], columns[-1]) for k in c)
+            and not any(_is_strip(k) or _has_glass(k) for c in (columns[0], columns[-1]) for k in c)
 
     if len(columns) >= 3 and plain(columns[0]) and plain(columns[-1]) \
             and (not all(plain(c) for c in columns[1:-1]) or folded()):
@@ -716,9 +719,13 @@ def _verticals(lines: list[LineString]) -> np.ndarray:
     return np.array(rows).reshape(-1, 3)
 
 
-def _is_railing(g: _Group, verticals: np.ndarray) -> bool:
-    """A balcony or a stair rail: as many evenly spaced balusters, close together, as no window has glazing bars."""
+def _is_railing(g: _Group, verticals: np.ndarray, hsegs: list[tuple[float, float, float]]) -> bool:
+    """A balcony or a stair rail: as many evenly spaced balusters, close together, as no window has glazing bars, in a
+    group no taller than a balustrade with a handrail along its top."""
     h = g.y1 - g.y0
+    if h > RAIL_MAX or not any(abs(y - g.y1) <= ALIGN_TOL and min(b, g.x1) - max(a, g.x0) >= RAIL_TOP * (g.x1 - g.x0)
+                               for y, a, b in hsegs):
+        return False
     inside = verticals[(verticals[:, 0] > g.x0 + ALIGN_TOL) & (verticals[:, 0] < g.x1 - ALIGN_TOL)
                        & (verticals[:, 2] - verticals[:, 1] >= RAIL_HEIGHT * h) & (verticals[:, 1] >= g.y0 - ALIGN_TOL)
                        & (verticals[:, 2] <= g.y1 + ALIGN_TOL), 0]
@@ -1129,8 +1136,8 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
     groups = [g for g in everything if g.x1 - g.x0 >= SYMBOL_MIN[0] and g.y1 - g.y0 >= SYMBOL_MIN[1]]
     strips = [g for g in everything if _is_strip(g.members[0]) and g.x1 - g.x0 > g.y1 - g.y0]
     verticals = _verticals(lw.lines)
-    shapes = _roofed([g for g in groups if _is_opening(g) and not _is_railing(g, verticals)], lw)
     hsegs = _horizontals(lw.lines, MARK_LINE_MIN)
+    shapes = _roofed([g for g in groups if _is_opening(g) and not _is_railing(g, verticals, hsegs)], lw)
     span = area[2] - area[0]
     named = _named(items, cfg)
     marks = _mark_levels(_marks(texts), hsegs, _triangles(lw))
