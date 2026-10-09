@@ -221,7 +221,7 @@ def _two_rows(above: bool, doc_msp=None):
         add_elevation(msp, x, 4000, w=1000)
         add_title(msp, f"PROSPETTO {k + 1}", x, 4000 + 600 + 150 + 150 if above else 4000 - 150 - 60)
     add_elevation(msp, 0, 1150, w=1000)  # the upper facade of the pair
-    add_elevation(msp, 0, 0, w=1000)  # the lower one: its roof reaches y = 750
+    add_elevation(msp, 0, 50, w=1000)  # the lower one: its roof reaches y = 800
     # above: the title names the lower facade (it sits above it) but lies nearer the upper one
     add_title(msp, "PROSPETTO 4", 100, 980 if above else 910)
     return doc

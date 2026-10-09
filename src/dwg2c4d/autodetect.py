@@ -594,8 +594,12 @@ def _pieces(soup: Soup, scale: float, frames: list[dict]) -> tuple[list[tuple[tu
             if count[c] <= CRUMB_SHARE * count[h]:
                 into[c] = h
     keep = into[piece] >= 0
-    box = _extent(centre[keep], into[piece[keep]], cell / 2)
     count = np.bincount(into[piece[keep]], minlength=len(count)) if keep.any() else count
+    # the box of a view is the box of its ink, not of its cells: it does not move when the sheet is shifted by a fraction
+    # of a cell, and it is as tight as a person would draw it
+    marks = np.concatenate([ink, line[~cut]])
+    owner = into[piece[np.searchsorted(keys, _pack(*np.floor(marks / cell).astype(np.int64).T))]]
+    box = _extent(marks[owner >= 0], owner[owner >= 0], 0.0)
     out = [(box[g], int(count[g]), False) for g in sorted(real)]
     # long lines with nothing near them: the boundary of a lot is a view when it is more than one line
     if cut.any():
@@ -605,7 +609,7 @@ def _pieces(soup: Soup, scale: float, frames: list[dict]) -> tuple[list[tuple[tu
         lines_in = np.bincount(np.unique(np.column_stack([lab[inverse.reshape(-1)], which[cut]]), axis=0)[:, 0],
                                minlength=lab.max() + 1)
         cells = np.bincount(lab)
-        for g, b in _extent(bxy, lab, cell / 2).items():
+        for g, b in _extent(line[cut], lab[inverse.reshape(-1)], 0.0).items():
             if lines_in[g] >= OUTLINE_LINES and cells[g] >= MIN_VIEW_CELLS and _thick_enough(b, scale):
                 out.append((b, int(cells[g]), True))
     return out, centre
