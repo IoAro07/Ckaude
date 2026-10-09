@@ -41,7 +41,7 @@ from .reader import Item, read_items
 from .texts import RawText, read_texts
 
 PART_MIN = 0.15  # m: a rectangle with a smaller side is a bar, a mullion or a moulding, never a leaf
-SYMBOL_MAX = (6.8, 4.2)  # m: widest and tallest door or window (a sectional door with its piers, a portal and its steps)
+SYMBOL_MAX = (6.8, 4.2)  # m: widest and tallest door or window (a sectional door with its piers, a portal and steps)
 SYMBOL_MIN = (0.28, 0.35)  # m: smallest door or window (a slit, a cellar light)
 RECT_FILL = 0.97  # a face is a rectangle if it fills this share of its bounding box
 ARCH_FILL = 0.80  # ... an arch if it fills at least this much of it (a semicircle on a square: 0.93)
@@ -58,16 +58,16 @@ NODE_TOL = 0.005  # m: lines ending this close to a corner meet there
 MIN_FREE_CORNERS = 2  # a real opening is outlined by its own lines: at least this many of its 4 corners are bare
 BAY_MIN = 1.0  # m: an empty rectangle this wide and tall, with fewer bare corners, is a bay of the wall; the panes of a
 #                window with mullions have lines that go on at every corner too, but they are narrow
-STRUCTURE_MIN = 4  # a symbol of at least this many leaves is an opening even if its corners are not bare (a frame with a
-#                    frame inside is one too)
+STRUCTURE_MIN = 4  # a symbol of at least this many leaves is an opening even if its corners are not bare
+#                    (a frame with a frame inside is one too)
 GLAZED_MIN = 2  # a leaf divided in at least this many panes is a sash; a plain one is a shutter
 CAP_GAP = 0.05  # m: the faces of an arch's head start this close to the top of the frame ...
 CAP_RISE = 0.55  # ... rise no more than this share of its width and together span it
 CAP_CURVE = 0.01  # m: a curved side keeps at least 5 corners when simplified this much; a gable keeps 3
-CAP_FILL = 0.55  # the faces of an arch's head fill this share of the box they span (a segment of a circle: 0.67 to 0.79)
+CAP_FILL = 0.55  # the faces of an arch's head fill this share of the box they span (a circle segment: 0.67 to 0.79)
 CAP_MIDDLE = 0.1  # the head rises at least this share of the width in the middle ...
 CAP_SIDES = 0.5  # ... and at a quarter of the width at least this share of that
-FLOOR_DOORS = 1 / 3  # doors at one level count for the floor if they are at least this share of the doors at the busiest
+FLOOR_DOORS = 1 / 3  # doors at one level count for the floor if they are this share of the doors at the busiest
 JAMB_SHARE = 0.25  # a plain piece beside the sashes narrower than this share of the width left is a jamb or a pier
 SLIT_WIDTH = 0.35  # m: an opening narrower than this ...
 SLIT_ASPECT = 2.0  # ... is at least this many times as tall as it is wide
@@ -93,8 +93,9 @@ RAIL_REGULAR = 0.15  # ... with spacings equal within this share ...
 RAIL_HEIGHT = 0.6  # ... and as tall as this share of the symbol, is a railing, not glazing bars
 BAR_MERGE = 0.03  # m: lines this close are one bar (a bar drawn as two lines)
 SKY = 60.0  # m: how far above a symbol the drawing is searched for a roof
-ROOF_SPAN = 2.0  # m: a roof, an eave or the top of a wall runs at least this far sideways; the cap of a chimney does not
-MARK_RE = re.compile(r"(?<![\w.,])([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")  # "+0,00" "- 0.40" "+-0.00"
+ROOF_SPAN = 2.0  # m: a roof, an eave or a wall top runs at least this far sideways; the cap of a chimney does not
+# "+0,00" "- 0.40" "+-0.00"
+MARK_RE = re.compile(r"(?<![\w.,])([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")
 MARK_MAX = 30.0  # m: a level mark is no more than this above or below the floor
 MARK_REACH = 3.2  # text heights: the line a level mark labels lies at most this far below the text
 MARK_SIDE = 0.5  # m: ... and no further than this beyond the ends of the text, sideways
@@ -203,7 +204,7 @@ class _Linework:
 # --- openings from the shapes ---------------------------------------------------------------------------------
 
 def _lines(items: list[Item], area: tuple[float, float, float, float]) -> list[LineString]:
-    """All linework of the items (outlines of rings included), cut to the view: what lies beside it is another drawing."""
+    """All linework of the items (outlines of rings included), cut to the view: what lies beside is another drawing."""
     out: list[LineString] = []
     for it in items:
         for p in it.prims:
@@ -384,7 +385,8 @@ def _outermost(boxes: list[_Box]) -> list[_Box]:
     but bays is a bay too."""
     while True:
         roots = _nest(boxes)
-        kept = [b for b in boxes if b.kids or b.arched or b.headed or min(b.w, b.h) < BAY_MIN or b.free >= MIN_FREE_CORNERS]
+        kept = [b for b in boxes
+                if b.kids or b.arched or b.headed or min(b.w, b.h) < BAY_MIN or b.free >= MIN_FREE_CORNERS]
         if len(kept) == len(boxes):
             return roots
         boxes = kept
@@ -698,8 +700,10 @@ def _figure_feet(doc: Drawing, scale: float) -> list[tuple[float, float]]:
         if ext is None:
             continue
         sx, sy = abs(float(e.dxf.get("xscale", 1))), float(e.dxf.get("yscale", 1))
-        width, height, foot = (ext[2] - ext[0]) * sx * scale, (ext[3] - ext[1]) * abs(sy) * scale, ext[1] * abs(sy) * scale
-        if sy > 0 and FIGURE_HEIGHT[0] <= height <= FIGURE_HEIGHT[1] and width <= FIGURE_WIDTH and abs(foot) <= FIGURE_FOOT:
+        width, height = (ext[2] - ext[0]) * sx * scale, (ext[3] - ext[1]) * abs(sy) * scale
+        foot = ext[1] * abs(sy) * scale
+        if sy > 0 and FIGURE_HEIGHT[0] <= height <= FIGURE_HEIGHT[1] and width <= FIGURE_WIDTH \
+                and abs(foot) <= FIGURE_FOOT:
             feet.append((e.dxf.insert.x * scale, e.dxf.insert.y * scale))
     return feet
 
@@ -794,10 +798,12 @@ def _level_of_doors(feet: list[float]) -> float:
 
 
 def _on_steps(g: _Group, strips: list[_Group], floor: float) -> bool:
-    """The door stands on the steps of an entrance: strips one under the other, as wide as the door, down to the floor."""
+    """The door stands on the steps of an entrance: strips one under the other, as wide as the door, down to the
+    floor."""
     y, gap = g.y0, STEP_THRESHOLD
     while y > floor + FLOOR_TOL:
-        below = [s for s in strips if 0 <= y - s.y1 <= gap and s.x0 <= g.core[0] + ALIGN_TOL and s.x1 >= g.core[1] - ALIGN_TOL]
+        below = [s for s in strips
+                 if 0 <= y - s.y1 <= gap and s.x0 <= g.core[0] + ALIGN_TOL and s.x1 >= g.core[1] - ALIGN_TOL]
         if not below:
             return False
         y, gap = min(s.y0 for s in below), STEP_GAP
@@ -880,12 +886,20 @@ def _named(items: list[Item], cfg: Config) -> list[_Named]:
     return [a for a in found if not any(b is not a and holds(b.sym, a.sym) for b in found)]
 
 
+def _area(a: Symbol) -> float:
+    return (a.x1 - a.x0) * (a.y1 - a.y0)
+
+
+def _overlap(a: Symbol, b: Symbol) -> float:
+    """The area the two symbols have in common."""
+    return max(0.0, min(a.x1, b.x1) - max(a.x0, b.x0)) * max(0.0, min(a.y1, b.y1) - max(a.y0, b.y0))
+
+
 def _covers(named: Symbol, shape: FoundSymbol) -> bool:
     """The layer's symbol is (a part of) the opening the shape draws: it lies within it, or they cover each other and
     are about the same size."""
-    sx0, sx1 = shape.full_x or (shape.x0, shape.x1)
-    inter = max(0.0, min(named.x1, sx1) - max(named.x0, sx0)) * max(0.0, min(named.y1, shape.y1) - max(named.y0, shape.y0))
-    area_n, area_s = (named.x1 - named.x0) * (named.y1 - named.y0), (sx1 - sx0) * (shape.y1 - shape.y0)
+    whole = Symbol(shape.kind, *(shape.full_x or (shape.x0, shape.x1)), shape.y0, shape.y1)
+    inter, area_n, area_s = _overlap(named, whole), _area(named), _area(whole)
     if inter >= INSIDE * area_n:
         return True
     return inter >= SAME_OVERLAP * min(area_n, area_s) and SAME_SYMBOL[0] <= area_n / area_s <= SAME_SYMBOL[1]
@@ -893,20 +907,19 @@ def _covers(named: Symbol, shape: FoundSymbol) -> bool:
 
 def _part_of(shape: FoundSymbol, named: Symbol) -> bool:
     """The shape is a piece of an opening the layers name (a leaf cut out by a railing in front of it), far smaller."""
-    area_s, area_n = (shape.x1 - shape.x0) * (shape.y1 - shape.y0), (named.x1 - named.x0) * (named.y1 - named.y0)
-    inter = max(0.0, min(shape.x1, named.x1) - max(shape.x0, named.x0)) * max(0.0, min(shape.y1, named.y1) - max(shape.y0, named.y0))
-    return inter >= INSIDE * area_s and area_n >= PART_RATIO * area_s
+    return _overlap(shape, named) >= INSIDE * _area(shape) and _area(named) >= PART_RATIO * _area(shape)
 
 
 def _is_low(y0: float, h: float, floor: float | None) -> bool:
-    """A window whose bottom is on the floor (or lower) and no taller than a metre or so is a planter, a step or a vent."""
+    """A window whose bottom is on the floor (or lower) and no taller than a metre or so is a planter, a step or a
+    vent."""
     return floor is not None and y0 <= floor + LOW_ON_FLOOR and h <= LOW_HEIGHT
 
 
 def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None, levels: list[float]) -> list[Symbol]:
-    """The layers are the primary answer: their kind stays, and the shape of the same opening gives it the complete frame
-    (a window named by its glass only, a door named by its leaves). Shapes that match no named symbol are the openings
-    the names do not give."""
+    """The layers are the primary answer: their kind stays, and the shape of the same opening gives it the complete
+    frame (a window named by its glass only, a door named by its leaves). Shapes that match no named symbol are the
+    openings the names do not give."""
     out: list[Symbol] = []
     taken: dict[int, list[_Named]] = {}
     alone: list[_Named] = []
@@ -914,7 +927,7 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
     for n in named:
         twins = [i for i, s in enumerate(shapes) if _covers(n.sym, s)]
         if twins:
-            taken.setdefault(min(twins, key=lambda i: (shapes[i].x1 - shapes[i].x0) * (shapes[i].y1 - shapes[i].y0)), []).append(n)
+            taken.setdefault(min(twins, key=lambda i: _area(shapes[i])), []).append(n)
         else:
             alone.append(n)
     for i, s in enumerate(shapes):
@@ -925,7 +938,7 @@ def _combine(named: list[_Named], shapes: list[FoundSymbol], floor: float | None
         kind = ("door" if "door" in says else "window") if says else s.kind
         x0, x1, full = s.x0, s.x1, s.full_x
         n0, n1 = min(n.sym.x0 for n in taken[i]), max(n.sym.x1 for n in taken[i])
-        if n0 - x0 > FRAME_BAND or x1 - n1 > FRAME_BAND:  # the shape adds a leaf the layer does not call part of the window
+        if n0 - x0 > FRAME_BAND or x1 - n1 > FRAME_BAND:  # the shape adds a leaf the layer does not call the window
             x0, x1, full = n0, n1, (x0, x1) if full is None else full
         out.append(FoundSymbol(kind, x0, x1, s.y0, s.y1, "layer+forma", s.arched, s.pane, full))
     for n in alone:
@@ -954,7 +967,8 @@ def _floor_notes(floor: float | None, source: str, door_feet: list[float]) -> li
         return ["Quota del pavimento non determinabile: nessun segno di quota, nessuna porta, nessuna linea di terra."]
     notes = [f"Pavimento a y {floor:.2f} m {FLOOR_FROM[source]}."]
     if source == "quota +0,00" and door_feet and abs(min(door_feet) - floor) > FLOOR_TOL:
-        notes.append(f"Il fondo della porta piu' bassa (y {min(door_feet):.2f} m) non coincide con la quota del pavimento.")
+        notes.append(f"Il fondo della porta piu' bassa (y {min(door_feet):.2f} m) non coincide con la quota del "
+                     "pavimento.")
     return notes
 
 

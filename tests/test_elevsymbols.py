@@ -145,7 +145,7 @@ def test_a_sash_cut_in_two_by_a_railing_in_front_still_joins_its_shutters():
     res = _read(doc)
     assert len(res.symbols) == 1
     win = res.symbols[0]
-    assert (win.y0, win.y1) == pytest.approx((1.0, 2.4), abs=0.01)  # the sill is behind the railing, the shutters know it
+    assert (win.y0, win.y1) == pytest.approx((1.0, 2.4), abs=0.01)  # the sill is behind the railing: shutters know it
 
 
 def test_noise_is_not_an_opening():
@@ -407,7 +407,8 @@ def test_a_shutter_trimmed_by_the_roof_is_still_a_shutter():
         _ring(msp, x0, 1.0, x0 + 0.3, 2.4)
         _ring(msp, x0 + 0.04, 1.04, x0 + 0.26, 2.36)
         msp.add_line((x0 + 0.04, 1.7), (x0 + 0.26, 1.7))
-    msp.add_lwpolyline([(3.9, 1.0), (4.2, 1.0), (4.2, 2.0), (4.0, 2.4), (3.9, 2.4)], close=True)  # right shutter, a corner cut
+    # right shutter, a corner cut
+    msp.add_lwpolyline([(3.9, 1.0), (4.2, 1.0), (4.2, 2.0), (4.0, 2.4), (3.9, 2.4)], close=True)
     msp.add_lwpolyline([(3.94, 1.04), (4.16, 1.04), (4.16, 1.98), (3.98, 2.36), (3.94, 2.36)], close=True)
     res = _read(doc)
     win = res.symbols[0]
