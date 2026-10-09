@@ -10,7 +10,9 @@ door arcs, dimension lines. This module looks for the same things in the geometr
                       mark does not join two of them), the title of each (the little frame it is written in is not
                       part of any drawing), the plans drawn inside a bigger view (a house on its lot);
 * the type of each view: plan, roof plan, elevation, section, site plan, detail: from the title, else from what the
-  view holds (door arcs and room areas, level marks, room names, contour lines, roof tiles).
+  view holds (door arcs and room areas, level marks, room names, contour lines, roof tiles);
+* the copies: a plan drawn twice (one of them turned, or drawn in the site) is found from the words written in it and
+  confirmed by its lines; two floors of a house with the same footprint are not copies.
 
 Nothing here builds a 3D model: it says what is where, and with what confidence; the pipeline decides what to do.
 """
@@ -68,12 +70,16 @@ NEST_AREA = 0.3  # a plan in a view takes up less than this share of the box of 
 NEST_DENSITY = 1.3  # ... and holds this many times more drawing per square metre than the rest of it
 COPY_TEXTS = 3  # the texts propose a copy: this many different words of a drawing land on the same words, all moved alike
 COPY_TOLERANCE = 0.1  # m: a text of the copy lies this close to where the move of the copy puts it
-COPY_INK = 0.4  # ... and the lines confirm it: this share of the lines of the drawing lands on a line of the same length
-COPY_INK_TOLERANCE = 0.05  # m: ... within this distance
 COPY_REPEATS = 12  # a text written more often than this (a dimension like 100) says nothing about where a copy lies
-COPY_PAIRS = 500_000  # no more pairs of equal texts than this are tried
+COPY_PAIRS = 200_000  # no more pairs of equal texts than this are tried...
+COPY_MOVES = 60  # ... and no more moves than this (the best supported) are looked at
+COPY_INK = 0.6  # the lines confirm it: this share of the lines of the smaller drawing lands on lines of the same length
+COPY_INK_TOLERANCE = 0.05  # m: ... within this distance (two floors of a house share their walls and little else: 0.3)
+COPY_SIZE = 0.05  # two views are twins only if their sides differ by less than this share
+COPY_VOTERS = 150  # the longest lines of a drawing vote for the shift that takes it onto its twin...
+COPY_PARTNERS = 50  # ... each for the shifts to the lines of nearly its length, this many looked at...
+COPY_VOTES = 6  # ... and a shift needs this many votes
 COPY_FIT = 0.5  # a view is the copy when its box overlaps the box of the moved drawing by this share of the two together
-COPY_SIZE = 0.02  # untitled plans whose sides differ by less than this share are taken for copies (two floors differ more)
 COPY_ROUGH = 0.3  # a plan found by its doors is the copy when this share of its box (and its middle) lies in the copy's box
 COPY_INSIDE = 0.85  # a copy lies in a bigger view when this share of its box does
 ORTHO_MIN_LINES = 50  # the direction of the lines tells something with at least this many
@@ -684,7 +690,9 @@ def find_views(soup: Soup, scale: float) -> list[View]:
     for v in views:
         _name(v, scale)
     inner = _plans_inside(views, soup, scale, centre)
-    pairs = _match_copies(views, inner, soup, scale, centre)
+    lines = _Lines(soup, scale)
+    pairs = _match_copies(views, inner, soup, scale, centre, lines)
+    pairs += _twins(views, lines, {frozenset((id(c), id(o))) for c, o in pairs})
     _measure(inner, soup, scale)
     for v in inner:
         _name(v, scale)
@@ -696,13 +704,13 @@ def find_views(soup: Soup, scale: float) -> list[View]:
     return views
 
 
-def _match_copies(views: list[View], inner: list[View], soup: Soup, scale: float, centre: np.ndarray) -> list[tuple[View, View]]:
+def _match_copies(views: list[View], inner: list[View], soup: Soup, scale: float, centre: np.ndarray, lines: _Lines) -> list[tuple[View, View]]:
     """The pairs (copy, original) of views that repeat each other. A plan found in a bigger view that is the copy of a plan
     of the sheet gets the exact box of that plan (the swing doors only say where the house is, roughly): of several
     drawings it could be the copy of, the biggest (a plan, not a diagram of its body)."""
     pairs: list[tuple[View, View]] = []
     best: dict[int, tuple[float, View, tuple]] = {}
-    for src, holder, box in _copies(views, soup, scale):
+    for src, holder, box in _copies(views, soup, scale, lines):
         if box is None:
             pairs.append((holder, src))
             continue
@@ -799,8 +807,9 @@ def _plans_inside(views: list[View], soup: Soup, scale: float, centre: np.ndarra
 
 def _copy_moves(soup: Soup, scale: float) -> list[tuple[int, tuple[float, float], np.ndarray, np.ndarray]]:
     """The ways the written texts say a drawing was copied: (quarter turns, shift in metres, the texts it moves, the texts
-    they land on: indices in ``soup.texts``). A move counts when COPY_TEXTS different words land on the same words
-    within COPY_TOLERANCE: a plan copied into the site (and turned there) keeps its words where the move puts them."""
+    they land on: indices in ``soup.texts``), the best supported first and COPY_MOVES at most. A move counts when
+    COPY_TEXTS different words land on the same words within COPY_TOLERANCE: a plan copied into the site (and turned
+    there) keeps its words where the move puts them."""
     where: dict[str, list[int]] = {}
     seen = set()
     for k, t in enumerate(soup.texts):
@@ -822,19 +831,27 @@ def _copy_moves(soup: Soup, scale: float) -> list[tuple[int, tuple[float, float]
         return []
     src, dst, word = np.array(src), np.array(dst), np.array(word)
     xy = np.array([[t["x"], t["y"]] for t in soup.texts]) * scale
-    moves: list[tuple[int, tuple[float, float], np.ndarray, np.ndarray]] = []
+    found: list[tuple[int, int, tuple[float, float], np.ndarray]] = []  # (different words, turns, shift, the pairs)
     for turns in range(4):
         c, s = (1, 0, -1, 0)[turns], (0, 1, 0, -1)[turns]  # cosine and sine of the turn
         p = xy[src]
         shift = xy[dst] - np.stack([c * p[:, 0] - s * p[:, 1], s * p[:, 0] + c * p[:, 1]], axis=1)
-        _, group = np.unique(np.round(shift / (2 * COPY_TOLERANCE)).astype(np.int64), axis=0, return_inverse=True)
-        group = group.reshape(-1)
-        words = np.bincount(np.unique(np.column_stack([group, word]), axis=0)[:, 0], minlength=group.max() + 1)
-        for g in np.flatnonzero(words >= COPY_TEXTS):
-            mid = np.median(shift[group == g], axis=0)
-            near = np.hypot(shift[:, 0] - mid[0], shift[:, 1] - mid[1]) <= COPY_TOLERANCE
-            if len(set(word[near])) >= COPY_TEXTS and all(m[0] != turns or np.hypot(m[1][0] - mid[0], m[1][1] - mid[1]) > COPY_TOLERANCE for m in moves):
-                moves.append((turns, (float(mid[0]), float(mid[1])), src[near], dst[near]))
+        for half in (0.0, 0.5):  # two grids: a group cut by the edge of a cell of one lies whole in a cell of the other
+            cell = np.floor(shift / (2 * COPY_TOLERANCE) + half).astype(np.int64)
+            key = (cell[:, 0] + _SHIFT) * _PACK + cell[:, 1] + _SHIFT
+            order = np.argsort(key, kind="stable")
+            first = np.flatnonzero(np.r_[True, key[order][1:] != key[order][:-1]])
+            last = np.r_[first[1:], len(order)]
+            for a, b in zip(first[(last - first) >= COPY_TEXTS], last[(last - first) >= COPY_TEXTS]):
+                pairs = order[a:b]
+                if len(set(word[pairs])) >= COPY_TEXTS:
+                    mid = np.median(shift[pairs], axis=0)
+                    found.append((len(set(word[pairs])), turns, (float(mid[0]), float(mid[1])), pairs))
+    found.sort(key=lambda f: -f[0])
+    moves: list[tuple[int, tuple[float, float], np.ndarray, np.ndarray]] = []
+    for _, turns, mid, pairs in found[:4 * COPY_MOVES]:
+        if len(moves) < COPY_MOVES and all(m[0] != turns or np.hypot(m[1][0] - mid[0], m[1][1] - mid[1]) > 2 * COPY_TOLERANCE for m in moves):
+            moves.append((turns, mid, src[pairs], dst[pairs]))
     return moves
 
 
@@ -847,33 +864,71 @@ def _moved(box: tuple, turns: int, shift: tuple[float, float], scale: float) -> 
     return min(xs), min(ys), max(xs), max(ys)
 
 
-def _ink_agrees(soup: Soup, scale: float, box: tuple, turns: int, shift: tuple[float, float], tree, length: np.ndarray) -> bool:
-    """Does a move carry the lines in ``box`` onto lines of the same length (COPY_INK of them)? Words repeated in two
-    drawings (a label, a scale) can be at the same place by habit: the lines say whether the drawing itself was copied.
-    ``tree``: the middles of all the lines of the sheet, ``length`` their lengths."""
-    seg = soup.seg
-    mx, my = (seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2
-    mine = (mx >= box[0]) & (mx <= box[2]) & (my >= box[1]) & (my <= box[3])
-    if not mine.any():
-        return False
-    c, s = (1, 0, -1, 0)[turns], (0, 1, 0, -1)[turns]
-    x, y = mx[mine], my[mine]
-    moved = np.stack([c * x - s * y + shift[0] / scale, s * x + c * y + shift[1] / scale], axis=1)
-    d, i = tree.query(moved, distance_upper_bound=COPY_INK_TOLERANCE / scale)
-    hit = np.isfinite(d)
-    same = np.zeros(len(moved), bool)
-    same[hit] = np.abs(length[i[hit]] - length[mine][hit]) <= COPY_INK_TOLERANCE / scale
-    return bool(same.mean() >= COPY_INK)
+class _Lines:
+    """The middle and the length of every straight line of the sheet. Two drawings are copies of one another when the
+    lines of one lie, after a move (a turn by quarters and a shift), on lines of the other of the same length."""
+
+    def __init__(self, soup: Soup, scale: float) -> None:
+        from scipy.spatial import cKDTree
+
+        seg = soup.seg
+        self.x, self.y = (seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2
+        self.length = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
+        self.tree = cKDTree(np.stack([self.x, self.y], axis=1)) if len(seg) else None
+        self.scale = scale
+
+    def inside(self, box: tuple) -> np.ndarray:
+        return np.flatnonzero((self.x >= box[0]) & (self.x <= box[2]) & (self.y >= box[1]) & (self.y <= box[3]))
+
+    def share(self, box: tuple, turns: int, shift: tuple[float, float]) -> float:
+        """The share of the lines in ``box`` that a move (``shift`` in metres) carries onto a line of the same length."""
+        mine = self.inside(box)
+        if len(mine) == 0 or self.tree is None:
+            return 0.0
+        c, s = (1, 0, -1, 0)[turns], (0, 1, 0, -1)[turns]
+        x, y = self.x[mine], self.y[mine]
+        moved = np.stack([c * x - s * y + shift[0] / self.scale, s * x + c * y + shift[1] / self.scale], axis=1)
+        tol = COPY_INK_TOLERANCE / self.scale
+        d, i = self.tree.query(moved, distance_upper_bound=tol)
+        hit = np.isfinite(d)
+        same = np.zeros(len(mine), bool)
+        same[hit] = np.abs(self.length[i[hit]] - self.length[mine][hit]) <= tol
+        return float(same.mean())
+
+    def shift(self, box: tuple, other: tuple, turns: int) -> tuple[float, float] | None:
+        """The shift (metres) that, after the turn, carries most of the longest lines of ``box`` onto lines of the same
+        length in ``other``: every line votes for the shifts that would put it on a line of its length."""
+        mine, there = self.inside(box), self.inside(other)
+        if len(mine) == 0 or len(there) == 0:
+            return None
+        mine = mine[np.argsort(-self.length[mine])[:COPY_VOTERS]]
+        there = there[np.argsort(self.length[there])]
+        c, s = (1, 0, -1, 0)[turns], (0, 1, 0, -1)[turns]
+        tol = COPY_INK_TOLERANCE / self.scale
+        lengths = self.length[there]
+        votes = []
+        for i in mine:
+            at = int(np.searchsorted(lengths, self.length[i]))  # the lines of nearly the same length are around here
+            near = there[max(at - COPY_PARTNERS // 2, 0):at + COPY_PARTNERS // 2]
+            j = near[np.abs(self.length[near] - self.length[i]) <= tol]
+            votes.append(np.stack([self.x[j] - (c * self.x[i] - s * self.y[i]), self.y[j] - (s * self.x[i] + c * self.y[i])], axis=1))
+        votes = np.concatenate(votes) if votes else np.empty((0, 2))
+        if len(votes) == 0:
+            return None
+        _, inverse, count = np.unique(np.round(votes / (2 * tol)).astype(np.int64), axis=0, return_inverse=True, return_counts=True)
+        best = int(count.argmax())
+        if count[best] < COPY_VOTES:
+            return None
+        found = np.median(votes[inverse.reshape(-1) == best], axis=0) * self.scale
+        return float(found[0]), float(found[1])
 
 
-def _copies(views: list[View], soup: Soup, scale: float) -> list[tuple[View, View, tuple | None]]:
+def _copies(views: list[View], soup: Soup, scale: float, lines: _Lines) -> list[tuple[View, View, tuple | None]]:
     """The copies of drawings in the sheet: (the view that was copied, the view that holds the copy, the box of the copy
     or None). The texts propose where a drawing was copied to, the lines confirm it. The holder is a view of the sheet
     that repeats the drawing (box None), or a much bigger view the copy is drawn in (a plan in the site, turned a quarter):
     then the box is exactly the box of the plan."""
-    from scipy.spatial import cKDTree
-
-    moves = _copy_moves(soup, scale) if views and soup.texts and len(soup.seg) else []
+    moves = _copy_moves(soup, scale) if views and soup.texts and lines.tree is not None else []
     if not moves:
         return []
     tx = np.array([t["x"] for t in soup.texts])
@@ -882,9 +937,6 @@ def _copies(views: list[View], soup: Soup, scale: float) -> list[tuple[View, Vie
     for k in sorted(range(len(views)), key=lambda k: -_area(views[k].bbox)):
         x0, y0, x1, y1 = views[k].bbox
         owner[(tx >= x0) & (tx <= x1) & (ty >= y0) & (ty <= y1)] = k
-    seg = soup.seg
-    tree = cKDTree(np.stack([(seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2], axis=1))
-    length = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
     found: list[tuple[View, View, tuple | None]] = []
     done = set()
     for turns, shift, src, dst in moves:
@@ -903,16 +955,42 @@ def _copies(views: list[View], soup: Soup, scale: float) -> list[tuple[View, Vie
             where = (max(box[0], vb.bbox[0]), max(box[1], vb.bbox[1]), min(box[2], vb.bbox[2]), min(box[3], vb.bbox[3]))
         else:
             continue
-        if not _ink_agrees(soup, scale, va.bbox, turns, shift, tree, length):
-            continue
-        if where is None:  # two views that repeat each other: the lines of the second are in the first as well
+        agree = lines.share(va.bbox, turns, shift)
+        if where is None:  # two views that repeat each other: the lines of the smaller drawing are in the other
             back = (4 - turns) % 4
             c, s = (1, 0, -1, 0)[back], (0, 1, 0, -1)[back]
-            if not _ink_agrees(soup, scale, vb.bbox, back, (-(c * shift[0] - s * shift[1]), -(s * shift[0] + c * shift[1])), tree, length):
-                continue
-        found.append((va, vb, where))
-        done.add((ka, kb))
+            agree = max(agree, lines.share(vb.bbox, back, (-(c * shift[0] - s * shift[1]), -(s * shift[0] + c * shift[1]))))
+        if agree >= COPY_INK:
+            found.append((va, vb, where))
+            done.add((ka, kb))
     return found
+
+
+def _twins(views: list[View], lines: _Lines, known: set[frozenset]) -> list[tuple[View, View]]:
+    """Views of about the same size whose lines lie on one another after a turn and a shift: a drawing and its copy, with
+    no words in common. Two floors of a house have the same walls and not the same partitions: they are no twins."""
+    pairs = []
+    if lines.tree is None:
+        return pairs
+    for i, a in enumerate(views):
+        for b in views[i + 1:]:
+            wa, ha = sorted(a.size_m(lines.scale))
+            wb, hb = sorted(b.size_m(lines.scale))  # a copy may be turned a quarter of a turn
+            if a.outline or b.outline or frozenset((id(a), id(b))) in known or a.cells < MIN_PLAN_CELLS or b.cells < MIN_PLAN_CELLS \
+                    or "site" in (a.kind, b.kind) or (a.kind != b.kind and "?" not in (a.kind, b.kind)) \
+                    or abs(wa - wb) > COPY_SIZE * max(wa, wb) or abs(ha - hb) > COPY_SIZE * max(ha, hb):
+                continue
+            for turns in range(4):
+                shift = lines.shift(a.bbox, b.bbox, turns)
+                if shift is None:
+                    continue
+                back = (4 - turns) % 4
+                c, s = (1, 0, -1, 0)[back], (0, 1, 0, -1)[back]
+                if max(lines.share(a.bbox, turns, shift),
+                       lines.share(b.bbox, back, (-(c * shift[0] - s * shift[1]), -(s * shift[0] + c * shift[1])))) >= COPY_INK:
+                    pairs.append((b, a))
+                    break
+    return pairs
 
 
 def _nest(views: list[View]) -> None:
@@ -1035,8 +1113,8 @@ def _name(v: View, scale: float) -> None:
 
 
 def _relate(views: list[View], scale: float) -> None:
-    """Views that repeat one another or hold one another: a plan much bigger than another view that has the same title,
-    or that lies in it, is the site around it; two untitled views of the same size are copies of one drawing."""
+    """Views that hold one another: a plan much bigger than another view that has the same title, or that lies in it, is
+    the site around it."""
     for a in views:
         for b in views:
             if a is b or a.kind != "plan" or b.kind not in ("plan", "roof"):
@@ -1048,16 +1126,6 @@ def _relate(views: list[View], scale: float) -> None:
                 a.kind, a.kind_from = "site", f"molto piu' grande della vista {b.id}: il lotto intorno alla casa"
             elif b.parent == a.id and a.cells >= (COPY_SITE_RATIO if b.copy_of else SITE_RATIO) * b.cells:
                 a.kind, a.kind_from = "site", f"contiene la vista {b.id}: il lotto intorno alla casa"
-    for i, a in enumerate(views):
-        for b in views[i + 1:]:
-            wa, ha = sorted(a.size_m(scale))
-            wb, hb = sorted(b.size_m(scale))  # a copy may be turned a quarter of a turn
-            similar = abs(wa - wb) <= COPY_SIZE * max(wa, wb) and abs(ha - hb) <= COPY_SIZE * max(ha, hb)
-            if similar and not a.title_items and not b.title_items and b.copy_of is None and (a.copy_of or a.id) != b.id \
-                    and a.kind in ("plan", "?") and b.kind in ("plan", "?"):
-                b.copy_of = a.copy_of or a.id
-                if b.kind == "?":
-                    b.kind, b.kind_from = a.kind, f"copia della vista {a.id}"
 
 
 def _kind_from_content(v: View, scale: float) -> tuple[str, str]:

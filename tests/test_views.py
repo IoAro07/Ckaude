@@ -498,12 +498,43 @@ def test_a_plan_copied_into_the_site_has_the_exact_box_of_the_plan_and_is_its_co
 def test_words_in_the_same_places_in_two_different_plans_do_not_make_them_copies():
     doc, msp = new_sheet()
     for k, x in enumerate((0, 2000)):
-        add_plan(msp, x, 0, furniture=0, doors=5 if k == 0 else 0)  # the same labels and the same outer walls...
+        add_plan(msp, x, 0, furniture=0 if k else 6, doors=0 if k else 5)  # the same labels and the same outer walls...
         if k:
             for j in range(12):  # ... but another plan inside
                 msp.add_line((x + 300 + j * 90, 100), (x + 300 + j * 90, 800))
                 msp.add_line((x + 100, 100 + j * 55), (x + 550, 100 + j * 55))
         add_title(msp, ("PIANTA PIANO TERRA", "PIANTA PIANO PRIMO")[k], x, 1050)
+    views = views_of(doc)
+    assert [v.kind for v in views] == ["plan", "plan"] and all(v.copy_of is None for v in views)
+
+
+def _without_words(msp, first=0):
+    for e in [e for e in list(msp)[first:] if e.dxftype() == "TEXT"]:
+        msp.delete_entity(e)
+
+
+def test_two_plans_with_no_words_and_the_same_lines_are_twins_even_when_one_is_turned():
+    doc, msp = new_sheet()
+    add_plan(msp, 0, 0, furniture=12)
+    _without_words(msp)
+    before = len(msp)
+    _turned_copy(msp, (0, 0), turns=3, shift=(3000, 1500), furniture=12)
+    _without_words(msp, before)
+    first, second = views_of(doc)
+    assert second.size_m(S)[0] == pytest.approx(first.size_m(S)[1], abs=0.2)  # turned
+    assert first.copy_of is None and second.copy_of == first.id
+
+
+def test_two_floors_with_the_same_walls_and_other_partitions_are_no_copies():
+    doc, msp = new_sheet()
+    for k, x in enumerate((0, 2000)):
+        first = len(msp)
+        add_plan(msp, x, 0, furniture=0)  # the same outer walls and doors...
+        for j in range(20):  # ... and each floor its own partitions
+            y = 100 + j * (35 if k else 38)
+            msp.add_line((x + 100 + 20 * (j % 4) * (1 + k), y), (x + 560 + 30 * (j % 3) * (1 + k), y))
+            msp.add_line((x + 700 + 31 * j + 7 * k * j, 100), (x + 700 + 31 * j + 7 * k * j, 700 - 40 * k))
+        _without_words(msp, first)
     views = views_of(doc)
     assert [v.kind for v in views] == ["plan", "plan"] and all(v.copy_of is None for v in views)
 
