@@ -216,6 +216,7 @@ class Config:
     # outdoor furniture drawn as blocks. Heights in metres; the library leaves it off (the command line turns it on).
     garden: bool = False
     garden_area: tuple[float, float, float, float] | None = None  # drawing units: where the garden is (default: found)
+    garden_reach: tuple[float, float, float, float] | None = None  # internal, drawing units: nothing outside it is garden
     garden_thickness: float = 0.20  # thickness of the ground slabs, below their top
     garden_lawn_drop: float = 0.05  # the lawn and the soil are this much lower than the paving (which is at 0)
     pool_depth: float = 1.50

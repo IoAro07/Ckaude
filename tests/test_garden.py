@@ -656,3 +656,19 @@ def test_several_bare_holes_are_all_filled_without_leaving_rings(tmp_path):
     pieces = G.polygons_of(ground["lawn"])
     assert len(pieces) == 1 and not list(pieces[0].interiors)  # one piece, no hole, no island inside a hole
     assert ground["lawn"].area == pytest.approx(40.0, rel=0.01)
+
+
+def test_nothing_beyond_the_reach_is_garden_even_if_a_chain_of_ground_leads_there(tmp_path):
+    """A sheet holds other drawings: a strip of paving that runs on for 190 m and a tree at its far end are not the garden of
+    the converted plan when the analysis says where the plan's surroundings end (``garden_reach``)."""
+    def far(**kw):
+        doc, msp = garden_plan(tmp_path, with_pool=False, with_objects=False)
+        hatch(msp, rect(1200, -500, 20000, 0), GREY)  # touching the paving: a chain that leads away from the house
+        block(doc, "Albero", rect(-100, -100, 100, 100))
+        msp.add_blockref("Albero", (19000, -250), dxfattribs={"layer": "Verde"})
+        return run(doc, tmp_path, "far", **kw)
+
+    everything = far()
+    assert any(o.cx > 100 for o in everything.garden.objects)  # without a reach the far tree is a plant of the garden
+    near = far(garden_reach=(-1500, -1500, 3000, 1500))
+    assert near.garden is not None and not any(o.cx > 100 for o in near.garden.objects)

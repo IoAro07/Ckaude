@@ -303,10 +303,11 @@ def _expand(doc, cfg: Config, entities, depth: int = 0):
         yield e
 
 
-def _scan(doc, cfg: Config, dist: float, zones, skip, user_window):
+def _scan(doc, cfg: Config, dist: float, zones, skip, user_window, reach=None):
     """Hatches / outlines and blocks of the garden, in drawing units: (fills, blocks, fills drawn in an
     elevation, blocks drawn in an elevation). ``zones``: where the elevations are; ``skip``: boxes whose
-    contents (a roof plan left out) are not the garden unless they are on a layer that says they are."""
+    contents (a roof plan left out) are not the garden unless they are on a layer that says they are; ``reach``: the
+    box (drawing units) beyond which nothing is garden (a sheet holds other drawings than the one converted)."""
     rules = cfg.layers
     fills: list[_Fill] = []
     blocks: list[_Block] = []
@@ -315,6 +316,7 @@ def _scan(doc, cfg: Config, dist: float, zones, skip, user_window):
     rings: dict[str, tuple[int, list[Polygon], str]] = {}
     cache: dict = {}
     window = box(*user_window) if user_window else None
+    limit = box(*reach) if reach else None
 
     def skipped(x0: float, y0: float, x1: float, y1: float, lk) -> bool:
         return lk is None and any(b[0] <= x0 and b[1] <= y0 and x1 <= b[2] and y1 <= b[3] for b in skip)
@@ -338,6 +340,8 @@ def _scan(doc, cfg: Config, dist: float, zones, skip, user_window):
                 cx, cy, angle, length, width, top, bottom = _place(e, outline)
                 r = max(length, width) / 2.0
                 if window is not None and not window.intersects(box(cx - r, cy - r, cx + r, cy + r)):
+                    continue
+                if limit is not None and not limit.intersects(box(cx - r, cy - r, cx + r, cy + r)):
                     continue
                 blk = _Block(order, layer, lk, e.dxf.name, kind, cx, cy, angle, length, width, top, bottom)
                 if in_zone:
@@ -368,6 +372,8 @@ def _scan(doc, cfg: Config, dist: float, zones, skip, user_window):
         in_zone = _inside(zones, (x0 + x1) / 2.0, (y0 + y1) / 2.0)
         if (other and not in_zone) or (window is not None and not window.intersects(box(x0, y0, x1, y1))):
             continue
+        if limit is not None and not limit.intersects(box(x0, y0, x1, y1)):
+            continue
         if in_zone:
             e_fills.append(fill)
         elif not skipped(x0, y0, x1, y1, lk):
@@ -376,7 +382,8 @@ def _scan(doc, cfg: Config, dist: float, zones, skip, user_window):
         # outlines on a water layer are all water (a coping line and a water line are two pools' worth of the same
         # pool, not a moat); on a lawn or paving layer an outline inside another is a hole
         shape = union(fix(p) for p in polys) if lk == "water" else nest_polygons(polys)
-        if not shape.is_empty and (window is None or window.intersects(box(*shape.bounds))):
+        if not shape.is_empty and (window is None or window.intersects(box(*shape.bounds))) \
+                and (limit is None or limit.intersects(box(*shape.bounds))):
             fills.append(_Fill(order, layer, lk, "", None, shape))
     return fills, blocks, e_fills, e_blocks
 
@@ -569,7 +576,7 @@ def build_garden(doc, cfg: Config, unit_scale: float, footprint: BaseGeometry, z
     user_window = cfg.garden_area or (cfg.area if cfg.area and not cfg.area_auto else None)
     fills, blocks, e_fills, e_blocks = _scan(doc, cfg, dist, [tuple(z[:4]) for z in zones],
                                              [] if user_window else [tuple(b) for b in cfg.garden_exclude],
-                                             user_window)
+                                             user_window, cfg.garden_reach)
     for f in (*fills, *e_fills):
         f.geom = _scaled(f.geom, unit_scale)
     for b in (*blocks, *e_blocks):
