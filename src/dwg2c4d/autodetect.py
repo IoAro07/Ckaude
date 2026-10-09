@@ -6,8 +6,13 @@ door arcs, dimension lines. This module looks for the same things in the geometr
 
 * ``scan``            one fast pass over the modelspace into numpy arrays (segments, arcs, hatches, texts, blocks...);
 * ``infer_unit``      the unit the numbers are really in (dimension values, door arcs...), whatever the header says;
-* ``find_views``      the views of the sheet: groups of drawing separated by empty space, with their titles;
-* the type of each view: plan, roof plan, elevation, section, site plan, detail: from the title, else from the shape.
+* ``find_views``      the views of the sheet: groups of drawing separated by empty space (a long line, a frame, a stray
+                      mark does not join two of them), the title of each (the little frame it is written in is not
+                      part of any drawing), the plans drawn inside a bigger view (a house on its lot);
+* the type of each view: plan, roof plan, elevation, section, site plan, detail: from the title, else from what the
+  view holds (door arcs and room areas, level marks, room names, contour lines, roof tiles);
+* the copies: a plan drawn twice (one of them turned, or drawn in the site) is found from the words written in it and
+  confirmed by its lines; two floors of a house with the same footprint are not copies.
 
 Nothing here builds a 3D model: it says what is where, and with what confidence; the pipeline decides what to do.
 """
@@ -17,7 +22,7 @@ from __future__ import annotations
 import math
 import re
 import statistics
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
@@ -26,15 +31,67 @@ from .config import INSUNITS_TO_NAME, UNIT_TO_METERS
 STRAIGHT = 1e-9  # a polyline piece with a smaller bulge than this is a straight segment
 CELL = 0.5  # m: the size of the cells the sheet is divided in to find the views
 LINK = 1.5  # m: pieces of drawing closer than this are one view; empty space wider than this separates two views
-SATELLITE_LINK = 4.0  # m: a small piece with no title this close to a view is part of it (a note, a north arrow)
-SATELLITE_SHARE = 0.15  # "small": at most this share of the cells of the view it joins
-TITLE_REACH = 4.0  # m: a title belongs to the view it is this close to
-MIN_VIEW_CELLS = 12  # a group of fewer cells than this (3 m2 of drawing) is a stray mark, not a view
-LABEL_CELLS = 60  # a group with a title and no more drawing than this (15 m2) is the frame of the title, not a view
-LABEL_REACH = 15.0  # m: the title in such a frame names the view it is this close to
-SITE_RATIO_OTHER = 6.0  # ... and a plan this many times bigger than another one is the site even with another title
+LONG_LINE = 12.0  # m: a straight line this long (ground line, section mark, border of the sheet, a table) is a ruling
+BARE_RUN = 4.0  # m: ... where it runs through empty space for this long (more than a gap in a drawing) it is cut out
+MIN_VIEW_CELLS = 40  # a piece of fewer cells than this (10 m2 of drawing) is a crumb, not a view
+MIN_VIEW_SIDE = 2.5  # m: a piece thinner than this is a strip of text or a line, not a view
+FLOAT_PAD = 0.001  # m: a view holds what lies this close to its box too (the box is the box of the ink: a hinge sits on its edge)
+MAX_CELLS = 1e8  # a coordinate more cells than this from the origin is damage (NaN, 1e300), not drawing: it is left out
+MAX_VIEWS = 200  # a sheet is not read as having more views than this (the biggest are kept): the views are compared in pairs
+MAX_TITLES = 300  # ... nor as having more titles than this (the tallest letters are kept): each is looked for among all the lines
+OUTLINE_LINES = 3  # a drawing made of long lines only (the boundary of a lot) is a view if it has this many of them
+CRUMB_REACH = 3.0  # m: a crumb this close to a view is a part of it (a note, a north arrow, a stair)
+CRUMB_SHARE = 0.15  # ... if it holds at most this share of the cells of that view
+INSIDE_SHARE = 0.8  # a view with this share of its box in the box of another one lies in it
+EDGE_SHARE = 0.25  # long lines with this share of their box on a drawing are the edge of it (its lot), not a view
+STRAY_SHARE = 0.02  # a piece with less than this share of the cells of a view near it is a stray piece of it...
+STRAY_REACH = 10.0  # m: ... "near" is this close to its box (a few contour lines cut off by gaps, a lone arrow)
+FRAME_SEED = 1.0  # m: the frame of a title is this close to the title, at most
+FRAME_TOUCH = 0.05  # m: two lines of a frame touch when their ends are this close
+FRAME_SEGMENTS = 16  # a frame has at most this many lines (it is often drawn twice)
+FRAME_SIZE = (20.0, 3.0)  # m: a frame is at most this long and this thick
+TITLE_REACH = 8.0  # m: a title belongs to a view it is this close to (a gap of 2 cm on a sheet at 1:200 is 4 m)
+TITLE_TIE = 1.0  # m: views this much farther than the nearest are about as near: the habit of the sheet decides
+SITE_RATIO_OTHER = 6.0  # a plan this many times bigger than another one is the site even with another title
 MIN_PLAN_CELLS = 40  # ... if that other one is at least this big (10 m2 of drawing): not a detail
-SITE_RATIO = 2.5  # a plan this many times bigger than another view with the same title is the site around it
+SITE_RATIO = 2.5  # a plan this many times bigger than another view with the same title, or lying in it, is the site
+COPY_SITE_RATIO = 1.5  # ... this many times if the plan in it is the copy of a plan of the sheet: the box is then exact
+PLAN_DOORS = 3  # a view with this many swing arcs of door size is a plan
+PLAN_AREAS = 3  # ... or with this many areas written in it
+FACADE_ASPECT = 2.5  # a drawing this much wider than high, with no door arcs, is a facade
+SECTION_ROOMS = 3  # a view with this many different room names written in it, and no doors or areas, is a section
+MAX_TITLE = 60  # characters: a longer text is a note, unless it starts like a caption ("SEZIONE - A Superficie...")
+LEVEL_MARKS = 2  # a view with this many level marks (+3,20) is an elevation or a section, not a plan
+SITE_ORTHO = 0.4  # a view where fewer lines than this share run along two directions is made of contours or boundaries
+SITE_SIZE = 30.0  # m: ... and it is a site if it is this wide
+NEST_DOORS = 5  # a building drawn in a bigger view has at least this many swing doors, all in one place
+NEST_LINK = 10.0  # m: swing doors this close to one another are in the same building
+NEST_MARGIN = 3.0  # m: a building reaches this far beyond its outermost swing doors
+NEST_ORTHO = 0.9  # a view of which more of the lines than this run along two directions is a plan, not a lot with a house on it
+NEST_AREA = 0.3  # a plan in a view takes up less than this share of the box of the view...
+NEST_DENSITY = 1.3  # ... and holds this many times more drawing per square metre than the rest of it
+COPY_TEXTS = 3  # the texts propose a copy: this many different words of a drawing land on the same words, all moved alike
+COPY_TOLERANCE = 0.1  # m: a text of the copy lies this close to where the move of the copy puts it
+COPY_REPEATS = 12  # a text written more often than this (a dimension like 100) says nothing about where a copy lies
+COPY_PAIRS = 200_000  # no more pairs of equal texts than this are tried...
+COPY_MOVES = 60  # ... and no more moves than this (the best supported) are looked at
+COPY_INK = 0.6  # the lines confirm it: this share of the lines of the smaller drawing lands on lines of the same length
+#   (a copy reaches 0.8 and more; two floors of a house, with the same walls and other partitions, 0.3)
+COPY_INK_TOLERANCE = 0.05  # m: ... within this distance
+COPY_SIZE = 0.05  # two views are twins only if their sides differ by less than this share
+COPY_VOTERS = 150  # the longest lines of a drawing vote for the shift that takes it onto its twin...
+COPY_PARTNERS = 50  # ... each for the shifts to the lines of nearly its length, this many looked at...
+COPY_VOTES = 6  # ... and a shift needs this many votes
+COPY_FIT = 0.5  # a view is the copy when its box overlaps the box of the moved drawing by this share of the two together
+COPY_ROUGH = 0.3  # a plan found by its doors is the copy when this share of its box (and its middle) lies in the copy's box
+COPY_INSIDE = 0.85  # a copy lies in a bigger view when this share of its box does
+ORTHO_MIN_LINES = 50  # the direction of the lines tells something with at least this many
+ORTHO_TOLERANCE = 2  # degrees: lines this close to the main direction (or across it) run along it
+ROOF_TILES = 3  # a view with this many hatches of roof tiles, no door arcs and no level marks is a roof plan
+TILE_PATTERNS = ("COPPI", "ROMAN", "TEGOL", "TILE", "RROOF", "RSHKE", "SHINGLE", "EMBRIC")  # in the names of hatch patterns
+LEVEL_MARK = re.compile(r"^(?:[A-Za-z.]{0,8}\s*)?[+\-\u00b1\u2212]\s*\d{1,4}[.,]\d{1,2}\b")  # +3,20  - 0.40  +/-0.00
+CAPTION = re.compile(r"^[A-Za-z' ]+?\s*(?:[-:\u2013]\s*(?:[A-Z]|\d{1,2})(?:-(?:[A-Z]|\d{1,2}))?|\s(?:[A-Z]-[A-Z]|\d{1,2}-\d{1,2}))\s")  # SEZIONE - A Sup...
+AREA_MARK = re.compile(r"(?<![A-Za-z0-9])(?:mq|m2|m\u00b2)(?![A-Za-z0-9])", re.I)  # 12,5 mq
 
 UNIT_CHOICES = ("m", "cm", "mm")
 UNIT_SURE = 2.0  # with no unit in the header, the analysis decides when its best unit leads by this many votes
@@ -47,14 +104,18 @@ OVERRIDE_MARGIN = 1.0  # the header is overruled only by a unit that leads by th
 # the words that say what a view is, strongest first (the text is upper-cased and stripped of punctuation)
 VIEW_WORDS = (
     ("roof", ("PLANIMETRIA COPERTURA", "PIANTA COPERTURA", "PIANTA TETTO", "COPERTURA", "COPERTURE", "TETTO", "ROOF PLAN", "ROOF")),
-    ("elevation", ("PROSPETTO", "PROSPETTI", "ALZATO", "FACCIATA", "ELEVATION", "ELEVAZIONE")),
-    ("section", ("SEZIONE", "SEZIONI", "SECTION")),
+    ("elevation", ("PROSPETTO", "PROSPETTI", "PROSP", "FRONTE", "FRONTI", "ALZATO", "FACCIATA", "ELEVATION", "ELEVAZIONE")),
+    ("section", ("SEZIONE", "SEZIONI", "SEZ", "SECTION")),
     ("site", ("PLANIMETRIA GENERALE", "INQUADRAMENTO", "SITE PLAN", "PLANIMETRIA DI INSERIMENTO", "ESTRATTO",
               "PLANIMETRIA CATASTALE", "CATASTALE", "PLANIMETRIA DI ZONA", "PLANIMETRIA LOTTO", "ORTOFOTO")),
     ("detail", ("DETTAGLIO", "PARTICOLARE", "DETAIL")),
-    ("plan", ("PIANTA", "PLANIMETRIA", "PIANO TERRA", "PIANO PRIMO", "PIANO SECONDO", "PIANO INTERRATO", "FLOOR PLAN",
-              "GROUND FLOOR", "FIRST FLOOR", "STATO DI FATTO", "STATO DI PROGETTO", "PROGETTO", "PLAN")),
+    ("plan", ("PIANTA", "PIANTE", "PLANIMETRIA", "PLANIMETRIE", "PIANO TERRA", "PIANO PRIMO", "PIANO SECONDO", "PIANO INTERRATO",
+              "FLOOR PLAN", "GROUND FLOOR", "FIRST FLOOR", "PLAN")),
 )
+# what a caption may say before the word that tells the type: the state of the drawing ("STATO DI FATTO - PROSPETTO SUD")
+STATES = ("STATO DI FATTO", "STATO DI PROGETTO", "STATO ATTUALE", "STATO DI COMPARAZIONE", "STATO SOVRAPPOSTO", "STATO MODIFICATO",
+          "PROGETTO", "RILIEVO", "ESISTENTE", "VARIANTE")
+NUMBER = re.compile(r"^(?:(?:TAV|TAVOLA|ALL|ALLEGATO|FIG|DIS|N|NR)\s+)?(?:[0-9]{1,2}|[A-Z])\s+(?=[A-Z]{3})")  # 1 - PIANTA  A) SEZIONE  TAV 3 PROSPETTO
 
 
 @dataclass
@@ -328,8 +389,9 @@ class View:
     titles: list[str] = field(default_factory=list)
     title_items: list[dict] = field(default_factory=list)
     kind: str = "?"  # plan | roof | elevation | section | site | detail | ?
-    kind_from: str = ""  # titolo | forma | ...
+    kind_from: str = ""  # titolo | contenuto
     copy_of: int | None = None  # the id of the view this one repeats
+    parent: int | None = None  # the id of the bigger view this one lies in (a plan on its lot, a detail)
     segments: int = 0
     arcs: int = 0
     curves: int = 0
@@ -339,6 +401,12 @@ class View:
     inserts: int = 0
     named: int = 0  # segments, hatches and blocks on layers the names call walls, doors or windows
     matched: str = ""  # an elevation: which facade of the plan it was matched to (written by elevmatch.match_views)
+    levels: int = 0  # level marks written in it (+3,20  -0,40): what an elevation or a section has
+    areas: int = 0  # areas written in it (MQ 12,5): what the rooms of a plan have
+    rooms: int = 0  # different room names written in it
+    tiles: int = 0  # hatches that look like roof tiles
+    ortho: float = 0.0  # share of the lines that run along the main direction of the drawing, or across it
+    outline: bool = False  # nothing but long lines (the boundary of a lot)
 
     def size_m(self, scale: float) -> tuple[float, float]:
         x0, y0, x1, y1 = self.bbox
@@ -349,9 +417,41 @@ class View:
         return x0 - margin <= x <= x1 + margin and y0 - margin <= y <= y1 + margin
 
 
+_PACK = 1 << 31  # a cell (ix, iy) of the grid is kept as one integer: (ix + _SHIFT) * _PACK + iy + _SHIFT
+_SHIFT = 1 << 30
+
+
+def _pack(ix: np.ndarray, iy: np.ndarray) -> np.ndarray:
+    return (ix + _SHIFT) * _PACK + (iy + _SHIFT)
+
+
+def _unpack(key: np.ndarray) -> np.ndarray:
+    return np.stack([key // _PACK - _SHIFT, key % _PACK - _SHIFT], axis=1)
+
+
+def _along(seg: np.ndarray, step: float, cap: int) -> tuple[np.ndarray, np.ndarray]:
+    """Points about every ``step`` along each segment (``cap`` pieces at most) and the segment each one is on."""
+    if len(seg) == 0:
+        return np.empty((0, 2)), np.empty(0, dtype=int)
+    length = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
+    n = np.minimum(np.maximum((length / step).astype(int), 1), cap)
+    rep = np.repeat(np.arange(len(seg)), n + 1)
+    k = (np.arange(len(rep)) - (np.cumsum(n + 1) - (n + 1))[rep]) / n[rep]
+    s = seg[rep]
+    return np.stack([s[:, 0] + (s[:, 2] - s[:, 0]) * k, s[:, 1] + (s[:, 3] - s[:, 1]) * k], axis=1), rep
+
+
 def _sample_points(soup: Soup, step: float) -> np.ndarray:
-    """Points along everything that is drawn, about every ``step`` (drawing units), for the grid of the sheet."""
-    out = [soup.arcs[:, :2], soup.circles[:, :2]]
+    """Points along everything but the segments, about every ``step`` (drawing units), for the grid of the sheet."""
+    rings = np.concatenate([soup.arcs, np.column_stack([soup.circles, np.zeros(len(soup.circles)),
+                                                          np.full(len(soup.circles), 360.0)])])
+    out = []
+    if len(rings):  # along the curve itself: the centre of a flat arc (a contour line) can be far from it
+        r, a0, sweep = rings[:, 2], np.radians(rings[:, 3]), np.radians(rings[:, 4])
+        n = np.minimum(np.maximum((r * sweep / step).astype(int), 1), 400)
+        rep = np.repeat(np.arange(len(rings)), n + 1)
+        ang = a0[rep] + sweep[rep] * (np.arange(len(rep)) - (np.cumsum(n + 1) - (n + 1))[rep]) / n[rep]
+        out.append(np.stack([rings[rep, 0] + r[rep] * np.cos(ang), rings[rep, 1] + r[rep] * np.sin(ang)], axis=1))
     if len(soup.curves):
         out += [(soup.curves[:, :2] + soup.curves[:, 2:]) / 2.0, soup.curves[:, :2], soup.curves[:, 2:]]
     for h in soup.hatches:
@@ -359,20 +459,21 @@ def _sample_points(soup: Soup, step: float) -> np.ndarray:
         out.append(np.array([[x0, y0], [x1, y1], [(x0 + x1) / 2, (y0 + y1) / 2], [x0, y1], [x1, y0]]))
     if soup.inserts:
         out.append(np.array([[i["x"], i["y"]] for i in soup.inserts]))
-    if len(soup.seg):
-        length = np.hypot(soup.seg[:, 2] - soup.seg[:, 0], soup.seg[:, 3] - soup.seg[:, 1])
-        n = np.minimum(np.maximum((length / step).astype(int), 1), 400)
-        rep = np.repeat(np.arange(len(soup.seg)), n + 1)
-        k = np.concatenate([np.arange(c + 1) for c in n]) / np.repeat(n, n + 1)
-        s = soup.seg[rep]
-        out.append(np.stack([s[:, 0] + (s[:, 2] - s[:, 0]) * k, s[:, 1] + (s[:, 3] - s[:, 1]) * k], axis=1))
     pts = np.concatenate([p.reshape(-1, 2) for p in out if len(p)]) if any(len(p) for p in out) else np.empty((0, 2))
     return pts[np.isfinite(pts).all(axis=1)]
 
 
 def _title_kind(text: str) -> str | None:
-    """What a title says the view is: the text must start with one of the view words (whole words: TETTOIA is no TETTO)."""
+    """What a title says the view is: the text must start with one of the view words (whole words: TETTOIA is no TETTO),
+    after the number of the drawing and the state it shows ("1 - STATO DI FATTO - PROSPETTO SUD")."""
     up = " ".join(re.split(r"[^A-Z0-9']+", text.upper())).strip()
+    while True:
+        rest = next((up[len(w) + 1:] for w in STATES if up.startswith(w + " ")), None)
+        if rest is None:
+            rest = NUMBER.sub("", up, count=1)
+        if rest == up:
+            break
+        up = rest
     for kind, words in VIEW_WORDS:
         for w in words:
             if up == w or up.startswith(w + " "):
@@ -381,101 +482,687 @@ def _title_kind(text: str) -> str | None:
 
 
 def _title_texts(soup: Soup) -> list[dict]:
-    """The texts that name a view: short, and starting with a view word."""
-    out = []
+    """The texts that name a view: short (or a caption that starts with the number of the drawing), and starting with a
+    view word (a text drawn twice on itself counts once)."""
+    out, seen = [], set()
     for t in soup.texts:
-        if len(t["text"]) <= 60:
+        key = (t["text"], round(t["x"], 3), round(t["y"], 3))
+        if key not in seen and (len(t["text"]) <= MAX_TITLE or CAPTION.match(t["text"])):
             kind = _title_kind(t["text"])
             if kind:
+                seen.add(key)
                 out.append({**t, "kind": kind})
     return out
 
 
-def find_views(soup: Soup, scale: float) -> list[View]:
-    """The views of the sheet: pieces of drawing separated by empty space, with the title near each and a type."""
+def _distance_to_segments(px: float, py: float, s: np.ndarray) -> np.ndarray:
+    """How far a point is from each of the segments ``s``."""
+    dx, dy = s[:, 2] - s[:, 0], s[:, 3] - s[:, 1]
+    t = np.clip(((px - s[:, 0]) * dx + (py - s[:, 1]) * dy) / np.maximum(dx * dx + dy * dy, 1e-18), 0.0, 1.0)
+    return np.hypot(px - (s[:, 0] + t * dx), py - (s[:, 1] + t * dy))
+
+
+def _label_frames(soup: Soup, titles: list[dict], scale: float) -> list[dict]:
+    """The little frame (a box, a tab, an underline) a title is written in: a few lines that touch one another and
+    nothing else. It labels a drawing, it is not a drawing: when it sits a metre from a plan it must not become a part
+    of it. A title with no such frame has none."""
+    seg = soup.seg
+    frames: list[dict] = []
+    reach, touch, far = FRAME_SEED / scale, FRAME_TOUCH / scale, FRAME_SIZE[0] / scale
+    low, high = np.minimum(seg[:, [0, 1]], seg[:, [2, 3]]), np.maximum(seg[:, [0, 1]], seg[:, [2, 3]])
+
+    def around(x: float, y: float, r: float) -> np.ndarray:
+        return np.flatnonzero((low[:, 0] <= x + r) & (high[:, 0] >= x - r) & (low[:, 1] <= y + r) & (high[:, 1] >= y - r))
+
+    for t in titles if len(seg) else []:
+        near = around(t["x"], t["y"], reach)
+        if len(near) == 0:
+            continue
+        d = _distance_to_segments(t["x"], t["y"], seg[near])
+        if d.min() > reach:
+            continue
+        local = around(t["x"], t["y"], far)  # a frame is no bigger than this: the lines to look at
+        mine = [int(near[int(np.argmin(d))])]  # the line of the frame nearest to the title, and the lines touching it
+        while len(mine) <= FRAME_SEGMENTS:
+            ends = np.concatenate([seg[mine][:, :2], seg[mine][:, 2:]])
+            cand = local[~np.isin(local, mine)]
+            hit = np.zeros(len(cand), bool)
+            for corner in (seg[cand][:, :2], seg[cand][:, 2:]):
+                hit |= (np.hypot(corner[:, None, 0] - ends[None, :, 0], corner[:, None, 1] - ends[None, :, 1]) <= touch).any(axis=1)
+            if not hit.any():
+                break
+            mine += [int(i) for i in cand[hit]]
+        if len(mine) > FRAME_SEGMENTS:
+            continue
+        part = seg[mine]
+        x0, x1 = min(part[:, 0].min(), part[:, 2].min()), max(part[:, 0].max(), part[:, 2].max())
+        y0, y1 = min(part[:, 1].min(), part[:, 3].min()), max(part[:, 1].max(), part[:, 3].max())
+        if max(x1 - x0, y1 - y0) * scale <= FRAME_SIZE[0] and min(x1 - x0, y1 - y0) * scale <= FRAME_SIZE[1]:
+            frames.append({"title": t, "box": (float(x0), float(y0), float(x1), float(y1)), "segs": np.array(mine)})
+    return frames
+
+
+def _components(tree, reach: float) -> np.ndarray:
+    """The piece every point of the tree belongs to: points closer than ``reach`` are one piece."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
+
+    pairs = tree.query_pairs(reach, output_type="ndarray")
+    if len(pairs) == 0:
+        return np.arange(tree.n)
+    g = coo_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(tree.n, tree.n))
+    return connected_components(g, directed=False)[1]
+
+
+def _extent(xy: np.ndarray, label: np.ndarray, half: float) -> dict[int, tuple[float, float, float, float]]:
+    """The box of the cells of every piece (``xy`` are the centres of the cells, ``half`` is half a cell)."""
+    if len(xy) == 0:
+        return {}
+    order = np.argsort(label, kind="stable")
+    sl = label[order]
+    start = np.flatnonzero(np.r_[True, sl[1:] != sl[:-1]])
+    x, y = xy[order, 0], xy[order, 1]
+    box = np.stack([np.minimum.reduceat(x, start) - half, np.minimum.reduceat(y, start) - half,
+                    np.maximum.reduceat(x, start) + half, np.maximum.reduceat(y, start) + half], axis=1)
+    return {int(k): tuple(map(float, b)) for k, b in zip(sl[start], box)}
+
+
+def _thick_enough(box: tuple[float, float, float, float], scale: float) -> bool:
+    return min(box[2] - box[0], box[3] - box[1]) * scale >= MIN_VIEW_SIDE
+
+
+def _bare_runs(near: np.ndarray, which: np.ndarray, per: float) -> np.ndarray:
+    """The points of the long lines that lie in a bare run: a stretch of a line with no drawing near it that is too long
+    to be a gap in a drawing (BARE_RUN). ``near``: the point has drawing near it; ``which``: the line it is on;
+    ``per``: metres between two points."""
+    bare = ~near
+    if not bare.any():
+        return bare
+    same = np.r_[False, which[1:] == which[:-1]]  # the point before is on the same line
+    run = np.cumsum(bare & ~(same & np.r_[False, bare[:-1]]))
+    return bare & (np.bincount(run[bare], minlength=run.max() + 1)[run] * per >= BARE_RUN)
+
+
+def _pieces(soup: Soup, scale: float, frames: list[dict]) -> tuple[list[tuple[tuple[float, float, float, float], int, bool]],
+                                                                   np.ndarray]:
+    """The pieces of drawing of the sheet, each as (box, cells, made of long lines only), and the centres of all the
+    cells with drawing in them. The sheet is cut in cells of 0.5 m; cells with drawing in them closer than LINK are one
+    piece. A long straight line (the ground of an elevation, a table, the walls of a plan) holds a drawing together,
+    but where it runs through empty space it links nothing: a ground line under two elevations, a section mark or the
+    border of the sheet must not make one view of two."""
     from scipy.spatial import cKDTree
 
     cell = CELL / scale
-    pts = _sample_points(soup, cell * 0.8)
-    if len(pts) == 0:
-        return []
-    centres = (np.unique(np.floor(pts / cell).astype(np.int64), axis=0) + 0.5) * cell
-    tree = cKDTree(centres)
+    seg = soup.seg
+    drawn = np.ones(len(seg), bool)
+    for f in frames:
+        drawn[f["segs"]] = False
+    ruling = drawn & (np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1]) * scale >= LONG_LINE)
+    step = cell * 0.8
+    ink = np.concatenate([_sample_points(soup, step), _along(seg[drawn & ~ruling], step, 400)[0]])
+    line, which = _along(seg[ruling], step, 4000)
+    which = np.flatnonzero(ruling)[which]
+    keys = np.unique(_pack(*np.floor(ink / cell).astype(np.int64).T))
+    near = np.zeros(len(line), bool)
+    if len(keys) and len(line):
+        near = np.isfinite(cKDTree((_unpack(keys) + 0.5) * cell).query(line, distance_upper_bound=LINK / scale)[0])
+    cut = _bare_runs(near, which, step * scale)
+    keys = np.unique(np.concatenate([keys, _pack(*np.floor(line[~cut] / cell).astype(np.int64).T)]))
+    centre = (_unpack(keys) + 0.5) * cell
+    piece = _components(cKDTree(centre), LINK / scale) if len(centre) else np.empty(0, dtype=int)
+    box = _extent(centre, piece, cell / 2)
+    count = np.bincount(piece) if len(piece) else np.zeros(0, dtype=int)
+    real = {g for g, b in box.items() if count[g] >= MIN_VIEW_CELLS and _thick_enough(b, scale)}
+    # crumbs (a note, a north arrow, a stair): a part of the view they are near, when they are small beside it
+    into = np.full(len(count), -1)
+    into[list(real)] = list(real)
+    crumb = ~np.isin(piece, list(real))
+    if real and crumb.any():
+        d, i = cKDTree(centre[~crumb]).query(centre[crumb], distance_upper_bound=CRUMB_REACH / scale)
+        at = np.isfinite(d)
+        cg, host = piece[crumb][at], piece[~crumb][i[at]]
+        order = np.lexsort((d[at], cg))
+        cg, host = cg[order], host[order]
+        first = np.r_[True, cg[1:] != cg[:-1]] if len(cg) else np.zeros(0, bool)  # the nearest piece of each crumb
+        for c, h in zip(cg[first], host[first]):
+            if count[c] <= CRUMB_SHARE * count[h]:
+                into[c] = h
+    keep = into[piece] >= 0
+    count = np.bincount(into[piece[keep]], minlength=len(count)) if keep.any() else count
+    # the box of a view is the box of its ink, not of its cells: it does not move when the sheet is shifted by a fraction
+    # of a cell, and it is as tight as a person would draw it
+    marks = np.concatenate([ink, line[~cut]])
+    owner = into[piece[np.searchsorted(keys, _pack(*np.floor(marks / cell).astype(np.int64).T))]]
+    box = _extent(marks[owner >= 0], owner[owner >= 0], 0.0)
+    out = [(box[g], int(count[g]), False) for g in sorted(real)]
+    # long lines with nothing near them: the boundary of a lot is a view when it is more than one line
+    if cut.any():
+        bkeys, inverse = np.unique(_pack(*np.floor(line[cut] / cell).astype(np.int64).T), return_inverse=True)
+        bxy = (_unpack(bkeys) + 0.5) * cell
+        lab = _components(cKDTree(bxy), LINK / scale)
+        lines_in = np.bincount(np.unique(np.column_stack([lab[inverse.reshape(-1)], which[cut]]), axis=0)[:, 0],
+                               minlength=lab.max() + 1)
+        cells = np.bincount(lab)
+        for g, b in _extent(line[cut], lab[inverse.reshape(-1)], 0.0).items():
+            if lines_in[g] >= OUTLINE_LINES and cells[g] >= MIN_VIEW_CELLS and _thick_enough(b, scale):
+                out.append((b, int(cells[g]), True))
+    return out, centre
 
-    def label(gap_m: float) -> np.ndarray:
-        pairs = tree.query_pairs(gap_m / scale, output_type="ndarray")
-        n = len(centres)
-        if len(pairs) == 0:
-            return np.arange(n)
-        g = coo_matrix((np.ones(len(pairs)), (pairs[:, 0], pairs[:, 1])), shape=(n, n))
-        return connected_components(g, directed=False)[1]
 
-    lab = label(LINK)
-    titles = _title_texts(soup)
-    order_ = np.argsort(lab, kind="stable")
-    cuts = np.flatnonzero(np.diff(lab[order_])) + 1
-    members = {int(lab[chunk[0]]): chunk for chunk in np.split(order_, cuts)}
+def _overlap(a: tuple, b: tuple) -> float:
+    """The area two boxes have in common."""
+    return max(0.0, min(a[2], b[2]) - max(a[0], b[0])) * max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
 
-    def bbox_of(idx: np.ndarray):
-        c = centres[idx]
-        (x0, y0), (x1, y1) = c.min(axis=0) - cell / 2, c.max(axis=0) + cell / 2
-        return float(x0), float(y0), float(x1), float(y1)
 
-    def titled(idx: np.ndarray) -> bool:
-        x0, y0, x1, y1 = bbox_of(idx)
-        m = TITLE_REACH / scale
-        return any(x0 - m <= t["x"] <= x1 + m and y0 - m <= t["y"] <= y1 + m for t in titles)
+def _area(a: tuple) -> float:
+    return max(a[2] - a[0], 0.0) * max(a[3] - a[1], 0.0)
 
-    # small untitled pieces next to a bigger group (notes, north arrows, scale bars) belong to it
-    coarse = label(SATELLITE_LINK)
-    near: dict[int, set[int]] = {}  # coarse group -> the groups (at LINK) it holds
-    for fine, wide in zip(lab.tolist(), coarse.tolist()):
-        near.setdefault(wide, set()).add(fine)
-    for l, idx in sorted(members.items(), key=lambda kv: len(kv[1])):
-        if l not in members or len(idx) >= MIN_VIEW_CELLS * 4 or titled(idx):
-            continue
-        host = [m for m in near[int(coarse[idx[0]])] if m != l and m in members]
-        host = [m for m in host if len(members[m]) * SATELLITE_SHARE >= len(idx)]
-        if host:
-            big = max(host, key=lambda m: len(members[m]))
-            members[big] = np.concatenate([members[big], idx])
-            del members[l]
 
-    # the frame (or underline) of a title is a small group of its own: its title names the view nearby
-    for l, idx in list(members.items()):
-        if len(idx) < LABEL_CELLS:
-            x0, y0, x1, y1 = bbox_of(idx)
-            inside = [t for t in titles if x0 - 0.5 / scale <= t["x"] <= x1 + 0.5 / scale
-                      and y0 - 0.5 / scale <= t["y"] <= y1 + 0.5 / scale]
-            if inside:
-                for t in inside:
-                    t["far"] = True
-                del members[l]
-    views = [View(0, bbox_of(idx), int(len(idx))) for idx in members.values() if len(idx) >= MIN_VIEW_CELLS]
-    order = 10.0 / scale  # views in the same row of the sheet (within 10 m) are read left to right
+def _gap(a: tuple, b: tuple) -> float:
+    """The distance between two boxes (0 when they touch or overlap)."""
+    return math.hypot(max(a[0] - b[2], b[0] - a[2], 0.0), max(a[1] - b[3], b[1] - a[3], 0.0))
+
+
+def _inside(v: View, w: View) -> bool:
+    """Does ``v`` lie in the box of ``w``?"""
+    return _overlap(v.bbox, w.bbox) >= INSIDE_SHARE * _area(v.bbox)
+
+
+def _renumber(views: list[View], scale: float) -> None:
+    """Views in the same row of the sheet (within 10 m) are read left to right, the rows from the top."""
+    order = 10.0 / scale
     views.sort(key=lambda v: (-round(v.bbox[3] / order), v.bbox[0]))
     for k, v in enumerate(views, 1):
         v.id = k
-    _assign_titles(views, titles, scale)
+
+
+def _sane(soup: Soup, scale: float) -> Soup:
+    """The drawing without the pieces whose coordinates no grid of cells can hold (a damaged entity has a NaN, an
+    infinity, 1e300): they are not drawing, and they must not stop the analysis."""
+    limit = MAX_CELLS * CELL / scale
+
+    def sound(a: np.ndarray, columns: int) -> np.ndarray:
+        return a[np.isfinite(a).all(axis=1) & (np.abs(a[:, :columns]) < limit).all(axis=1)]
+
+    def fine(*values: float) -> bool:
+        return all(math.isfinite(v) and abs(v) < limit for v in values)
+
+    return replace(soup, seg=sound(soup.seg, 4), arcs=sound(soup.arcs, 3), circles=sound(soup.circles, 3),
+                   curves=sound(soup.curves, 4), hatches=[h for h in soup.hatches if fine(*h["bbox"])],
+                   texts=[t for t in soup.texts if fine(t["x"], t["y"])], inserts=[i for i in soup.inserts if fine(i["x"], i["y"])])
+
+
+def find_views(soup: Soup, scale: float) -> list[View]:
+    """The views of the sheet: pieces of drawing separated by empty space, with the title near each and a type."""
+    soup = _sane(soup, scale)
+    titles = sorted(_title_texts(soup), key=lambda t: -t["height"])[:MAX_TITLES]
+    frames = _label_frames(soup, titles, scale)
+    pieces, centre = _pieces(soup, scale, frames)
+    views = [View(0, box, cells, outline=outline) for box, cells, outline in sorted(pieces, key=lambda p: -p[1])[:MAX_VIEWS]]
+    views = _without_strays(views, [f["box"] for f in frames] + [(t["x"], t["y"], t["x"], t["y"]) for t in titles], scale)
+    _renumber(views, scale)
+    _measure(views, soup, scale)
+    _assign_titles(views, titles, frames, scale)
     for v in views:
-        _describe(v, soup, scale)
+        _name(v, scale)
+    inner = _plans_inside(views, soup, scale, centre)
+    lines = _Lines(soup, scale)
+    pairs = _match_copies(views, inner, soup, scale, centre, lines)
+    pairs += _twins(views, lines, {frozenset((id(c), id(o))) for c, o in pairs})
+    _measure(inner, soup, scale)
+    for v in inner:
+        _name(v, scale)
+    views += inner
+    _renumber(views, scale)
+    _link_copies(views, pairs, inner)
+    _nest(views)
     _relate(views, scale)
     return views
 
 
-def _assign_titles(views: list[View], titles: list[dict], scale: float) -> None:
-    """Each title goes to the nearest view (inside it, or within reach of its edge)."""
+def _match_copies(views: list[View], inner: list[View], soup: Soup, scale: float, centre: np.ndarray, lines: _Lines) -> list[tuple[View, View]]:
+    """The pairs (copy, original) of views that repeat each other. A plan found in a bigger view that is the copy of a plan
+    of the sheet gets the exact box of that plan (the swing doors only say where the house is, roughly): of several
+    drawings it could be the copy of, the biggest (a plan, not a diagram of its body)."""
+    pairs: list[tuple[View, View]] = []
+    best: dict[int, tuple[float, View, tuple]] = {}
+    for src, holder, box in _copies(views, soup, scale, lines):
+        if box is None:
+            pairs.append((holder, src))
+            continue
+        for k, w in enumerate(inner):
+            middle = ((w.bbox[0] + w.bbox[2]) / 2, (w.bbox[1] + w.bbox[3]) / 2)
+            if _overlap(w.bbox, box) >= COPY_ROUGH * _area(w.bbox) and box[0] <= middle[0] <= box[2] and box[1] <= middle[1] <= box[3] \
+                    and _area(box) > best.get(k, (0.0,))[0]:
+                best[k] = (_area(box), src, box)
+    for k, (_, src, box) in best.items():
+        inner[k].bbox = box
+        inner[k].cells = int(((centre[:, 0] >= box[0]) & (centre[:, 0] <= box[2]) & (centre[:, 1] >= box[1]) & (centre[:, 1] <= box[3])).sum())
+        pairs.append((inner[k], src))
+    return pairs
+
+
+def _link_copies(views: list[View], pairs: list[tuple[View, View]], inner: list[View]) -> None:
+    """Views that repeat one another are one group: the original is the one that is not drawn inside another view, then
+    the one with a title, then the first in reading order; the others are its copies. A copy with no type of its own has
+    the type of the original."""
+    group = {id(v): id(v) for v in views}
+
+    def find(k: int) -> int:
+        while group[k] != k:
+            group[k] = group[group[k]]
+            k = group[k]
+        return k
+
+    for c, o in pairs:
+        group[find(id(c))] = find(id(o))
+    members: dict[int, list[View]] = {}
+    for v in views:
+        members.setdefault(find(id(v)), []).append(v)
+    inside = {id(v) for v in inner}
+    for g in members.values():
+        if len(g) < 2:
+            continue
+        first = min(g, key=lambda v: (id(v) in inside, not v.title_items, v.id))
+        for v in g:
+            if v is not first:
+                v.copy_of = first.id
+                if v.kind == "?":
+                    v.kind, v.kind_from = first.kind, f"copia della vista {first.id}"
+
+
+def _without_strays(views: list[View], marks: list[tuple], scale: float) -> list[View]:
+    """Leave out the boundary lines that frame other views (the border of the sheet) or lie on one (the edge of its own
+    lot), and the stray pieces near a much bigger drawing (a few contour lines cut off by gaps, a lone arrow), unless a
+    title is near them."""
+    keep = []
+    for v in views:
+        others = [w for w in views if w is not v and not w.outline]
+        if v.outline:
+            if any(_inside(w, v) or _overlap(v.bbox, w.bbox) >= EDGE_SHARE * _area(v.bbox) for w in others):
+                continue
+        elif any(v.cells < STRAY_SHARE * w.cells and _gap(v.bbox, w.bbox) <= STRAY_REACH / scale for w in others) \
+                and not any(_gap(m, v.bbox) <= TITLE_REACH / scale for m in marks):
+            continue
+        keep.append(v)
+    return keep
+
+
+def _plans_inside(views: list[View], soup: Soup, scale: float, centre: np.ndarray) -> list[View]:
+    """A plan drawn on its lot (or a copy of a plan in a site): when all the swing doors of a view lie together in one
+    place that takes up less than a third of it and is much denser than the rest, that place is a plan of its own. Two
+    places with doors (the wings of a long building, two houses) say nothing, and neither does a view that is all straight
+    lines along two directions, like a plan: the lot around a house has contours, trees, boundaries running every way."""
+    from scipy.spatial import cKDTree
+
+    arcs = soup.arcs
+    door = (arcs[:, 4] > 70) & (arcs[:, 4] < 110) & (arcs[:, 2] * scale >= DOOR_RADIUS[0]) & (arcs[:, 2] * scale <= DOOR_RADIUS[1])
+    margin = NEST_MARGIN / scale
+    plans = []
+    for v in views:
+        x0, y0, x1, y1 = v.bbox
+        at = door & (arcs[:, 0] >= x0) & (arcs[:, 0] <= x1) & (arcs[:, 1] >= y0) & (arcs[:, 1] <= y1)
+        if v.outline or v.kind in ("elevation", "section", "detail") or at.sum() < NEST_DOORS or v.ortho >= NEST_ORTHO:
+            continue
+        hinge, radius = arcs[at, :2], arcs[at, 2]
+        group = _components(cKDTree(hinge), NEST_LINK / scale)
+        sizes = np.bincount(group)
+        if (sizes >= NEST_DOORS).sum() != 1:
+            continue
+        mine = group == int(np.argmax(sizes))
+        box = (max(x0, float((hinge[mine, 0] - radius[mine]).min()) - margin), max(y0, float((hinge[mine, 1] - radius[mine]).min()) - margin),
+               min(x1, float((hinge[mine, 0] + radius[mine]).max()) + margin), min(y1, float((hinge[mine, 1] + radius[mine]).max()) + margin))
+        if _area(box) >= NEST_AREA * _area(v.bbox):
+            continue
+        inside = int(((centre[:, 0] >= box[0]) & (centre[:, 0] <= box[2]) & (centre[:, 1] >= box[1]) & (centre[:, 1] <= box[3])).sum())
+        around = max(v.cells - inside, 1) / max(_area(v.bbox) - _area(box), 1e-9)  # drawing per unit of area
+        if inside / _area(box) >= NEST_DENSITY * around:  # a house on its lot is far denser than the lot
+            plans.append(View(0, box, inside))
+    return plans
+
+
+def _copy_moves(soup: Soup, scale: float) -> list[tuple[int, tuple[float, float], np.ndarray, np.ndarray]]:
+    """The ways the written texts say a drawing was copied: (quarter turns, shift in metres, the texts it moves, the texts
+    they land on: indices in ``soup.texts``), the best supported first and COPY_MOVES at most. A move counts when
+    COPY_TEXTS different words land on the same words within COPY_TOLERANCE: a plan copied into the site (and turned
+    there) keeps its words where the move puts them."""
+    where: dict[str, list[int]] = {}
+    seen = set()
+    for k, t in enumerate(soup.texts):
+        key = (t["text"], round(t["x"] * scale, 2), round(t["y"] * scale, 2))  # a text drawn twice on itself counts once
+        if len(t["text"]) >= 2 and key not in seen:
+            seen.add(key)
+            where.setdefault(t["text"], []).append(k)
+    src, dst, word = [], [], []
+    for w, idx in enumerate(i for i in where.values() if 2 <= len(i) <= COPY_REPEATS):
+        if len(src) > COPY_PAIRS:
+            break
+        for i in idx:
+            for j in idx:
+                if i != j:
+                    src.append(i)
+                    dst.append(j)
+                    word.append(w)
+    if not src:
+        return []
+    src, dst, word = np.array(src), np.array(dst), np.array(word)
+    xy = np.array([[t["x"], t["y"]] for t in soup.texts]) * scale
+    found: list[tuple[int, int, tuple[float, float], np.ndarray]] = []  # (different words, turns, shift, the pairs)
+    for turns in range(4):
+        c, s = (1, 0, -1, 0)[turns], (0, 1, 0, -1)[turns]  # cosine and sine of the turn
+        p = xy[src]
+        shift = xy[dst] - np.stack([c * p[:, 0] - s * p[:, 1], s * p[:, 0] + c * p[:, 1]], axis=1)
+        for half in (0.0, 0.5):  # two grids: a group cut by the edge of a cell of one lies whole in a cell of the other
+            cell = np.floor(shift / (2 * COPY_TOLERANCE) + half).astype(np.int64)
+            key = (cell[:, 0] + _SHIFT) * _PACK + cell[:, 1] + _SHIFT
+            order = np.argsort(key, kind="stable")
+            first = np.flatnonzero(np.r_[True, key[order][1:] != key[order][:-1]])
+            last = np.r_[first[1:], len(order)]
+            for a, b in zip(first[(last - first) >= COPY_TEXTS], last[(last - first) >= COPY_TEXTS]):
+                pairs = order[a:b]
+                if len(set(word[pairs])) >= COPY_TEXTS:
+                    mid = np.median(shift[pairs], axis=0)
+                    found.append((len(set(word[pairs])), turns, (float(mid[0]), float(mid[1])), pairs))
+    found.sort(key=lambda f: -f[0])
+    moves: list[tuple[int, tuple[float, float], np.ndarray, np.ndarray]] = []
+    for _, turns, mid, pairs in found[:4 * COPY_MOVES]:
+        if len(moves) < COPY_MOVES and all(m[0] != turns or np.hypot(m[1][0] - mid[0], m[1][1] - mid[1]) > 2 * COPY_TOLERANCE for m in moves):
+            moves.append((turns, mid, src[pairs], dst[pairs]))
+    return moves
+
+
+def _moved(box: tuple, turns: int, shift: tuple[float, float], scale: float) -> tuple[float, float, float, float]:
+    """The box of a drawing after a move: a turn of ``turns`` quarters about the origin, then a shift (metres)."""
+    c, s = (1, 0, -1, 0)[turns], (0, 1, 0, -1)[turns]
+    corners = [(box[0], box[1]), (box[2], box[1]), (box[2], box[3]), (box[0], box[3])]
+    xs = [c * x - s * y + shift[0] / scale for x, y in corners]
+    ys = [s * x + c * y + shift[1] / scale for x, y in corners]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+class _Lines:
+    """The middle and the length of every straight line of the sheet. Two drawings are copies of one another when the
+    lines of one lie, after a move (a turn by quarters and a shift), on lines of the other of the same length."""
+
+    def __init__(self, soup: Soup, scale: float) -> None:
+        from scipy.spatial import cKDTree
+
+        seg = soup.seg
+        self.x, self.y = (seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2
+        self.length = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
+        self.tree = cKDTree(np.stack([self.x, self.y], axis=1)) if len(seg) else None
+        self.scale = scale
+
+    def inside(self, box: tuple) -> np.ndarray:
+        return np.flatnonzero((self.x >= box[0]) & (self.x <= box[2]) & (self.y >= box[1]) & (self.y <= box[3]))
+
+    def share(self, box: tuple, turns: int, shift: tuple[float, float]) -> float:
+        """The share of the lines in ``box`` that a move (``shift`` in metres) carries onto a line of the same length."""
+        mine = self.inside(box)
+        if len(mine) == 0 or self.tree is None:
+            return 0.0
+        c, s = (1, 0, -1, 0)[turns], (0, 1, 0, -1)[turns]
+        x, y = self.x[mine], self.y[mine]
+        moved = np.stack([c * x - s * y + shift[0] / self.scale, s * x + c * y + shift[1] / self.scale], axis=1)
+        tol = COPY_INK_TOLERANCE / self.scale
+        d, i = self.tree.query(moved, distance_upper_bound=tol)
+        hit = np.isfinite(d)
+        same = np.zeros(len(mine), bool)
+        same[hit] = np.abs(self.length[i[hit]] - self.length[mine][hit]) <= tol
+        return float(same.mean())
+
+    def shift(self, box: tuple, other: tuple, turns: int) -> tuple[float, float] | None:
+        """The shift (metres) that, after the turn, carries most of the longest lines of ``box`` onto lines of the same
+        length in ``other``: every line votes for the shifts that would put it on a line of its length."""
+        mine, there = self.inside(box), self.inside(other)
+        if len(mine) == 0 or len(there) == 0:
+            return None
+        mine = mine[np.argsort(-self.length[mine])[:COPY_VOTERS]]
+        there = there[np.argsort(self.length[there])]
+        c, s = (1, 0, -1, 0)[turns], (0, 1, 0, -1)[turns]
+        tol = COPY_INK_TOLERANCE / self.scale
+        lengths = self.length[there]
+        votes = []
+        for i in mine:
+            at = int(np.searchsorted(lengths, self.length[i]))  # the lines of nearly the same length are around here
+            near = there[max(at - COPY_PARTNERS // 2, 0):at + COPY_PARTNERS // 2]
+            j = near[np.abs(self.length[near] - self.length[i]) <= tol]
+            votes.append(np.stack([self.x[j] - (c * self.x[i] - s * self.y[i]), self.y[j] - (s * self.x[i] + c * self.y[i])], axis=1))
+        votes = np.concatenate(votes) if votes else np.empty((0, 2))
+        if len(votes) == 0:
+            return None
+        _, inverse, count = np.unique(np.round(votes / (2 * tol)).astype(np.int64), axis=0, return_inverse=True, return_counts=True)
+        best = int(count.argmax())
+        if count[best] < COPY_VOTES:
+            return None
+        found = np.median(votes[inverse.reshape(-1) == best], axis=0) * self.scale
+        return float(found[0]), float(found[1])
+
+
+def _copies(views: list[View], soup: Soup, scale: float, lines: _Lines) -> list[tuple[View, View, tuple | None]]:
+    """The copies of drawings in the sheet: (the view that was copied, the view that holds the copy, the box of the copy
+    or None). The texts propose where a drawing was copied to, the lines confirm it. The holder is a view of the sheet
+    that repeats the drawing (box None), or a much bigger view the copy is drawn in (a plan in the site, turned a quarter):
+    then the box is exactly the box of the plan."""
+    moves = _copy_moves(soup, scale) if views and soup.texts and lines.tree is not None else []
+    if not moves:
+        return []
+    tx = np.array([t["x"] for t in soup.texts])
+    ty = np.array([t["y"] for t in soup.texts])
+    owner = np.full(len(tx), -1)  # the smallest view that holds each text
+    for k in sorted(range(len(views)), key=lambda k: -_area(views[k].bbox)):
+        x0, y0, x1, y1 = views[k].bbox
+        owner[(tx >= x0) & (tx <= x1) & (ty >= y0) & (ty <= y1)] = k
+    found: list[tuple[View, View, tuple | None]] = []
+    done = set()
+    for turns, shift, src, dst in moves:
+        a, b = owner[src][owner[src] >= 0], owner[dst][owner[dst] >= 0]
+        if len(a) == 0 or len(b) == 0:
+            continue
+        ka, kb = int(np.bincount(a).argmax()), int(np.bincount(b).argmax())
+        va, vb = views[ka], views[kb]
+        if ka == kb or (ka, kb) in done or (kb, ka) in done:
+            continue
+        box = _moved(va.bbox, turns, shift, scale)
+        union = _area(va.bbox) + _area(vb.bbox) - _overlap(box, vb.bbox)
+        if _overlap(box, vb.bbox) >= COPY_FIT * union:
+            where = None  # two drawings of the sheet repeat each other
+        elif _overlap(box, vb.bbox) >= COPY_INSIDE * _area(box) and vb.cells > va.cells:
+            where = (max(box[0], vb.bbox[0]), max(box[1], vb.bbox[1]), min(box[2], vb.bbox[2]), min(box[3], vb.bbox[3]))
+        else:
+            continue
+        agree = lines.share(va.bbox, turns, shift)
+        if where is None:  # two views that repeat each other: the lines of the smaller drawing are in the other
+            back = (4 - turns) % 4
+            c, s = (1, 0, -1, 0)[back], (0, 1, 0, -1)[back]
+            agree = max(agree, lines.share(vb.bbox, back, (-(c * shift[0] - s * shift[1]), -(s * shift[0] + c * shift[1]))))
+        if agree >= COPY_INK:
+            found.append((va, vb, where))
+            done.add((ka, kb))
+    return found
+
+
+def _twins(views: list[View], lines: _Lines, known: set[frozenset]) -> list[tuple[View, View]]:
+    """Views of about the same size whose lines lie on one another after a turn and a shift: a drawing and its copy, with
+    no words in common. Two floors of a house have the same walls and not the same partitions: they are no twins."""
+    pairs = []
+    if lines.tree is None:
+        return pairs
+    for i, a in enumerate(views):
+        for b in views[i + 1:]:
+            wa, ha = sorted(a.size_m(lines.scale))
+            wb, hb = sorted(b.size_m(lines.scale))  # a copy may be turned a quarter of a turn
+            if a.outline or b.outline or frozenset((id(a), id(b))) in known or a.cells < MIN_PLAN_CELLS or b.cells < MIN_PLAN_CELLS \
+                    or "site" in (a.kind, b.kind) or (a.kind != b.kind and "?" not in (a.kind, b.kind)) \
+                    or abs(wa - wb) > COPY_SIZE * max(wa, wb) or abs(ha - hb) > COPY_SIZE * max(ha, hb):
+                continue
+            for turns in range(4):
+                shift = lines.shift(a.bbox, b.bbox, turns)
+                if shift is None:
+                    continue
+                back = (4 - turns) % 4
+                c, s = (1, 0, -1, 0)[back], (0, 1, 0, -1)[back]
+                if max(lines.share(a.bbox, turns, shift),
+                       lines.share(b.bbox, back, (-(c * shift[0] - s * shift[1]), -(s * shift[0] + c * shift[1])))) >= COPY_INK:
+                    pairs.append((b, a))
+                    break
+    return pairs
+
+
+def _nest(views: list[View]) -> None:
+    """A view in the box of a bigger one is a part of that drawing: its ``parent`` is the smallest of those."""
+    for v in views:
+        hosts = [w for w in views if w is not v and w.cells > v.cells and not w.outline and _inside(v, w)]
+        v.parent = min(hosts, key=lambda w: _area(w.bbox)).id if hosts else None
+
+
+def _orthogonality(angle: np.ndarray, length: np.ndarray) -> float:
+    """The share of the lines (by length) that run along the main direction of the drawing, or across it, whatever that
+    direction is: 1 for a building, about 0.2 for contour lines."""
+    hist = np.bincount(np.minimum(angle.astype(int), 89), weights=length, minlength=90)
+    smooth = sum(np.roll(hist, k) for k in range(-ORTHO_TOLERANCE, ORTHO_TOLERANCE + 1))
+    return float(smooth.max() / max(hist.sum(), 1e-12))
+
+
+def _measure(views: list[View], soup: Soup, scale: float) -> None:
+    """What each view holds: lines, arcs, door arcs, hatches, texts, level marks, written areas, room names."""
+    from .texts import ROOM_WORDS
+
+    seg, arcs = soup.seg, soup.arcs
+    room_re = re.compile(r"\b(?:" + "|".join(sorted(map(re.escape, ROOM_WORDS), key=len, reverse=True)) + r")\b")
+    mx, my = (seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2
+    length = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
+    angle = np.degrees(np.arctan2(seg[:, 3] - seg[:, 1], seg[:, 2] - seg[:, 0])) % 90.0
+    door = (arcs[:, 4] > 70) & (arcs[:, 4] < 110) & (arcs[:, 2] * scale >= DOOR_RADIUS[0]) & (arcs[:, 2] * scale <= DOOR_RADIUS[1])
+    cx, cy = (soup.curves[:, 0] + soup.curves[:, 2]) / 2, (soup.curves[:, 1] + soup.curves[:, 3]) / 2
+    hx = np.array([(h["bbox"][0] + h["bbox"][2]) / 2 for h in soup.hatches])
+    hy = np.array([(h["bbox"][1] + h["bbox"][3]) / 2 for h in soup.hatches])
+    tile = np.array([any(w in h["pattern"].upper() for w in TILE_PATTERNS) for h in soup.hatches], bool)
+    tx, ty = np.array([t["x"] for t in soup.texts]), np.array([t["y"] for t in soup.texts])
+    is_level = np.array([bool(LEVEL_MARK.match(t["text"])) for t in soup.texts], bool)
+    is_area = np.array([bool(AREA_MARK.search(t["text"])) for t in soup.texts], bool)
+    room = [m.group() if (m := room_re.search(t["text"].upper())) else "" for t in soup.texts]
+    ix = np.array([i["x"] for i in soup.inserts])
+    iy = np.array([i["y"] for i in soup.inserts])
+    pad = FLOAT_PAD / scale
+    for v in views:
+        x0, y0, x1, y1 = v.bbox[0] - pad, v.bbox[1] - pad, v.bbox[2] + pad, v.bbox[3] + pad
+
+        def within(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+            return (x >= x0) & (x <= x1) & (y >= y0) & (y <= y1)
+
+        here = within(mx, my)
+        v.segments = int(here.sum())
+        v.ortho = _orthogonality(angle[here], length[here]) if v.segments else 0.0
+        at = within(arcs[:, 0], arcs[:, 1])
+        v.arcs, v.doors = int(at.sum()), int((at & door).sum())
+        v.curves = int(within(cx, cy).sum())
+        h = within(hx, hy)
+        v.hatches, v.tiles = int(h.sum()), int((h & tile).sum())
+        t = np.flatnonzero(within(tx, ty))
+        v.texts = len(t)
+        v.levels, v.areas = int(is_level[t].sum()), int(is_area[t].sum())
+        v.rooms = len({room[i] for i in t} - {""})
+        v.inserts = int(within(ix, iy).sum())
+
+
+def _contradicts(kind: str, v: View) -> bool:
+    """A title cannot name a view whose content says otherwise: a PROSPETTO is not the plan with its door arcs and the
+    areas of its rooms, and a PIANTA is not a facade covered with level marks."""
+    plan_like = v.doors >= PLAN_DOORS or v.areas >= PLAN_AREAS
+    if kind in ("elevation", "section"):
+        return plan_like and v.levels < LEVEL_MARKS
+    if kind == "plan":
+        return v.levels >= LEVEL_MARKS and not plan_like
+    return False
+
+
+def _side(box: tuple, bbox: tuple) -> str:
+    """Where a title sits compared with a view: in it, above it, below it, left or right of it."""
+    if _gap(box, bbox) == 0:
+        return "in"
+    if box[1] >= bbox[3]:
+        return "above"
+    if box[3] <= bbox[1]:
+        return "below"
+    return "left" if box[2] <= bbox[0] else "right"
+
+
+def _assign_titles(views: list[View], titles: list[dict], frames: list[dict], scale: float) -> None:
+    """Each title names the view nearest to it (the frame it is written in counts, not the text alone), within
+    TITLE_REACH, but never a view whose content says it cannot be. Where two views are about as near, the one that has
+    no title yet is named, and when both are alike the habit of the sheet decides: the titles that are clearly near one
+    view (and outside it) say whether this sheet puts them above or below their drawings. A title written inside a view
+    belongs to it. A frame within LINK of the view it names is a part of it."""
+    from collections import Counter
+
+    box_of = {id(f["title"]): f["box"] for f in frames}
+    reach, tie = TITLE_REACH / scale, TITLE_TIE / scale
+    options = []
     for t in titles:
-        best, best_d = None, (LABEL_REACH if t.get("far") else TITLE_REACH) / scale
-        for v in views:
-            x0, y0, x1, y1 = v.bbox
-            d = math.hypot(max(x0 - t["x"], 0, t["x"] - x1), max(y0 - t["y"], 0, t["y"] - y1))
-            if d < best_d or (d == best_d and best is not None and v.cells < best.cells):
-                best, best_d = v, d
-        if best is not None:
-            best.title_items.append(t)
+        box = box_of.get(id(t), (t["x"], t["y"], t["x"], t["y"]))
+        near = sorted(((_gap(box, v.bbox), v.cells, v) for v in views
+                       if _gap(box, v.bbox) <= reach and not _contradicts(t["kind"], v)), key=lambda o: o[:2])
+        options.append((t, box, near))
+    sure = Counter(_side(box, near[0][2].bbox) for _, box, near in options
+                   if near and near[0][0] > 0 and (len(near) == 1 or near[1][0] - near[0][0] > tie))
+    habit = sure.most_common(1)[0][0] if sure else None
+    chosen = [(t, box, [o for o in near if o[0] - near[0][0] <= (0 if near[0][0] == 0 else tie)])  # in a view: that view
+              for t, box, near in options if near]
+    for t, box, close in sorted(chosen, key=lambda c: len(c[2]) > 1):  # the titles that are clearly near one view first
+        free = [o for o in close if not o[2].title_items] or close  # a title between two views names the one with no title
+        d, _, v = next((o for o in free if _side(box, o[2].bbox) == habit), free[0])
+        v.title_items.append(t)
+        if d <= LINK / scale and id(t) in box_of:
+            v.bbox = (min(v.bbox[0], box[0]), min(v.bbox[1], box[1]), max(v.bbox[2], box[2]), max(v.bbox[3], box[3]))
+
+
+def _name(v: View, scale: float) -> None:
+    """The type of a view: what its title says, else what it holds."""
+    v.titles = [t["text"] for t in v.title_items]
+    if v.title_items:
+        cx, cy = (v.bbox[0] + v.bbox[2]) / 2, (v.bbox[1] + v.bbox[3]) / 2  # the biggest letters, then the nearest
+        best = max(v.title_items, key=lambda t: (round(t["height"], 3), -math.hypot(t["x"] - cx, t["y"] - cy)))
+        v.kind, v.kind_from = best["kind"], "titolo"
+    else:
+        v.kind, why = _kind_from_content(v, scale)
+        v.kind_from = f"contenuto: {why}" if why else ""
+
+
+def _relate(views: list[View], scale: float) -> None:
+    """Views that hold one another: a plan much bigger than another view that has the same title, or that lies in it, is
+    the site around it."""
+    for a in views:
+        for b in views:
+            if a is b or a.kind != "plan" or b.kind not in ("plan", "roof"):
+                continue
+            same = bool({t["text"].upper() for t in a.title_items} & {t["text"].upper() for t in b.title_items})
+            if same and b.kind == "plan" and a.cells >= SITE_RATIO * b.cells:
+                a.kind, a.kind_from = "site", f"contiene la vista {b.id}, che ha lo stesso titolo"
+            elif b.kind == "plan" and a.cells >= SITE_RATIO_OTHER * b.cells and b.cells >= MIN_PLAN_CELLS:
+                a.kind, a.kind_from = "site", f"molto piu' grande della vista {b.id}: il lotto intorno alla casa"
+            elif b.parent == a.id and a.cells >= (COPY_SITE_RATIO if b.copy_of else SITE_RATIO) * b.cells:
+                a.kind, a.kind_from = "site", f"contiene la vista {b.id}: il lotto intorno alla casa"
+
+
+def _kind_from_content(v: View, scale: float) -> tuple[str, str]:
+    """The type of a view with no title, from what it holds: a plan has door arcs and the areas of its rooms, a facade
+    is wide and low with level marks, a site has lines running every way (contours, boundaries) over many metres, a
+    roof plan has tiles. When nothing says, '?'."""
+    w, h = v.size_m(scale)
+    aspect = max(w, h) / max(min(w, h), 1e-9)
+    if v.segments >= ORTHO_MIN_LINES and v.ortho < SITE_ORTHO and max(w, h) >= SITE_SIZE:
+        return "site", "linee in ogni direzione (curve di livello, confini) su molti metri"
+    if (v.doors >= PLAN_DOORS or v.areas >= PLAN_AREAS or (v.doors >= 2 and aspect < FACADE_ASPECT)) \
+            and v.levels < LEVEL_MARKS:
+        return "plan", f"{v.doors} archi di porta, {v.areas} superfici scritte"
+    if v.rooms >= SECTION_ROOMS and v.doors < PLAN_DOORS and v.areas < PLAN_AREAS:
+        return "section", f"{v.rooms} nomi di locali scritti e nessuna porta"
+    if v.tiles >= ROOF_TILES and v.tiles * 5 >= v.hatches and v.levels == 0 and aspect < FACADE_ASPECT * 1.5:
+        return "roof", f"{v.tiles} campiture di coppi"
+    if v.levels >= LEVEL_MARKS or (aspect >= FACADE_ASPECT and v.doors == 0):
+        return "elevation", f"larga e bassa ({w:.0f} x {h:.0f} m)" if v.levels < LEVEL_MARKS else f"{v.levels} quote di livello"
+    return "?", ""
 
 
 def _count_named(views: list[View], soup: Soup, rules=None) -> None:
@@ -503,69 +1190,6 @@ def _count_named(views: list[View], soup: Soup, rules=None) -> None:
         v.named = n
 
 
-def _describe(v: View, soup: Soup, scale: float) -> None:
-    x0, y0, x1, y1 = v.bbox
-    v.titles = [t["text"] for t in v.title_items]
-    seg = soup.seg
-    if len(seg):
-        mx, my = (seg[:, 0] + seg[:, 2]) / 2, (seg[:, 1] + seg[:, 3]) / 2
-        v.segments = int(np.count_nonzero((mx >= x0) & (mx <= x1) & (my >= y0) & (my <= y1)))
-    if len(soup.arcs):
-        ax, ay, sweep = soup.arcs[:, 0], soup.arcs[:, 1], soup.arcs[:, 4]
-        here = (ax >= x0) & (ax <= x1) & (ay >= y0) & (ay <= y1)
-        v.arcs = int(here.sum())
-        radius = soup.arcs[:, 2] * scale
-        v.doors = int(np.count_nonzero(here & (sweep > 70) & (sweep < 110) & (radius >= DOOR_RADIUS[0])
-                                       & (radius <= DOOR_RADIUS[1])))
-    if len(soup.curves):
-        cx, cy = (soup.curves[:, 0] + soup.curves[:, 2]) / 2, (soup.curves[:, 1] + soup.curves[:, 3]) / 2
-        v.curves = int(np.count_nonzero((cx >= x0) & (cx <= x1) & (cy >= y0) & (cy <= y1)))
-    v.hatches = sum(1 for h in soup.hatches if x0 <= (h["bbox"][0] + h["bbox"][2]) / 2 <= x1
-                    and y0 <= (h["bbox"][1] + h["bbox"][3]) / 2 <= y1)
-    v.texts = sum(1 for t in soup.texts if x0 <= t["x"] <= x1 and y0 <= t["y"] <= y1)
-    v.inserts = sum(1 for i in soup.inserts if x0 <= i["x"] <= x1 and y0 <= i["y"] <= y1)
-    if v.title_items:
-        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2  # the title nearest to the view says what it is
-        v.kind, v.kind_from = min(v.title_items, key=lambda t: math.hypot(t["x"] - cx, t["y"] - cy))["kind"], "titolo"
-    else:
-        v.kind, v.kind_from = _kind_from_shape(v, scale), "forma"
-
-
-def _relate(views: list[View], scale: float) -> None:
-    """Views that repeat one another: a plan much bigger than another view that has the same title is the site around
-    it; two untitled views of the same size are copies of one drawing."""
-    for a in views:
-        for b in views:
-            if a is b or a.kind != "plan" or b.kind != "plan":
-                continue
-            same = bool({t["text"].upper() for t in a.title_items} & {t["text"].upper() for t in b.title_items})
-            if same and a.cells >= SITE_RATIO * b.cells:
-                a.kind, a.kind_from = "site", f"contiene la vista {b.id}, che ha lo stesso titolo"
-            elif a.cells >= SITE_RATIO_OTHER * b.cells and b.cells >= MIN_PLAN_CELLS:
-                a.kind, a.kind_from = "site", f"molto piu' grande della vista {b.id}: il lotto intorno alla casa"
-    for i, a in enumerate(views):
-        for b in views[i + 1:]:
-            wa, ha = a.size_m(scale)
-            wb, hb = b.size_m(scale)
-            similar = abs(wa - wb) <= 0.06 * max(wa, wb) and abs(ha - hb) <= 0.06 * max(ha, hb)
-            if similar and not a.title_items and not b.title_items \
-                    and a.kind in ("plan", "?") and b.kind in ("plan", "?"):
-                b.copy_of = a.id
-                if b.kind == "?":
-                    b.kind, b.kind_from = a.kind, f"copia della vista {a.id}"
-
-
-def _kind_from_shape(v: View, scale: float) -> str:
-    """The type of an untitled view, from what it holds."""
-    w, h = v.size_m(scale)
-    if v.doors >= 2:
-        return "plan"
-    aspect = max(w, h) / max(min(w, h), 1e-9)
-    if aspect >= 2.2 and v.doors == 0:
-        return "elevation"
-    return "?"
-
-
 # --- what to do with the sheet ----------------------------------------------------------------
 
 @dataclass
@@ -582,21 +1206,23 @@ class Analysis:
         rows = []
         for v in self.views:
             w, h = v.size_m(scale)
-            rows.append({"id": v.id, "tipo": v.kind, "da": v.kind_from, "larghezza_m": round(w, 1),
-                         "altezza_m": round(h, 1), "titolo": " | ".join(v.titles), "porte": v.doors,
-                         "copia_di": v.copy_of or "", "usata": v is self.plan})
+            rows.append({"id": v.id, "tipo": v.kind, "da": v.kind_from, "larghezza_m": round(float(w), 1),
+                         "altezza_m": round(float(h), 1), "titolo": " | ".join(v.titles), "porte": v.doors,
+                         "copia_di": v.copy_of or "", "dentro_la_vista": v.parent or "", "usata": v is self.plan})
         return rows
 
 
 def choose_plan(views: list[View], wanted: int | None = None) -> tuple[View | None, str]:
     """The view to convert: the one asked for, else the biggest plan that is neither the site around a building nor
-    a copy of another view, else the view with the most door arcs."""
+    a copy of another view (a plan found inside a bigger view, whose box is only approximate, comes after the others),
+    else the view with the most door arcs."""
     if wanted is not None:
         for v in views:
             if v.id == wanted:
                 return v, f"la vista {v.id} indicata da te"
         return None, f"la vista {wanted} non esiste"
     plans = [v for v in views if v.kind == "plan" and v.copy_of is None]
+    plans = [v for v in plans if v.parent is None] or plans
     if plans:
         best = max(plans, key=lambda v: (v.named > 0 or v.doors > 0, v.cells))
         return best, "la pianta piu' grande"
@@ -656,9 +1282,11 @@ def write_views_image(analysis: Analysis, path) -> "Path":
         colour = "#d62728" if v is analysis.plan else {"elevation": "#1f77b4", "section": "#9467bd", "roof": "#ff7f0e",
                                                         "site": "#2ca02c"}.get(v.kind, "#555555")
         ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec=colour, lw=1.8 if v is analysis.plan else 1.0))
-        label = f"{v.id}: {_KIND_IT.get(v.kind, v.kind)}" + (f"  \"{v.titles[0]}\"" if v.titles else "")
+        label = f"{v.id}: {_KIND_IT.get(v.kind, v.kind)}" + (f"  \"{v.titles[0][:40]}\"" if v.titles else "")
         if v.copy_of:
             label += f" (copia di {v.copy_of})"
+        if v.parent:
+            label += f" (nella vista {v.parent})"
         if v.matched:
             label += f"  -> {v.matched}"
         ax.text(x0, y1, label, fontsize=8, color=colour, va="bottom", ha="left",
