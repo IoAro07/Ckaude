@@ -275,6 +275,18 @@ def test_a_title_inside_a_view_names_that_view():
     assert next(v for v in views if v.kind == "plan").titles == ["PIANTA PIANO TERRA"]
 
 
+@pytest.mark.parametrize("text, kind", [
+    ("STATO DI FATTO - PROSPETTO SUD", "elevation"), ("1 - PIANTA PIANO TERRA", "plan"), ("A) SEZIONE B-B", "section"),
+    ("TAV. 3 PROSPETTI", "elevation"), ("Stato di progetto: planimetria piano primo", "plan"), ("Fronte principale", "elevation"),
+    ("SEZ. A-A", "section"), ("N 2 PIANTA COPERTURA", "roof"), ("PROGETTO DI RISTRUTTURAZIONE", None), ("STATO DI FATTO", None),
+    ("3 CAMERE", None), ("TETTOIA IN ACCIAIO", None),
+])
+def test_the_state_and_the_number_before_the_word_do_not_change_what_a_title_says(text, kind):
+    from dwg2c4d.autodetect import _title_kind
+
+    assert _title_kind(text) == kind
+
+
 def test_a_title_written_twice_counts_once_and_a_caption_with_a_number_is_a_title():
     doc, msp = new_sheet()
     add_elevation(msp, 0, 0, marks=False)

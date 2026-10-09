@@ -101,14 +101,18 @@ OVERRIDE_MARGIN = 1.0  # the header is overruled only by a unit that leads by th
 # the words that say what a view is, strongest first (the text is upper-cased and stripped of punctuation)
 VIEW_WORDS = (
     ("roof", ("PLANIMETRIA COPERTURA", "PIANTA COPERTURA", "PIANTA TETTO", "COPERTURA", "COPERTURE", "TETTO", "ROOF PLAN", "ROOF")),
-    ("elevation", ("PROSPETTO", "PROSPETTI", "ALZATO", "FACCIATA", "ELEVATION", "ELEVAZIONE")),
-    ("section", ("SEZIONE", "SEZIONI", "SECTION")),
+    ("elevation", ("PROSPETTO", "PROSPETTI", "PROSP", "FRONTE", "FRONTI", "ALZATO", "FACCIATA", "ELEVATION", "ELEVAZIONE")),
+    ("section", ("SEZIONE", "SEZIONI", "SEZ", "SECTION")),
     ("site", ("PLANIMETRIA GENERALE", "INQUADRAMENTO", "SITE PLAN", "PLANIMETRIA DI INSERIMENTO", "ESTRATTO",
               "PLANIMETRIA CATASTALE", "CATASTALE", "PLANIMETRIA DI ZONA", "PLANIMETRIA LOTTO", "ORTOFOTO")),
     ("detail", ("DETTAGLIO", "PARTICOLARE", "DETAIL")),
-    ("plan", ("PIANTA", "PLANIMETRIA", "PIANO TERRA", "PIANO PRIMO", "PIANO SECONDO", "PIANO INTERRATO", "FLOOR PLAN",
-              "GROUND FLOOR", "FIRST FLOOR", "STATO DI FATTO", "STATO DI PROGETTO", "PROGETTO", "PLAN")),
+    ("plan", ("PIANTA", "PIANTE", "PLANIMETRIA", "PLANIMETRIE", "PIANO TERRA", "PIANO PRIMO", "PIANO SECONDO", "PIANO INTERRATO",
+              "FLOOR PLAN", "GROUND FLOOR", "FIRST FLOOR", "PLAN")),
 )
+# what a caption may say before the word that tells the type: the state of the drawing ("STATO DI FATTO - PROSPETTO SUD")
+STATES = ("STATO DI FATTO", "STATO DI PROGETTO", "STATO ATTUALE", "STATO DI COMPARAZIONE", "STATO SOVRAPPOSTO", "STATO MODIFICATO",
+          "PROGETTO", "RILIEVO", "ESISTENTE", "VARIANTE")
+NUMBER = re.compile(r"^(?:(?:TAV|TAVOLA|ALL|ALLEGATO|FIG|DIS|N|NR)\s+)?(?:[0-9]{1,2}|[A-Z])\s+(?=[A-Z]{3})")  # 1 - PIANTA  A) SEZIONE  TAV 3 PROSPETTO
 
 
 @dataclass
@@ -456,8 +460,16 @@ def _sample_points(soup: Soup, step: float) -> np.ndarray:
 
 
 def _title_kind(text: str) -> str | None:
-    """What a title says the view is: the text must start with one of the view words (whole words: TETTOIA is no TETTO)."""
+    """What a title says the view is: the text must start with one of the view words (whole words: TETTOIA is no TETTO),
+    after the number of the drawing and the state it shows ("1 - STATO DI FATTO - PROSPETTO SUD")."""
     up = " ".join(re.split(r"[^A-Z0-9']+", text.upper())).strip()
+    while True:
+        rest = next((up[len(w) + 1:] for w in STATES if up.startswith(w + " ")), None)
+        if rest is None:
+            rest = NUMBER.sub("", up, count=1)
+        if rest == up:
+            break
+        up = rest
     for kind, words in VIEW_WORDS:
         for w in words:
             if up == w or up.startswith(w + " "):
