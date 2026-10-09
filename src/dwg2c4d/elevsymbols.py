@@ -70,6 +70,12 @@ BAY_MIN = 1.0  # m: an empty rectangle this wide and tall, with fewer bare corne
 STRUCTURE_MIN = 4  # a symbol of at least this many leaves is an opening even if its corners are not bare
 #                    (a frame with a frame inside is one too)
 GLAZED_MIN = 2  # a leaf divided in at least this many panes is a sash; a plain one is a shutter
+SLAT_MIN = 3  # a leaf cut across by at least this many lines ...
+SLAT_PITCH = 0.30  # m: ... no further apart than this, its cells ...
+SLAT_ASPECT = 1.5  # ... at least this many times as wide as tall, is louvred: a shutter, not glazed
+SHUTTER_SHARE = 0.6  # alike plain leaves at both ends of a row of plain ones are shutters if each is at most this share
+#                      of the width between them (two shutters close one window: half of it each)
+TOUCH = 0.03  # m: leaves this close, or overlapping, touch
 CAP_GAP = 0.05  # m: the faces of an arch's head start this close to the top of the frame ...
 CAP_RISE = 0.55  # ... rise no more than this share of its width and together span it
 CAP_CURVE = 0.01  # m: a curved side keeps at least 5 corners when simplified this much; a gable keeps 3
@@ -173,6 +179,7 @@ class _Box:
     arched: bool = False
     free: int = 4  # bare corners
     headed: bool = False  # an arched head is drawn over it
+    glass: bool = False  # it is a hatch or a solid: the glass of a sash
     kids: list["_Box"] = field(default_factory=list)
 
     @property
@@ -212,6 +219,7 @@ class _Linework:
     nodes: Nodes  # where lines end, by rounded position, and the directions they leave in
     arrows: list[tuple[float, float]]  # corners of the filled triangles that are arrowheads of dimension lines
     grid: list[Polygon] = field(default_factory=list)  # faces of the horizontal and vertical lines alone, if others exist
+    glass: list[Polygon] = field(default_factory=list)  # the outlines that are hatches and solids
 
 
 # --- openings from the shapes ---------------------------------------------------------------------------------
@@ -274,15 +282,16 @@ def _grid(lines: list[LineString]) -> list[Polygon]:
 
 def _linework(items: list[Item], area: tuple[float, float, float, float]) -> _Linework:
     lines = _lines(items, area)
-    outlines = [g for it in items for p in it.prims for g in getattr(p.geom, "geoms", [p.geom])
+    polygons = [(p.kind == "fill", g) for it in items for p in it.prims for g in getattr(p.geom, "geoms", [p.geom])
                 if g.geom_type == "Polygon"]
+    outlines, glass = [g for _, g in polygons], [g for fill, g in polygons if fill]
     arrows = [(x, y) for g in outlines if len({(round(x, 3), round(y, 3)) for x, y in g.exterior.coords}) == 3
               and max(g.bounds[2] - g.bounds[0], g.bounds[3] - g.bounds[1]) <= ARROW_MAX for x, y in g.exterior.coords]
     if not lines:
-        return _Linework([], [], outlines, {}, arrows)
+        return _Linework([], [], outlines, {}, arrows, [], glass)
     noded = unary_union(lines)
     return _Linework(lines, list(polygonize(noded)), outlines, _nodes(list(getattr(noded, "geoms", [noded]))), arrows,
-                     _grid(lines))
+                     _grid(lines), glass)
 
 
 def _junction(x: float, y: float, sx: int, sy: int, nodes: Nodes) -> bool:
@@ -402,12 +411,14 @@ def _is_dimension(b: _Box, arrows: list[tuple[float, float]]) -> bool:
 def _boxes(lw: _Linework, heads: list[Head]) -> list[_Box]:
     """Rectangles and arches of the drawing, from the faces of its linework and from its closed outlines."""
     found: dict[tuple, _Box] = {}
+    glass = {id(g) for g in lw.glass}
     for poly, drawn in [(g, True) for g in lw.outlines] + [(g, False) for g in lw.faces + lw.grid]:  # an outline is whole where
         b = _box_of(poly, drawn)  # a line in front cuts the face it encloses
         if b is not None and not _is_dimension(b, lw.arrows):
             b.free = _bare_corners(b.x0, b.y0, b.x1, b.y1, lw.nodes)
             b.headed = not _is_strip(b) and _apex(b.x0, b.x1, b.y1, heads) is not None
-            found.setdefault((round(b.x0, 2), round(b.y0, 2), round(b.x1, 2), round(b.y1, 2)), b)
+            b.glass = id(poly) in glass
+            found.setdefault((round(b.x0, 2), round(b.y0, 2), round(b.x1, 2), round(b.y1, 2)), b).glass |= b.glass
     return list(found.values())
 
 
@@ -431,14 +442,24 @@ def _nest(boxes: list[_Box]) -> list[_Box]:
     return roots
 
 
+def _flanked(b: _Box, solid: list[_Box]) -> bool:
+    """Leaves of the same height touch it at both sides: the plain middle of a window between its shutters."""
+    def beside(x: float, side: int) -> bool:
+        return any(abs((s.x1 if side < 0 else s.x0) - x) <= TOUCH and abs(s.y0 - b.y0) <= ALIGN_TOL
+                   and abs(s.y1 - b.y1) <= ALIGN_TOL for s in solid)
+
+    return beside(b.x0, -1) and beside(b.x1, 1)
+
+
 def _outermost(boxes: list[_Box]) -> list[_Box]:
     """The outermost rectangles, without the bays of the wall: empty rectangles of some size whose corners are all
     junctions with lines that go on (the space between two pilasters, under a canopy). A rectangle holding nothing
-    but bays is a bay too."""
+    but bays is a bay too. One with a leaf of its own height at each side is no bay: it is between its shutters."""
     while True:
         roots = _nest(boxes)
-        kept = [b for b in boxes
-                if b.kids or b.arched or b.headed or min(b.w, b.h) < BAY_MIN or b.free >= MIN_FREE_CORNERS]
+        real = [bool(b.kids or b.arched or b.headed or b.free >= MIN_FREE_CORNERS) for b in boxes]
+        solid = [b for b, r in zip(boxes, real) if r and not _is_strip(b)]
+        kept = [b for b, r in zip(boxes, real) if r or min(b.w, b.h) < BAY_MIN or _flanked(b, solid)]
         if len(kept) == len(boxes):
             return roots
         boxes = kept
@@ -457,11 +478,21 @@ def _frames(root: _Box, out: list[_Box]) -> None:
     out.append(root)
 
 
+def _has_glass(b: _Box) -> bool:
+    """A hatch or a solid lies in the leaf: it is a sash with its glass drawn, whatever its panes."""
+    return b.glass or any(_has_glass(k) for k in b.kids)
+
+
+def _slats(cells: list[_Box]) -> bool:
+    """Cells stacked at the pitch of a louvre, wider than tall: the slats of a shutter, not the panes of a sash."""
+    return len(cells) >= SLAT_MIN and all(k.h <= SLAT_PITCH + NODE_TOL and k.w >= SLAT_ASPECT * k.h for k in cells)
+
+
 def _panes(b: _Box) -> int:
     """In how many panes a leaf is divided: a shutter holds one inset, a sash is cut by its glazing bars."""
     while len(b.kids) == 1:
         b = b.kids[0]
-    return max(1, len(b.kids))
+    return 1 if _slats(b.kids) else max(1, len(b.kids))
 
 
 def _plain(g: _Group) -> bool:
@@ -553,18 +584,28 @@ def _columns(g: _Group) -> list[list[_Box]]:
 
 def _describe(g: _Group) -> None:
     """The clear width of the symbol and the glass. Shutters folded beside the sashes (or the piers of the wall beside a
-    door) are plain leaves, one at each end of the row with at least one sash between them; a plain piece much narrower
-    than what remains, next to them, is a jamb. What is left is the clear width."""
+    door) are plain leaves, one at each end of the row with at least one sash between them (or, when no leaf has glazing
+    bars, alike and narrow beside the rest); a plain piece much narrower than what remains, next to them, is a jamb.
+    What is left is the clear width."""
     g.core = (g.x0, g.x1)
     columns = _columns(g)
 
     def plain(c: list[_Box]) -> bool:
-        return sum(_panes(k) for k in c) < GLAZED_MIN
+        return _slats(c) or sum(_panes(k) for k in c) < GLAZED_MIN
 
     def extent(cs: list[list[_Box]]) -> tuple[float, float]:
         return min(k.x0 for c in cs for k in c), max(k.x1 for c in cs for k in c)
 
-    if len(columns) >= 3 and plain(columns[0]) and plain(columns[-1]) and not all(plain(c) for c in columns[1:-1]):
+    def folded() -> bool:
+        """Alike leaves at both ends, much narrower than the row between them and with no glass drawn in them:
+        shutters folded beside plain sashes."""
+        first, last, middle = extent(columns[:1]), extent(columns[-1:]), extent(columns[1:-1])
+        return abs((first[1] - first[0]) - (last[1] - last[0])) <= ALIGN_TOL \
+            and first[1] - first[0] <= SHUTTER_SHARE * (middle[1] - middle[0]) \
+            and not any(_has_glass(k) for c in (columns[0], columns[-1]) for k in c)
+
+    if len(columns) >= 3 and plain(columns[0]) and plain(columns[-1]) \
+            and (not all(plain(c) for c in columns[1:-1]) or folded()):
         columns = columns[1:-1]
         while len(columns) > 1:
             x0, x1 = extent(columns)

@@ -752,3 +752,70 @@ def test_a_bay_of_the_wall_with_a_brace_across_it_is_still_a_bay():
     msp.add_line((10, 0.0), (12.5, 3.4))  # a diagonal brace across the bay
     res = _read(doc)
     assert [s.kind for s in res.symbols] == ["window"]
+
+
+# --- shutters and sashes that are alike ----------------------------------------------------------------------------
+
+def test_a_plain_pane_between_two_plain_shutters_is_the_window_and_the_shutters_fold_beside_it():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 2.4, 1.0, 3.0, 2.4)
+    _lines(msp, 3.0, 1.0, 4.2, 2.4)  # nothing inside it: every corner is a junction with the shutters' lines
+    _lines(msp, 4.2, 1.0, 4.8, 2.4)
+    _lines(msp, 6, 0, 7, 2.1)
+    res = _read(doc)
+    win = _find(res, "window", 3.6)
+    assert (win.x0, win.x1) == pytest.approx((3.0, 4.2), abs=0.01)
+    assert win.full_x == pytest.approx((2.4, 4.8), abs=0.01)
+    assert len(res.symbols) == 2
+
+
+def test_a_pane_with_one_inset_between_plain_shutters_is_the_window():
+    doc, msp = _doc()
+    _facade(msp)
+    for x0, x1 in ((2.4, 3.0), (3.0, 4.2), (4.2, 4.8)):
+        _ring(msp, x0, 1.0, x1, 2.4)
+        _ring(msp, x0 + 0.05, 1.05, x1 - 0.05, 2.35)
+    _lines(msp, 6, 0, 7, 2.1)
+    win = _find(_read(doc), "window", 3.6)
+    assert (win.x0, win.x1) == pytest.approx((3.0, 4.2), abs=0.01)
+    assert win.full_x == pytest.approx((2.4, 4.8), abs=0.01)
+
+
+def test_two_single_pane_sashes_between_louvred_shutters_are_one_window_of_their_own_width():
+    doc, msp = _doc()
+    _facade(msp)
+    for x0 in (3.6, 4.2):  # the sashes: a leaf and its single pane
+        _ring(msp, x0, 1.0, x0 + 0.6, 2.4)
+        _ring(msp, x0 + 0.04, 1.04, x0 + 0.56, 2.36)
+    for x0, draw in ((3.0, _lines), (4.8, _ring)):  # the shutters: slats every 0.2 m, in loose lines and in a ring
+        draw(msp, x0, 1.0, x0 + 0.6, 2.4)
+        for k in range(1, 7):
+            msp.add_line((x0, 1.0 + 0.2 * k), (x0 + 0.6, 1.0 + 0.2 * k))
+    _lines(msp, 8, 0, 9, 2.1)
+    win = _find(_read(doc), "window", 4.2)
+    assert (win.x0, win.x1) == pytest.approx((3.6, 4.8), abs=0.01)
+    assert win.full_x == pytest.approx((3.0, 5.4), abs=0.01)
+
+
+def test_three_alike_plain_sashes_are_one_window_not_a_window_between_shutters():
+    doc, msp = _doc()
+    _facade(msp)
+    for x0 in (3.0, 3.6, 4.2):
+        _ring(msp, x0, 1.0, x0 + 0.6, 2.4)
+        _ring(msp, x0 + 0.04, 1.04, x0 + 0.56, 2.36)
+    _lines(msp, 8, 0, 9, 2.1)
+    win = _find(_read(doc), "window", 3.9)
+    assert (win.x0, win.x1) == pytest.approx((3.0, 4.8), abs=0.01) and win.full_x is None
+
+
+def test_four_sashes_with_their_glass_hatched_are_one_window_not_a_window_between_shutters():
+    doc, msp = _doc()
+    _facade(msp)
+    for x0 in (3.0, 3.45, 3.9, 4.35):  # 0.45 m leaves alike: only a hatch says the outer ones hold glass
+        _lines(msp, x0, 1.0, x0 + 0.45, 2.4)
+        hatch = msp.add_hatch(dxfattribs={"layer": "0"})
+        hatch.paths.add_polyline_path([(x0 + 0.05, 1.05), (x0 + 0.4, 1.05), (x0 + 0.4, 2.35), (x0 + 0.05, 2.35)])
+    _lines(msp, 8, 0, 9, 2.1)
+    win = _find(_read(doc), "window", 3.9)
+    assert (win.x0, win.x1) == pytest.approx((3.0, 4.8), abs=0.01) and win.full_x is None
