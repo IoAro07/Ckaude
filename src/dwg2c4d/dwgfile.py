@@ -9,6 +9,7 @@ ezdxf reads DXF only. DWG is converted first with, in order of preference:
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import shutil
 import subprocess
@@ -97,6 +98,8 @@ def _run_oda(exe: str, dwg: Path) -> Drawing:
 
 
 def open_drawing(path: str | Path, converter: str | None = None) -> Drawing:
+    # ezdxf warns once per object it cannot copy (a drawing with proxy objects: hundreds of thousands of lines)
+    logging.getLogger("ezdxf").setLevel(logging.ERROR)
     path = Path(path)
     if not path.is_file():
         raise ConversionError(f"File non trovato: {path}")
