@@ -460,3 +460,14 @@ def test_a_sheet_with_elevations_and_no_plan_says_so_instead_of_converting_junk(
     with pytest.raises(ConversionError, match="nessuna e' la pianta di un edificio"):
         convert(path, tmp_path / "x.obj", Config(auto=True, images=True))
     assert (tmp_path / "x_viste.png").exists()  # the sheet as understood: the way to choose
+
+
+def test_a_failure_in_the_matching_never_stops_the_conversion(tmp_path, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("dwg2c4d.pipeline.match_views", broken)
+    path = sheet_with_free_elevations(tmp_path / "boom.dxf")
+    report = convert(path, tmp_path / "boom.obj", Config(auto=True))
+    assert report.wall_pieces > 0 and not any(o.from_elevation for o in report.openings)
+    assert any("non usati" in w and "boom" in w for w in report.warnings)
