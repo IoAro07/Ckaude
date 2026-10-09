@@ -367,3 +367,195 @@ def test_an_empty_view_is_not_an_error():
     doc, _ = _doc()
     res = _read(doc)
     assert res.symbols == [] and res.floor is None and res.levels == []
+
+
+# --- what the real sheets taught --------------------------------------------------------------------------------
+
+def test_the_loops_of_a_vine_along_a_beam_are_not_an_arched_head():
+    doc, msp = _doc()
+    _facade(msp)
+    msp.add_line((6, 0), (6, 5))  # two posts and a beam: a pergola, an empty bay and not an opening
+    msp.add_line((12, 0), (12, 5))
+    msp.add_line((5.5, 3.0), (12.5, 3.0))
+    for k in range(40):
+        msp.add_circle((6.1 + 0.15 * k, 3.06), 0.06)
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    res = _read(doc)
+    assert [s.kind for s in res.symbols] == ["window"]
+
+
+def test_a_stair_cutting_a_corner_does_not_make_an_arch():
+    doc, msp = _doc()
+    _facade(msp)
+    # the face under a stair: a frame whose top right corner is cut by the stair's underside
+    msp.add_lwpolyline([(6, 0), (7.6, 0), (7.6, 2.4), (7.0, 3.0), (6, 3.0)], close=True)
+    for x in (6, 7.6):  # the posts of the frame go on past the corners: not a bare opening
+        msp.add_line((x, -0.5), (x, 3.5))
+    msp.add_line((5.5, 0.0), (8, 0.0))
+    msp.add_line((5.5, 3.0), (8, 3.0))
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    res = _read(doc)
+    assert [s.kind for s in res.symbols] == ["window"]
+
+
+def test_a_shutter_trimmed_by_the_roof_is_still_a_shutter():
+    doc, msp = _doc()
+    _facade(msp)
+    _ring(msp, 3.0, 1.0, 3.3, 2.4)  # left shutter and its inset
+    _ring(msp, 3.04, 1.04, 3.26, 2.36)
+    for x0 in (3.3, 3.6):  # two sashes with a glazing bar
+        _ring(msp, x0, 1.0, x0 + 0.3, 2.4)
+        _ring(msp, x0 + 0.04, 1.04, x0 + 0.26, 2.36)
+        msp.add_line((x0 + 0.04, 1.7), (x0 + 0.26, 1.7))
+    msp.add_lwpolyline([(3.9, 1.0), (4.2, 1.0), (4.2, 2.0), (4.0, 2.4), (3.9, 2.4)], close=True)  # right shutter, a corner cut
+    msp.add_lwpolyline([(3.94, 1.04), (4.16, 1.04), (4.16, 1.98), (3.98, 2.36), (3.94, 2.36)], close=True)
+    res = _read(doc)
+    win = res.symbols[0]
+    assert len(res.symbols) == 1
+    assert (win.x1 - win.x0) == pytest.approx(0.6, abs=0.01) and win.full_x == pytest.approx((3.0, 4.2), abs=0.01)
+
+
+def test_a_chimney_stack_above_the_roof_is_not_a_window_but_a_gable_window_is():
+    doc, msp = _doc()
+    _facade(msp)
+    msp.add_line((0, 5), (10, 6.6))  # the two slopes of a gable
+    msp.add_line((10, 6.6), (20, 5))
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    _lines(msp, 9.5, 5.3, 10.5, 6.0)  # a window in the gable, under the ridge
+    _lines(msp, 4.1, 5.7, 4.6, 6.2)  # a chimney on the slope: a stack with a cap line over it, no long line above
+    msp.add_line((4.0, 6.4), (4.7, 6.4))
+    res = _read(doc)
+    assert sorted(round((s.x0 + s.x1) / 2, 1) for s in res.symbols) == [3.5, 10.0]
+
+
+def test_a_named_window_keeps_its_own_width_when_the_shape_adds_a_shutter():
+    doc, msp = _doc()
+    _facade(msp)
+    doc.layers.add("INFISSI")
+    _ring(msp, 3.0, 1.0, 3.6, 2.4, "INFISSI")  # the sash, named
+    _ring(msp, 3.05, 1.05, 3.55, 2.35, "INFISSI")
+    _ring(msp, 3.6, 1.0, 4.2, 2.4)  # the shutter beside it, layer 0
+    _ring(msp, 3.65, 1.05, 4.15, 2.35)
+    _lines(msp, 6, 0, 7, 2.1)
+    res = _read(doc)
+    win = _find(res, "window", 3.3)
+    assert (win.x0, win.x1) == pytest.approx((3.0, 3.6), abs=0.01) and win.full_x == pytest.approx((3.0, 4.2), abs=0.01)
+
+
+def test_a_door_frame_open_at_the_bottom_is_found_whole():
+    doc, msp = _doc()
+    _facade(msp)
+    # the frame and the leaf both stand on the floor line: the frame is no closed ring; the leaf is cut in slats
+    msp.add_line((6, 0), (6, 2.15))
+    msp.add_line((6.8, 0), (6.8, 2.15))
+    msp.add_line((6, 2.15), (6.8, 2.15))
+    for x in (6.05, 6.75):
+        msp.add_line((x, 0), (x, 2.1))
+    msp.add_line((6.05, 2.1), (6.75, 2.1))
+    for k in range(1, 11):
+        msp.add_line((6.05, 0.19 * k), (6.75, 0.19 * k))
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    res = _read(doc)
+    door = _find(res, "door", 6.4)
+    assert (door.x0, door.x1, door.y0, door.y1) == pytest.approx((6.0, 6.8, 0.0, 2.15), abs=0.01)
+
+
+def test_a_railing_is_not_a_window():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    _ring(msp, 8, 3.0, 11, 4.0)  # a balcony: its panel, balusters every 11 cm (each drawn as two lines)
+    for k in range(27):
+        x = 8.07 + 0.11 * k
+        msp.add_line((x, 3.05), (x, 3.95))
+        msp.add_line((x + 0.01, 3.05), (x + 0.01, 3.95))
+    res = _read(doc)
+    assert [s.kind for s in res.symbols] == ["window"]
+
+
+def test_slits_are_openings_but_small_squares_are_not():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    _lines(msp, 6, 1.5, 6.3, 2.4)  # a slit: 0.3 wide, 0.9 tall
+    _lines(msp, 9, 1.5, 9.3, 1.86)  # a small square, 0.3 x 0.36
+    res = _read(doc)
+    assert sorted(round((s.x0 + s.x1) / 2, 2) for s in res.symbols) == [3.5, 6.15]
+
+
+def test_an_arch_whose_foot_is_hidden_by_the_ground_is_not_a_planter():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    # an arcade arch seen above the ground: a semicircle on a short body, its bottom under the floor
+    msp.add_lwpolyline([(8, -0.4), (9.6, -0.4), (9.6, 0.1, 0, 0, 1), (8, 0.1)], format="xyseb", close=True)
+    res = _read(doc)
+    arch = _find(res, "window", 8.8)
+    assert arch.arched and arch.y0 == pytest.approx(-0.4, abs=0.02) and arch.y1 == pytest.approx(0.9, abs=0.02)
+
+
+def test_pieces_of_a_named_window_are_not_more_windows():
+    doc, msp = _doc()
+    _facade(msp)
+    doc.layers.add("FINESTRE")
+    _ring(msp, 3.0, 1.0, 4.2, 2.4, "FINESTRE")
+    _lines(msp, 3.4, 1.2, 3.9, 1.6)  # a leaf's fragment on layer 0, inside it
+    _lines(msp, 6, 0, 7, 2.1)
+    res = _read(doc)
+    assert sorted(s.kind for s in res.symbols) == ["door", "window"]
+
+
+# --- storeys ---------------------------------------------------------------------------------------------------
+
+def _two_storeys(msp, slab=3.2, with_line=True):
+    _facade(msp)
+    if with_line:
+        msp.add_line((0, slab), (20, slab))
+    for x in (3, 8, 13):
+        _lines(msp, x, 1.0, x + 1.0, 2.2)  # ground floor windows
+        _lines(msp, x, slab + 0.5, x + 1.0, slab + 1.6)  # first floor windows
+
+
+def test_two_rows_of_windows_with_a_slab_between_them_give_two_levels():
+    doc, msp = _doc()
+    _two_storeys(msp)
+    res = _read(doc)
+    assert res.floor == pytest.approx(0.0, abs=0.01) and res.floor_source == "linea di terra"
+    assert res.levels == pytest.approx([0.0, 3.2], abs=0.01)
+
+
+def test_no_levels_without_a_slab_line_or_when_a_window_crosses_it():
+    doc, msp = _doc()
+    _two_storeys(msp, with_line=False)
+    assert _read(doc).levels == []
+    doc, msp = _doc()
+    _two_storeys(msp)
+    _lines(msp, 16, 1.0, 17, 3.9)  # a tall window across the slab line
+    assert _read(doc).levels == []
+
+
+def test_a_short_line_between_two_rows_is_not_a_slab():
+    doc, msp = _doc()
+    _two_storeys(msp, with_line=False)
+    msp.add_line((2, 3.2), (6, 3.2))  # a cornice over one window, not as long as half the building
+    assert _read(doc).levels == []
+
+
+# --- one reading of the sheet for all its views ----------------------------------------------------------------
+
+def test_the_sheet_is_read_once_for_all_the_views_of_a_drawing(monkeypatch):
+    from dwg2c4d import elevsymbols
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    _lines(msp, 40, 1.0, 41.0, 2.0)  # another view, beside
+    msp.add_line((38, 5), (43, 5))
+    calls = []
+    real = elevsymbols.read_items
+    monkeypatch.setattr(elevsymbols, "read_items", lambda *a, **k: calls.append(1) or real(*a, **k))
+    cfg = Config()
+    first = read_view_symbols(doc, cfg, AREA, "m", 1.0)
+    second = read_view_symbols(doc, cfg, (30.0, -2.0, 52.0, 8.0), "m", 1.0)
+    assert len(calls) == 1 and len(first.symbols) == 1 and len(second.symbols) == 1
+    read_view_symbols(doc, Config(units="cm"), AREA, "m", 1.0)  # other settings: read again
+    assert len(calls) == 2
