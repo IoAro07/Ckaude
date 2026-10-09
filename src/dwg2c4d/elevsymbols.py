@@ -222,8 +222,8 @@ def _lines(items: list[Item], area: tuple[float, float, float, float]) -> list[L
                     out.extend(LineString(r.coords) for r in g.interiors)
                 elif g.geom_type == "LineString" and g.length > 0:
                     out.append(g)
-    cut = [shapely.clip_by_rect(g, *area) for g in out]
-    return [g for g in cut if not g.is_empty]
+    cut = shapely.get_parts([shapely.clip_by_rect(g, *area) for g in out])  # a line may leave the view and come back
+    return [g for g in cut if g.geom_type == "LineString" and not g.is_empty]
 
 
 def _linework(items: list[Item], area: tuple[float, float, float, float]) -> _Linework:

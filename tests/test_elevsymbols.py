@@ -573,3 +573,13 @@ def test_the_sashes_of_a_tall_window_with_a_transom_rail_are_one_window():
     tall = _find(res, "window", 3.4)
     assert (tall.y0, tall.y1) == pytest.approx((1.0, 2.6), abs=0.01)
     assert len([s for s in res.symbols if abs((s.x0 + s.x1) / 2 - 8.4) < 0.05]) == 2
+
+
+def test_a_line_that_leaves_the_view_and_comes_back_does_not_break_it():
+    doc, msp = _doc()
+    _facade(msp)
+    _lines(msp, 3, 1.0, 4.0, 2.0)
+    msp.add_lwpolyline([(1, 7), (1, 10), (6, 10), (6, 7), (8, 7), (8, 10)])  # a zigzag above the view: in, out, in ...
+    msp.add_lwpolyline([(-5, 7.5), (1, 7.5), (1, 9), (3, 9), (3, 7.5), (5, 7.5), (5, 9), (7, 9)])
+    res = _read(doc)
+    assert [s.kind for s in res.symbols] == ["window"]
