@@ -19,8 +19,10 @@ window drawn as its inner pane only becomes the whole frame) and add the opening
 
 from __future__ import annotations
 
+import copy
 import math
 import re
+import weakref
 from collections import Counter
 from dataclasses import dataclass, field
 
@@ -82,6 +84,7 @@ FIGURE_HEIGHT = (1.5, 2.0)  # m: height of a person drawn in an elevation
 FIGURE_WIDTH = 1.0  # m: at most this wide
 FIGURE_FOOT = 0.10  # m: the insertion point of such a block is this close to its bottom, the feet
 
+TEXT_MARGIN = 1.0  # m: a level mark may sit this far outside the drawing it belongs to
 SKY = 60.0  # m: how far above a symbol the drawing is searched for a roof
 ROOF_SPAN = 2.0  # m: a roof, an eave or the top of a wall runs at least this far sideways; the cap of a chimney does not
 MARK_RE = re.compile(r"(?<![\w.,])([+\-\u00b1\u2212])\s*(\d{1,3})\s*[.,]\s*(\d{1,3})(?!\d)")  # "+0,00" "- 0.40" "+-0.00"
@@ -102,8 +105,11 @@ FLOOR_TOL = 0.15  # m: floors found by two sources agree within this
 FLOOR_VOTE = 0.04  # m: marks whose floors differ by less than this say the same
 FLOOR_SNAP = 0.08  # m: a floor from a mark is moved onto a long line this close to it (the slab the mark stands on)
 STOREY_MIN = 1.8  # m: a mark this far above the floor is the floor of another storey
-SLAB_SHARE = 0.3  # a line under the foot of an upper door is a slab if it is this share of the width of the view
+STOREY_MAX = 4.5  # m: a storey is no taller than this from floor to floor
+SLAB_SHARE = 0.3  # a line under the foot of an upper door is a slab if it is this share of the width of the building
 SLAB_DEPTH = 0.08  # m: ... and lies this close under the foot
+SLAB_SLACK = 0.1  # m: openings stand on a slab, or hang under it, within this
+SLAB_SPAN = 0.5  # a slab between two rows of openings is a line at least this share of the width the openings span
 SAME_SYMBOL = (1 / 3, 3.0)  # a named symbol and a shape are the same opening if their areas are this close
 SAME_OVERLAP = 0.5  # ... and the smaller one lies this much within the other
 INSIDE = 0.9  # a named symbol lying this much within a shape is a part of it
@@ -623,14 +629,13 @@ def _mode(values: list[float], tol: float) -> float:
     return float(np.mean([u for u in values if abs(u - best) <= tol]))
 
 
-def _figure_feet(doc: Drawing, area: tuple[float, float, float, float], scale: float) -> list[float]:
-    """y (m) of the feet of the person figures drawn in the area: block references, as tall as a person, whose
-    insertion point is at the bottom. ``area`` in metres, ``scale``: metres per drawing unit."""
+def _figure_feet(doc: Drawing, scale: float) -> list[tuple[float, float]]:
+    """(x, y) in metres of the feet of the person figures drawn in the sheet: block references, as tall as a person,
+    whose insertion point is at the bottom. ``scale``: metres per drawing unit."""
     extents: dict[str, tuple[float, float, float, float] | None] = {}
     feet = []
     for e in doc.modelspace().query("INSERT"):
-        x, y = e.dxf.insert.x * scale, e.dxf.insert.y * scale
-        if not (area[0] <= x <= area[2] and area[1] <= y <= area[3]) or abs(float(e.dxf.get("rotation", 0))) > 1:
+        if abs(float(e.dxf.get("rotation", 0))) > 1:
             continue
         name = e.dxf.name
         if name not in extents:
@@ -645,8 +650,56 @@ def _figure_feet(doc: Drawing, area: tuple[float, float, float, float], scale: f
         sx, sy = abs(float(e.dxf.get("xscale", 1))), float(e.dxf.get("yscale", 1))
         width, height, foot = (ext[2] - ext[0]) * sx * scale, (ext[3] - ext[1]) * abs(sy) * scale, ext[1] * abs(sy) * scale
         if sy > 0 and FIGURE_HEIGHT[0] <= height <= FIGURE_HEIGHT[1] and width <= FIGURE_WIDTH and abs(foot) <= FIGURE_FOOT:
-            feet.append(y)
+            feet.append((e.dxf.insert.x * scale, e.dxf.insert.y * scale))
     return feet
+
+
+@dataclass
+class _Sheet:
+    """The modelspace of a drawing read once for all its elevations (reading it takes seconds, a sheet has ten
+    views): items in metres with an index over their pieces, the texts and the feet of the figures."""
+
+    cfg: Config
+    unit: str
+    items: list[Item]
+    tree: STRtree | None
+    owner: np.ndarray  # the index in ``items`` of each piece the tree holds
+    texts: list[RawText]
+    feet: list[tuple[float, float]]
+
+    def items_in(self, area: tuple[float, float, float, float]) -> list[Item]:
+        """The items with a piece that touches the area (metres), in drawing order."""
+        if self.tree is None:
+            return []
+        hit = self.tree.query(box(*area), predicate="intersects")
+        return [self.items[i] for i in np.unique(self.owner[hit])]
+
+    def texts_in(self, area: tuple[float, float, float, float]) -> list[RawText]:
+        """The texts within a metre of the area: a label may sit just outside the drawing it names."""
+        x0, y0, x1, y1 = area
+        return [t for t in self.texts if x0 - TEXT_MARGIN <= t.x <= x1 + TEXT_MARGIN
+                and y0 - TEXT_MARGIN <= t.y <= y1 + TEXT_MARGIN]
+
+    def feet_in(self, area: tuple[float, float, float, float]) -> list[float]:
+        return [y for x, y in self.feet if area[0] <= x <= area[2] and area[1] <= y <= area[3]]
+
+
+_SHEETS: "weakref.WeakKeyDictionary[Drawing, _Sheet]" = weakref.WeakKeyDictionary()
+
+
+def _sheet(doc: Drawing, cfg: Config, unit: str, unit_scale: float) -> _Sheet:
+    """The sheet of this drawing, read the first time and kept for as long as the drawing is (same settings)."""
+    known = _SHEETS.get(doc)
+    if known is not None and known.unit == unit and known.cfg == cfg:
+        return known
+    items = read_items(doc, cfg, area=None, ignore_veto=True, keep_other=True, unit=unit, keep_fills=True).items
+    pieces = [(i, p.geom) for i, it in enumerate(items) for p in it.prims]
+    tree = STRtree([g for _, g in pieces]) if pieces else None
+    owner = np.array([i for i, _ in pieces], dtype=int)
+    sheet = _Sheet(copy.deepcopy(cfg), unit, items, tree, owner, read_texts(doc, cfg, unit_scale),
+                   _figure_feet(doc, unit_scale))
+    _SHEETS[doc] = sheet
+    return sheet
 
 
 # --- the symbols ----------------------------------------------------------------------------------------------
@@ -713,15 +766,43 @@ def _find_floor(door_feet: list[float], levels_found: list[tuple[float, float]],
     return None, ""
 
 
+def _slabs(base: float, bands: list[tuple[float, float, float, float]],
+           hsegs: list[tuple[float, float, float]]) -> list[float]:
+    """y of the floors of the storeys above ``base`` that the openings show without any mark: a line (the slab) between
+    a row of openings and the row above it, as long as half the width the openings span (the longest such line, the
+    highest on a tie), with no opening across it. ``bands``: (x0, x1, bottom, top) of each opening."""
+    found: list[float] = []
+    if not bands:
+        return found
+    width = max(t[1] for t in bands) - min(t[0] for t in bands)
+    while True:
+        lines = sorted(((b - a, y) for y, a, b in hsegs if base + STOREY_MIN <= y <= base + STOREY_MAX
+                        and b - a >= SLAB_SPAN * width), reverse=True)
+        for _, y in lines:
+            below = any(base - SLAB_SLACK <= t[2] and t[3] <= y + SLAB_SLACK for t in bands)
+            above = any(t[2] >= y - SLAB_SLACK for t in bands)
+            across = any(t[2] < y - SLAB_SLACK and t[3] > y + SLAB_SLACK for t in bands)
+            if below and above and not across:
+                found.append(y)
+                base = y
+                break
+        else:
+            return found
+
+
 def _storeys(floor: float, levels_found: list[tuple[float, float]], upper_feet: list[float],
-             hsegs: list[tuple[float, float, float]], span: float) -> list[float]:
-    """y of the floors of all the storeys the view shows, from the marks of the other floors ("+3,20") and from the
-    long line (a slab, a balcony) a door of an upper storey stands on; empty if the view shows one storey."""
+             hsegs: list[tuple[float, float, float]], span: float,
+             bands: list[tuple[float, float, float, float]]) -> list[float]:
+    """y of the floors of all the storeys the view shows, from the marks of the other floors ("+3,20"), from the long
+    line (a slab, a balcony) a door of an upper storey stands on, or else from the slab between two rows of openings;
+    empty if the view shows one storey."""
     ys = [y for y, v in levels_found if v >= STOREY_MIN and abs(y - v - floor) <= FLOOR_TOL]
     for foot in upper_feet:
         slab = [y for y, a, b in hsegs if foot - SLAB_DEPTH <= y <= foot + 2 * ROW_TOL and b - a >= SLAB_SHARE * span]
         if slab:
             ys.append(max(slab))
+    if not ys:
+        ys = _slabs(floor, bands, hsegs)
     merged: list[float] = []
     for y in sorted(ys):
         if not merged or y - merged[-1] > FLOOR_TOL:
@@ -844,7 +925,9 @@ def detect_view_symbols(items: list[Item], texts: list[RawText], feet: list[floa
     levels: list[float] = []
     if floor is not None:
         upper = [g.y0 for g in shapes if g.y1 - g.y0 >= DOOR_HEIGHT_UNKNOWN and g.y0 >= floor + STOREY_MIN]
-        levels = _storeys(floor, marks, upper, hsegs, span)
+        bands = [(g.core[0], g.core[1], g.y0, g.y1) for g in shapes] \
+            + [(n.sym.x0, n.sym.x1, n.sym.y0, n.sym.y1) for n in named]
+        levels = _storeys(floor, marks, upper, hsegs, span, [t for t in bands if not _is_low(t[2], t[3] - t[2], floor)])
 
     found = []
     for g in shapes:
@@ -868,7 +951,6 @@ def read_view_symbols(doc: Drawing, cfg: Config, bbox: tuple[float, float, float
                       unit_scale: float) -> ViewSymbols:
     """Doors, windows and floor level of the elevation inside ``bbox`` (drawing units), whatever its layers are
     called. ``unit``/``unit_scale``: the drawing unit already decided by the main read, and its size in metres."""
-    result = read_items(doc, cfg, area=bbox, ignore_veto=True, keep_other=True, unit=unit, keep_fills=True)
     area = tuple(v * unit_scale for v in bbox[:4])
-    return detect_view_symbols(result.items, read_texts(doc, cfg, unit_scale, area=bbox),
-                               _figure_feet(doc, area, unit_scale), area, cfg)
+    sheet = _sheet(doc, cfg, unit, unit_scale)
+    return detect_view_symbols(sheet.items_in(area), sheet.texts_in(area), sheet.feet_in(area), area, cfg)
