@@ -151,32 +151,38 @@ e in **centimetri**:
 Servono per le **altezze di porte e finestre** (davanzale, architrave) e per la **pendenza del tetto**. Se mancano, si
 usano i valori predefiniti o le scritte.
 
-**Posizione (regola fondamentale).** Il prospetto è letto solo se è disegnato **in proiezione sulla pianta**, come
-nelle tavole classiche:
+**Posizione.** Il modo più sicuro è disegnarlo **in proiezione sulla pianta**, come nelle tavole classiche (così è letto
+anche dalle regole semplici, senza analisi del foglio):
 
 * **prospetto sud** (facciata in basso nella pianta) → **sotto** la pianta;
 * **prospetto nord** (facciata in alto nella pianta) → **sopra** la pianta;
 * in entrambi i casi con le **stesse coordinate X** della pianta e nella **stessa scala**: la finestra che nel prospetto
   sta a x = 350 deve stare a x = 350 anche in pianta. Il programma abbina ogni simbolo del prospetto all'apertura della
   pianta con lo stesso intervallo di X (la più esterna).
-* Non ruotarli e non specchiarli; non metterli di lato o in un'altra zona della tavola.
+* Non specchiarli. Se in una tavola vera li metti di lato o su un altro foglio, il programma li legge lo stesso
+  **confrontando la fila delle finestre con le facciate della pianta** (vedi il README, *Prospetti disegnati altrove*):
+  perché funzioni scrivi un **titolo** (`PROSPETTO SUD`, `PROSPETTO NORD`...), tieni i prospetti nella **stessa scala**
+  della pianta, e disegna **almeno 3 aperture riconoscibili** per facciata.
 
 **Come riconoscerli.** Metti tutto il prospetto su layer che iniziano con `Prospetto` (`PROSPETTO_SUD`, `prospetto1`…):
 li trova da soli. Devono contenere **porte e/o finestre riconoscibili** (blocchi `Porta…`/`Finestra…` o layer
 `Porte`/`Finestre`, anche dentro un layer `Prospetto…`): un prospetto interno (parete di cucina) senza aperture viene
 scartato di proposito. Se preferisci, indichi tu la zona con `--prospetto XMIN,YMIN,XMAX,YMAX[,QUOTA_Y]`.
 
-**Quota zero.** Il pavimento finito è il **fondo della porta più bassa** del prospetto: disegna almeno una porta (o
-indica la quota Y con il quinto valore di `--prospetto`). Se il prospetto non ha porte, la quota zero non si deduce.
+**Quota zero.** Scrivi **`+0,00`** (o `±0.00`) accanto al segno di livello del pavimento finito: è la fonte più sicura,
+anche se il prospetto non ha porte. Altrimenti il pavimento è il **fondo della porta più bassa** (o la linea di terra);
+con `--prospetto` indichi la quota Y come quinto valore. Se il prospetto mostra più piani, scrivi anche `+3,20`...
 
 **Cosa disegnare dentro.** I simboli di porte e finestre come nella pianta (blocchi `Porta…`/`Finestra…` o linee sui
 layer `Porte`/`Finestre`; telaio e vetro annidati contano come uno solo) e, per il tetto, i **colmi come linee
 orizzontali** con la stessa estensione X dei colmi della pianta del tetto.
 
-**Quello che oggi non c'è.** I prospetti **est e ovest** (disposti a sinistra e a destra della pianta, con le stesse
-coordinate Y) **non vengono letti**: solo nord e sud. Se il tuo disegno li ha, il programma li ignora senza errore.
-Per una casa con aperture sulle quattro facciate, le finestre dei lati est/ovest prendono le scritte, la tabella o i
-valori predefiniti.
+**Altezza dei muri.** Se le finestre del prospetto salgono più in alto dei muri e l'altezza dei muri non è scritta (`h 300`
+nei locali) né indicata, viene presa dal prospetto: dall'interpiano o dalla **linea orizzontale che chiude il muro in
+alto** (gronda/parapetto): disegnala lunga quanto la facciata.
+
+**Facciate est e ovest.** Con l'analisi del foglio sono lette come le altre; i prospetti trovati per nome di layer o
+indicati con `--prospetto` restano solo nord e sud in proiezione.
 
 ---
 

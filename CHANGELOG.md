@@ -4,6 +4,30 @@ La versione in uso la dice `python -m dwg2c4d --version` (e la prima riga di `co
 deve coincidere con quella di `pyproject.toml` e con la riga in testa al [README](README.md). Dopo ogni aggiornamento
 decomprimi il progetto in una **cartella nuova** e controlla che la versione sia quella attesa.
 
+## [0.6.0] — 2026-10-09
+
+**Prospetti disegnati altrove** e tavole con più disegni.
+
+- **Prospetti non allineati** (di lato, su un altro foglio, ruotati; facciate nord, sud, est, ovest, a qualunque angolo):
+  ogni vista-prospetto è abbinata alla facciata della pianta per confronto della fila di finestre e porte (centri,
+  larghezze, spostamento libero lungo la facciata), con una soglia di significatività, un margine sulla facciata
+  seguente e almeno 3 aperture abbinate; le altezze di davanzale e architrave delle aperture abbinate vengono dal
+  prospetto. Il nord del foglio si ricava dai prospetti con titolo che si abbinano senza ambiguità, e solo allora i titoli
+  (`PROSPETTO SUD`...) risolvono i casi ambigui; due prospetti della stessa facciata non si sovrappongono; i colmi dai
+  prospetti nord/sud; le viste escluse dal giardino.
+- **Simboli senza layer**: porte e finestre dei prospetti da linee di qualunque layer (rettangoli, archi, telai
+  annidati, campiture di vetro, ante e persiane), quota del pavimento da `+0,00`/porta/linea di terra/figura, piani
+  da quote e solai (`elevsymbols.py`).
+- **Altezza dei muri dal prospetto** quando quella in uso (predefinita) non contiene le finestre del prospetto:
+  interpiano o linea di gronda.
+- **Viste del foglio** molto più robuste sulle tavole vere: cornici del foglio e dei titoli, linee lunghe e segni
+  isolati che non uniscono più due disegni, titoli sopra o sotto il disegno, piante dentro l'inquadramento (copie
+  riconosciute dai testi e dalle linee), tipo dal contenuto, riquadro = quello del disegno.
+- **Unità**: voto dall'altezza dei testi; una tavola grande (più disegni) non è più scartata; l'intestazione è
+  sostituita solo con un margine di voti. (Test6 e Test7, in cm con intestazione mm, ora sono letti in cm.)
+- Meno rumore: gli avvisi di ezdxf sugli oggetti che non sa copiare (centinaia di migliaia di righe) non escono più.
+- `Config`: l'analisi del foglio non entra nell'uguaglianza.
+
 ## [0.5.0] — 2026-10-08
 
 **L'analisi del foglio**: lo strumento capisce disegni con i layer disordinati guardando la geometria.
@@ -18,7 +42,6 @@ decomprimi il progetto in una **cartella nuova** e controlla che la versione sia
 - `--no-analisi` la salta. Quello che indica l'utente (`--unita`, `--muri`, `--area`) non viene mai cambiato.
 - Più veloce: i layer sono classificati una volta sola, non a ogni entità, e il disegno non viene riletto nel
   secondo passaggio (file grandi: da ~100 s a ~60 s).
-- Non ancora: le altezze dai prospetti che non sono in proiezione sulla pianta (affiancati o ruotati).
 
 ## [0.4.0] — 2026-10-08
 

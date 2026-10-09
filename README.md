@@ -1,6 +1,6 @@
 # dwg2c4d — da planimetria 2D (DWG/DXF) a modello 3D per Cinema 4D
 
-**Versione 0.5.0** (8 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
+**Versione 0.6.0** (9 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
 
 Legge una pianta 2D, ne **estrude i muri** (con i tramezzi a parte), **apre porte, finestre e vani** con le
 quote che trova (scritte del disegno, prospetti), costruisce **infissi dettagliati** (imbotto, cornice, telai, ante,
@@ -27,14 +27,14 @@ Il codice sta nel repository pubblico <https://github.com/IoAro07/Ckaude> (il ra
   qualsiasi (per esempio `C:\dwg2c4d`).
 - **Con git**: `git clone https://github.com/IoAro07/Ckaude.git`
 
-In alternativa il file `dwg2c4d-0.5.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
-dwg2c4d-0.5.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+In alternativa il file `dwg2c4d-0.6.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.6.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
 script di Cinema 4D, che stanno nella cartella del progetto.
 
 **Per aggiornare** a una versione nuova: scarica di nuovo il progetto in una **cartella nuova** (o `git pull`) e rifai
 `installa.bat`. I file `converti.bat` ed `elenca_layer.bat` usano comunque sempre il codice della cartella in cui stanno
 (`src`), anche se in Python è rimasta installata una copia vecchia. Quando parte, `converti.bat` stampa la riga
-`dwg2c4d 0.5.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
+`dwg2c4d 0.6.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
 usando una cartella vecchia. `python -m dwg2c4d --version` fa lo stesso da terminale.
 
 *Perché la cartella nuova*: pip lascia dentro il progetto una cartella `build`; uno ZIP non porta il fuso orario, quindi
@@ -251,8 +251,9 @@ Il riepilogo dice dove l'ha trovato (`trovato da solo sul layer…`); `--no-pros
 Per indicare tu la zona: `--prospetto XMIN,YMIN,XMAX,YMAX[,QUOTA_Y]`, uno per facciata (ripetibile); così la ricerca
 automatica non parte. Condizioni:
 
-- il prospetto deve essere **in proiezione sulla pianta**: sotto di essa (facciata sud) o sopra (facciata nord), con
-  le **stesse coordinate X**. Se è disposto altrove in tavola non funziona (lo strumento lo segnala);
+- il prospetto trovato **dal nome del layer** (o indicato con `--prospetto`) deve essere **in proiezione sulla pianta**:
+  sotto di essa (facciata sud) o sopra (facciata nord), con le **stesse coordinate X**. Un prospetto disposto altrove
+  è letto lo stesso dall'analisi del foglio (vedi sotto: *Prospetti disegnati altrove*);
 - le porte e le finestre del prospetto devono essere riconoscibili (layer `Porte`/`Finestre` o blocchi chiamati
   `Porta…`/`Finestra…`, anche su un layer `Prospetto…`);
 - la **quota zero** (pavimento finito) è il fondo della porta più bassa del prospetto; se non c'è una porta, o se
@@ -261,6 +262,35 @@ automatica non parte. Condizioni:
 Ogni simbolo del prospetto viene associato all'apertura della pianta con lo stesso intervallo di X (la più esterna);
 un simbolo disegnato con telaio e vetro annidati conta come uno solo. Le aperture senza corrispondenza restano ai
 valori predefiniti, e il riepilogo dice quante sono state lette (`Prospetto sud: 2 di 2 aperture…`).
+
+**Prospetti disegnati altrove** (da 0.6.0): in una tavola vera i prospetti stanno di lato, su un altro foglio o ruotati,
+con coordinate che non c'entrano con la pianta. Se il foglio viene analizzato (da riga di comando è automatico), ogni
+vista riconosciuta come prospetto viene **confrontata con le facciate della pianta**: la fila delle sue finestre e
+porte (centri e larghezze) viene cercata lungo ciascuna facciata, in tutti e quattro i versi e a qualunque angolo, e
+si tiene la facciata dove la maggior parte dei simboli incontra un'apertura. Poi:
+
+- porte e finestre del prospetto sono riconosciute **anche senza layer dei serramenti**: rettangoli e archi fatti di
+  linee di qualunque layer, telai annidati (conta il telaio più esterno), campiture di vetro, ante e persiane
+  (la larghezza utile è quella del vetro, non delle persiane);
+- la **quota zero** (pavimento) viene da una quota scritta (`+0,00`, `±0.00`, `P.P.F.`), altrimenti dal fondo della porta
+  più bassa, dalla linea di terra o dal punto di inserimento di una figura umana; se il prospetto mostra più piani
+  (`+3,20`, solai) si usa il piano della pianta (`PIANO TERRA`, `PIANO PRIMO` nel titolo; senza titolo il terreno);
+- **dove sta il nord** del foglio si ricava dai prospetti con un titolo che dice il lato (`PROSPETTO NORD`) e che
+  si abbinano senza ambiguità; poi i titoli risolvono i prospetti la cui fila di finestre starebbe bene su due
+  facciate (case simmetriche, finestre a passo regolare). Una pianta ruotata sul foglio funziona;
+- un prospetto che **non corrisponde a nessuna facciata** viene lasciato stare con un avviso (e così le sezioni, o un
+  prospetto in un'altra scala); due prospetti della stessa facciata (stato di fatto e di progetto) non si
+  sovrappongono: vale il migliore;
+- se le finestre del prospetto salgono più in alto dei muri in uso e l'altezza dei muri è quella predefinita, **l'altezza
+  dei muri** viene presa dal prospetto: dall'interpiano se il prospetto mostra il piano sopra, altrimenti dalla linea
+  che chiude il muro in alto (`Altezza muri: ... (dalla linea di gronda dei prospetti)`). Un'altezza scritta o indicata
+  non si cambia mai;
+- le altezze dei **colmi** arrivano dai prospetti nord e sud (orizzontali), come per quelli in proiezione.
+
+Il riepilogo dice per ogni prospetto la facciata, quante aperture sono state abbinate, la quota zero e la sicurezza
+(`alta`/`media`); `NOME_viste.png` scrive accanto a ogni vista a quale facciata è stata abbinata. Servono almeno **3
+aperture abbinate** (meno è un caso): una pianta senza aperture riconosciute (come un inquadramento col solo
+tetto della casa) non ha nulla da confrontare, e il programma lo dice invece di inventare.
 
 **Tetto**: si costruisce da solo dalle linee del layer `Tetto`/`Roof`/`Copertura` (o `--layer-tetto`): contorno, colmi,
 displuvi e compluvi, disegnati sul piano del tetto. `--no-tetto` lo evita; `--tetto` lo richiede e avvisa se il layer
@@ -451,12 +481,16 @@ Un disegno ricevuto da altri ha spesso layer che non dicono nulla (`Linee`, `0`,
 e, sullo stesso foglio, pianta, prospetti, sezioni e planimetria generale. Da riga di comando, prima di leggere i
 layer, il programma **guarda il foglio** come lo guarderebbe una persona (`--no-analisi` lo salta):
 
-1. **Le unità** dai numeri: la mediana delle quote, la misura degli archi di 90° (una porta ha il raggio di 0,6-1,4 m),
-   la grandezza del disegno. L'intestazione del file conta meno di tutto: un file che dichiara millimetri ma ha le
+1. **Le unità** dai numeri: la mediana delle quote, l'altezza dei testi (5-60 cm), la misura degli archi di 90° (una
+   porta ha il raggio di 0,6-1,4 m), la grandezza del disegno (una tavola con più disegni è grande: conta solo
+   l'assurdo). L'intestazione del file conta meno di tutto: un file che dichiara millimetri ma ha le
    quote in centimetri viene letto in centimetri, e lo scrive tra gli avvisi.
-2. **Le viste del foglio**: i gruppi di disegno separati da spazio vuoto, con il titolo che hanno vicino
-   (`PIANTA`, `PROSPETTO SUD`, `SEZIONE A-A`, `PIANTA COPERTURA`, `PLANIMETRIA GENERALE`...). Una vista senza
-   titolo è riconosciuta dalla forma. Il risultato è l'immagine **`NOME_viste.png`** con le viste numerate e il tipo
+2. **Le viste del foglio**: i gruppi di disegno separati da spazio vuoto, con il titolo che hanno vicino, anche
+   nella sua piccola cornice sopra o sotto il disegno (`PIANTA`, `PROSPETTO SUD`, `SEZIONE A-A`, `PIANTA COPERTURA`,
+   `PLANIMETRIA GENERALE`...). Le cornici del foglio, le linee lunghe (linee di terra, tracce di sezione) e i segni
+   isolati non uniscono due disegni; una pianta disegnata dentro l'inquadramento del lotto (o la sua copia) è una
+   vista a sé; una vista senza titolo è riconosciuta da quello che contiene (archi di porta e metrature = pianta,
+   quote di livello = prospetto, curve di livello = lotto). Il risultato è l'immagine **`NOME_viste.png`** con le viste numerate e il tipo
    che gli ho dato: controllala.
 3. **La pianta da convertire**: la vista più grande che non sia la planimetria generale (il lotto intorno alla casa)
    né la copia di un'altra. Se il foglio ha due piante (piani diversi, stato di fatto e di progetto) ne converte
@@ -483,8 +517,8 @@ muri a doppia linea, porte con l'arco) e sbagliano su quello che una persona cap
 risultato non è buono, guarda in ordine `NOME_viste.png`, `NOME_controllo_pianta.png` e le note del report; poi indica
 a mano la vista (`--vista`), i layer (`--muri`) o l'area (`--area`).
 
-I prospetti trovati dall'analisi servono ancora **solo se sono in proiezione sulla pianta** (vedi sopra): quelli
-affiancati o ruotati sono riconosciuti e numerati nell'immagine delle viste, ma le loro altezze non vengono ancora usate.
+I prospetti riconosciuti dall'analisi, ovunque stiano nel foglio, servono per le quote delle aperture: vedi
+*Prospetti disegnati altrove* qui sopra.
 
 ## Importare in Cinema 4D
 
@@ -609,8 +643,10 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 - **Il tetto** nasce dalle linee della pianta del tetto: non c'è nessun calcolo statico né ricostruzione da zero.
   Gronda sempre alla quota dei muri, senza sporgenza oltre il contorno interno; falde con pendenze diverse sono
   gestite solo se i colmi nel prospetto le fissano. Se la pianta del tetto è confusa il risultato lo sarà.
-- **I prospetti** servono solo per le facciate nord e sud in proiezione; est e ovest, o prospetti ruotati o
-  disposti altrove in tavola, non sono letti.
+- **I prospetti**: quelli trovati per nome o indicati con `--prospetto` servono solo per le facciate nord e sud in
+  proiezione. Gli altri (di lato, su un altro foglio, ruotati, est/ovest) si usano con l'analisi del foglio, per
+  confronto della fila di finestre: ci vogliono almeno 3 aperture abbinate, una pianta con le aperture riconosciute e
+  una quota del pavimento nel prospetto; prospetti in una scala diversa dalla pianta non si abbinano.
 - Gli elementi **non muro** disegnati su un layer che usi per i muri (bordi di piscine, muretti, pavimentazioni)
   diventano muri: scegli bene i layer o ritaglia con `--area`.
 - Un muro a doppia linea con le estremità aperte viene chiuso in modo automatico solo se le due linee finiscono
@@ -633,7 +669,7 @@ Esempio di file di configurazione (`casa.json`), con gli stessi nomi dei campi d
 | Mancano pezzi di muro | Linee non chiuse: prova `--modalita-muri doppia-linea` o `solidi`; `--spessore-max` più alto. |
 | `--area -200,...` dà errore | Con numeri negativi scrivi `--area=-200,...` (con il segno uguale). |
 | Il tetto è piatto o strano | Controlla il layer del tetto (`--layer-tetto`), che contenga solo contorno e colmi, e `--area-tetto`; leggi gli avvisi `Tetto:`. |
-| Le finestre non prendono le quote del prospetto | Il prospetto deve avere le stesse X della pianta e stare sotto/sopra; guarda l'avviso e `Prospetto sud: N di M`. |
+| Le finestre non prendono le quote del prospetto | Guarda gli avvisi `Prospetto della vista N`: dicono se la fila delle sue aperture non corrisponde a nessuna facciata (altra scala, pianta con aperture diverse, meno di 3 abbinate) o se manca la quota del pavimento (scrivi `+0,00` nel prospetto). `NOME_viste.png` mostra quali viste sono prospetti. Un prospetto trovato per nome deve avere le stesse X della pianta. |
 | Una quota scritta non è stata presa | Guarda l'avviso `Scritta ... non associata`: allarga `--raggio-scritte`, oppure la porta/finestra manca nel disegno. |
 | Le lettere esplose sono lette male | Correggi nella tabella (`MODIFICA_*`); `--no-testi-esplosi` le ignora. |
 | Un vano compare dove non c'è | Nella tabella `MODIFICA_tieni = no`, oppure `--no-vani`. |
@@ -661,7 +697,8 @@ Struttura: `dwgfile.py` (apertura DWG/DXF) → `reader.py` (entità → geometri
 `passages.py` (muri, porte, finestre, vani) → `texts.py`, `vtext.py`, `glyphs.py`, `labels.py` (scritte, locali) →
 `elevation.py`, `roof.py` (prospetti, tetto) → `table.py` (tabella delle aperture) → `model.py`, `fixtures.py`,
 `floors.py`, `mesh.py` (estrusione e infissi) → `objwriter.py`, `export.py` (OBJ/MTL, JSON per Cinema 4D) →
-`qa.py`, `render.py` (immagini di controllo, report). `proposals.py` sono le proposte di `--elenca-layer`; `autodetect.py` è l'analisi del foglio (unità, viste, muri e
+`qa.py`, `render.py` (immagini di controllo, report). `elevsymbols.py` legge porte e finestre di un prospetto senza
+bisogno dei layer, `elevmatch.py` abbina i prospetti alle facciate della pianta. `proposals.py` sono le proposte di `--elenca-layer`; `autodetect.py` è l'analisi del foglio (unità, viste, muri e
 porte dalla forma).
 I template delle lettere (`data/glyph_templates.npz`) sono bitmap dei caratteri di Liberation Sans, FreeSans, DejaVu Sans,
 Carlito e Poppins (font con licenza libera).
