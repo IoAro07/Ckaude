@@ -39,7 +39,6 @@ END_TOUCH = 0.2  # m: ... unless it is a wall of an outline: a line that ends on
 END_ACROSS = 0.17  # (sine of 10 degrees): a line "runs across" another one if the sine of the angle between them is more than this
 OUTLINE_REAL = 2  # ... and the outline does not join this many drawings of its own (a border close to two drawings does)
 MAX_OUTLINES = 2000  # no more long lines than this are looked at to see whether they close an outline or end in the air
-STUB_HOLD = 0.75  # m: a long line is held by the drawing this close to it; what sticks out beyond it, at a free end, links nothing
 MIN_VIEW_CELLS = 40  # a piece of fewer cells than this (10 m2 of drawing) is a crumb, not a view
 MIN_VIEW_SIDE = 2.5  # m: a piece thinner than this is a strip of text or a line, not a view
 FLOAT_PAD = 0.001  # m: a view holds what lies this close to its box too (the box is the box of the ink: a hinge sits on its edge)
@@ -682,22 +681,28 @@ def _ends_touch(seg: np.ndarray, which: np.ndarray, scale: float) -> np.ndarray:
     return touches
 
 
-def _stubs(which: np.ndarray, held: np.ndarray, lines: np.ndarray, ends: np.ndarray) -> np.ndarray:
-    """The points of the long lines that stick out beyond the last drawing they are held by, at an end of the line that
-    touches nothing: the tail of a ground line, of a section mark. They are part of the view (its box takes them in) but
-    they link nothing: two facades whose ground lines almost meet are two views. ``held``: the point has drawing within
-    STUB_HOLD; ``lines``: the lines, in the order of their points; ``ends[k]``: do the start and the end of line k touch
-    another line?"""
+def _stubs(seg: np.ndarray, line: np.ndarray, which: np.ndarray, near: np.ndarray, nearest: np.ndarray, ink: np.ndarray,
+          lines: np.ndarray, ends: np.ndarray, cell: float) -> np.ndarray:
+    """The points of the long lines that stick out beyond the last drawing, at an end of the line that touches nothing: the
+    tail of a ground line, of a section mark. They are part of the view (its box takes them in) but they link nothing: two
+    facades whose ground lines almost meet are two views. The last drawing is where the ink that the outermost point near
+    any is near ends along the line. ``near``: the point has drawing within LINK; ``nearest``: the cell of the drawing
+    nearest to it, in ``ink`` (the centres of the cells); ``lines``: the lines, in the order of their points; ``ends[k]``:
+    do the start and the end of line k touch another line?"""
     stub = np.zeros(len(which), bool)
     first = np.flatnonzero(np.r_[True, which[1:] != which[:-1]]) if len(which) else np.empty(0, dtype=int)
     for k, (a, b) in enumerate(zip(first, np.r_[first[1:], len(which)])):
-        if ends[k].all():
+        held = np.flatnonzero(near[a:b])
+        if ends[k].all() or len(held) == 0:
             continue
-        fixed = np.flatnonzero(held[a:b])
-        if not ends[k, 0]:
-            stub[a:a + (fixed[0] if len(fixed) else b - a)] = True
-        if not ends[k, 1]:
-            stub[a + (fixed[-1] + 1 if len(fixed) else 0):b] = True
+        start, end = seg[lines[k], :2], seg[lines[k], 2:]
+        length = float(np.hypot(*(end - start)))
+        along = np.linspace(0.0, length, b - a)  # where every point of the line is, from its start
+        toward = (end - start) / max(length, 1e-12)
+        for at, free in ((held[0], not ends[k, 0]), (held[-1], not ends[k, 1])):
+            reach = along[at] + float((ink[nearest[a + at]] - line[a + at]) @ toward)  # the drawing ends here, along the line
+            if free:
+                stub[a:b][(along < reach - cell) if at == held[0] else (along > reach + cell)] = True
     return stub
 
 
@@ -765,10 +770,13 @@ def _pieces(soup: Soup, scale: float, frames: list[dict]) -> _Sheet:
     line, which = _along(seg[ruling], step, 4000)
     which = np.flatnonzero(ruling)[which]
     keys = np.unique(_pack(*np.floor(ink / cell).astype(np.int64).T))
-    away = np.full(len(line), np.inf)  # how far the ink is from every point of the long lines (more than LINK: infinity)
+    ink_xy = (_unpack(keys) + 0.5) * cell
+    nearest = np.zeros(len(line), dtype=int)  # the cell of the ink nearest to every point of the long lines, if within LINK
+    near = np.zeros(len(line), bool)
     if len(keys) and len(line):
-        away = cKDTree((_unpack(keys) + 0.5) * cell).query(line, distance_upper_bound=LINK / scale)[0]
-    near = np.isfinite(away)
+        away, nearest = cKDTree(ink_xy).query(line, distance_upper_bound=LINK / scale)
+        near = np.isfinite(away)
+    near_ink = near.copy()
     lines = np.unique(which)
     ends = _ends_touch(seg, lines, scale) if len(lines) <= MAX_OUTLINES else np.ones((len(lines), 2), bool)  # (start, end)
     cut = _bare_runs(near, which, step * scale)
@@ -777,7 +785,7 @@ def _pieces(soup: Soup, scale: float, frames: list[dict]) -> _Sheet:
         wall_keys = np.unique(_pack(*np.floor(line[walls] / cell).astype(np.int64).T))
         near |= np.isfinite(cKDTree((_unpack(wall_keys) + 0.5) * cell).query(line, distance_upper_bound=LINK / scale)[0])
         cut = _bare_runs(near, which, step * scale) & ~walls
-    stub = _stubs(which, away <= STUB_HOLD / scale, lines, ends) & ~cut
+    stub = _stubs(seg, line, which, near_ink, nearest, ink_xy, lines, ends, cell) & ~cut
     core = np.unique(np.concatenate([keys, _pack(*np.floor(line[~cut & ~stub] / cell).astype(np.int64).T)]))
     keys = np.unique(np.concatenate([core, _pack(*np.floor(line[stub] / cell).astype(np.int64).T)]))
     centre = (_unpack(keys) + 0.5) * cell
