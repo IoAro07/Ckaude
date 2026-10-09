@@ -9,12 +9,18 @@ their shape and by where they stand; so does this module:
 * leaves that touch (the two halves of a door, the panels of an entrance, the sashes between two shutters) are one
   symbol; shutters folded against the wall are told from the sashes and left out of the clear width;
 * what is not an opening (a strip of fascia, a bay of the wall between two pilasters, a planter on the ground line,
-  a title frame) is rejected by its proportions and by how it is drawn;
+  a railing, a chimney above the roof, a pergola with its vine, a title frame) is rejected by its proportions and
+  by how it is drawn;
 * the floor comes from a level mark ("+0,00", "P.P.F. +0.00") and the line it labels, else from the bottom of the
-  lowest door, the top of the ground line, or the foot of a person figure; the other storeys from their marks.
+  lowest door, the top of the ground line, or the foot of a person figure; the other storeys from their marks, or
+  from the slab that runs between two rows of openings.
 
 Layers that do name doors and windows stay the primary answer for those symbols: the shapes complete them (a
-window drawn as its inner pane only becomes the whole frame) and add the openings the names do not give.
+window drawn as its inner pane only becomes the whole frame; a shutter the layer does not call part of the window
+only widens ``full_x``) and add the openings the names do not give.
+
+A sheet has many views and reading it takes seconds: ``read_view_symbols`` reads the modelspace once per drawing and
+cuts each view out of that.
 """
 
 from __future__ import annotations
