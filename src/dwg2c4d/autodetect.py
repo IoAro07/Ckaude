@@ -1934,7 +1934,8 @@ def apply_analysis(doc, cfg, a: Analysis, rules=None) -> tuple["Config", list[st
                      "(guarda l'immagine *_viste.png).")
     new = replace(cfg, **change) if change else cfg
     proposed = "wall" in getattr(cfg, "proposed", ())
-    if "wall" not in cfg.layers.overrides or proposed:
+    guessed = "wall" not in cfg.layers.overrides or proposed  # the wall layers are ours, not the ones --muri names
+    if guessed:
         added, more, by_shape = choose_wall_layers(doc, new, a, rules)
         if added:  # the name rules stop deciding once there is a list: it holds the layers the names call walls too
             named = [glob.escape(l) for l in a.soup.layers if rules.classify_layer(l) == "wall"]
@@ -1944,4 +1945,4 @@ def apply_analysis(doc, cfg, a: Analysis, rules=None) -> tuple["Config", list[st
             a.wall_layers = added
         notes.extend(more)
     return replace(new, auto=False, shape_openings=not names_say_openings(a.soup, rules), analysis=a,
-                   analysis_notes=notes), notes
+                   analysis_notes=notes, walls_guessed=guessed), notes

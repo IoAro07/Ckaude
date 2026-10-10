@@ -212,6 +212,10 @@ class Config:
     skirting_height: float = 0.08  # battiscopa, from the skirting layer
     skirting_thickness: float = 0.012
     partitions_apart: bool = True  # walls of the fondelli/tramezzi layers as their own object (Tramezzi)
+    separate_walls: bool = True  # furniture outlines, curbs and free-standing outlines on a wall layer the program chose are not walls
+    walls_guessed: bool = False  # internal: the wall layers are the program's choice (names, shapes, proposals), not --muri
+    low_wall_height: float = 0.50  # metres: low walls and lot lines apart from the building (group Muretti)
+    curb_height: float = 0.15  # metres: thin ones among them, curbs (group Cordoli)
     wall_finishes: bool = False  # perimeter walls cut in two halves: Muri_esterno and Muri_interno (the command line turns it on)
     floors_to_outer_face: bool = True  # floors per room reach the outer face of the perimeter walls
     floors_by_room: bool = True  # one floor object per room (or per polygon of the floor layer)
@@ -296,7 +300,8 @@ class Config:
             "max_wall_thickness", "floor_thickness", "ceiling_thickness", "glass_thickness",
             "roof_thickness", "roof_default_pitch", "label_radius", "passage_max", "skirting_height",
             "skirting_thickness", "garden_thickness", "garden_lawn_drop", "pool_depth", "pool_wall",
-            "pool_water_drop", "tree_height", "shrub_height", "hedge_height", "furniture_height")]
+            "pool_water_drop", "tree_height", "shrub_height", "hedge_height", "furniture_height",
+            "low_wall_height", "curb_height")]
         numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset, self.garden_area) if box_ for v in box_]
         numbers += [v for ev in self.elevations for v in ev]
         if self.roof_pitch is not None:
@@ -322,7 +327,7 @@ class Config:
         if self.window_sill < 0 or self.floor_thickness < 0:
             raise ValueError("davanzale e spessore pavimento non possono essere negativi")
         for name in ("garden_thickness", "pool_depth", "pool_wall", "tree_height", "shrub_height", "hedge_height",
-                     "furniture_height"):
+                     "furniture_height", "low_wall_height", "curb_height"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} deve essere positivo")
         if self.garden_lawn_drop < 0 or self.pool_water_drop < 0 or self.pool_water_drop >= self.pool_depth:

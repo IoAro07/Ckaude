@@ -19,6 +19,7 @@ from .objwriter import write_obj
 from .openings import assign_ids, build_openings
 from .reader import layer_used, storeys, read_items
 from .roof import build_roof, ridge_hints_from
+from .falsewalls import FalseWalls, drop_loose_outlines, lower_far_walls
 from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
@@ -54,6 +55,7 @@ class ConversionReport:
     wall_height: float = 0.0
     wall_height_source: str = "predefinita"  # predefinita | indicata | scritta | prospetto
     plan: object | None = None  # the Plan (walls, partitions, floors...): for the check picture
+    false_walls: object | None = None  # the falsewalls.FalseWalls: furniture left out, low walls, lone columns
     room_objects: list = field(default_factory=list)  # the Room objects (polygons)
     preview_path: Path | None = None
     overlay_path: Path | None = None
@@ -166,8 +168,15 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         warnings.append(f"I layer nominano {len(found)} piani ({', '.join(f'P{n}' for n in found)}): ho letto il "
                         f"piano {found[0]}. Per un altro usa --piano N.")
 
-    layer_walls = build_wall_layers(result.items, cfg, warnings)
+    items, false = result.items, FalseWalls()
+    sorting = cfg.separate_walls and cfg.walls_guessed  # --muri says what is a wall: then nothing is told apart
+    if sorting:  # furniture, curbs and lot lines on the layers we chose are not walls
+        items, false = drop_loose_outlines(items)
+    layer_walls = build_wall_layers(items, cfg, warnings)
     walls = clean_footprint(union(layer_walls.values()), cfg.merge_tolerance)
+    if sorting:
+        walls = clean_footprint(lower_far_walls(walls, result.items, false), cfg.merge_tolerance)
+        warnings.extend(false.notes(cfg.low_wall_height, cfg.curb_height))
     if walls.is_empty:
         found = sorted({it.layer for it in result.items})
         raise ConversionError(
@@ -175,7 +184,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             "indicali con --muri \"NOME1,NOME2\"."
             + (f" Layer riconosciuti come porte/finestre/pilastri: {', '.join(found)}." if found else "")
         )
-    columns = build_columns(result.items, cfg)
+    columns = union([build_columns(result.items, cfg), false.columns])
     if not columns.is_empty:
         columns = columns.difference(walls)
     openings = build_openings(result.items, walls, cfg, warnings)
@@ -195,7 +204,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             f"(unita' del disegno lette: {result.unit}). Se non tornano, forza l'unita' con --unita "
             "(mm, cm, m)."
         )
-    plan = Plan(walls=walls, columns=columns, openings=openings, merge_tolerance=cfg.merge_tolerance)
+    plan = Plan(walls=walls, columns=columns, openings=openings, merge_tolerance=cfg.merge_tolerance, low=false.low)
     solid = plan.solid_walls
     groups = _wall_groups(solid, openings)
     if groups:
@@ -405,6 +414,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         mesh=mesh,
         openings=openings,
         plan=plan,
+        false_walls=false,
         room_objects=rooms,
         garden=garden,
         garden_table_path=garden_table_path,

@@ -11,6 +11,7 @@ from shapely.geometry import Point, Polygon
 from shapely.geometry.base import BaseGeometry
 
 from .config import Config
+from .falsewalls import split_low
 from .geom import polygons_of, union
 from .fixtures import add_fixtures
 from .garden import add_garden
@@ -33,6 +34,7 @@ class Plan:
     floors: list[tuple[str, BaseGeometry]] = field(default_factory=list)  # (name, shape): one object each
     skirting: BaseGeometry = field(default_factory=Polygon)
     partitions: BaseGeometry = field(default_factory=Polygon)  # the thin walls, apart from the main walls
+    low: BaseGeometry = field(default_factory=Polygon)  # curbs, low walls and lot lines outside the building (falsewalls)
     garden: object | None = None  # the ground, pools, plants and furniture outside (garden.Garden)
 
     @cached_property
@@ -158,6 +160,12 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
         mesh.add_extrusion("Muri", wall_slabs(main, cutting, cfg.wall_height), bottom=True)
     if not plan.partitions.is_empty:
         mesh.add_extrusion("Tramezzi", wall_slabs(plan.partitions, cutting, cfg.wall_height), bottom=True)
+
+    if not plan.low.is_empty:
+        curbs, low_walls = split_low(plan.low)
+        for name, shape, height in (("Cordoli", curbs, cfg.curb_height), ("Muretti", low_walls, cfg.low_wall_height)):
+            if not shape.is_empty:
+                mesh.add_extrusion(name, [Slab(0.0, height, shape)], bottom=True)
 
     if not plan.columns.is_empty:
         mesh.add_extrusion("Pilastri", [Slab(0.0, cfg.wall_height, plan.columns)], bottom=True)
