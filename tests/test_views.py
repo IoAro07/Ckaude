@@ -151,6 +151,104 @@ def test_a_tail_of_the_ground_line_does_not_stretch_the_view():
     assert v.size_m(S)[0] < 24
 
 
+def add_hall(msp, w, d, windows=True):
+    """A big plain building: double walls of long lines (each 12 m or more), windows on the two long walls and three doors on
+    the east wall; nothing inside, so the walls run for metres with no drawing near them."""
+    for off in (0, 30):
+        ring = [(off, off), (w - off, off), (w - off, d - off), (off, d - off), (off, off)]
+        for a, b in zip(ring, ring[1:]):
+            msp.add_line(a, b)
+    for k in range(int(w // 500) if windows else 0):
+        for y in (0, d - 30):
+            msp.add_lwpolyline([(250 + k * 500, y), (370 + k * 500, y), (370 + k * 500, y + 30), (250 + k * 500, y + 30)], close=True)
+    for k in range(3):
+        msp.add_arc((w - 30, 200 + k * 300), 90, 90, 180)
+        msp.add_line((w - 30, 200 + k * 300), (w - 120, 200 + k * 300))
+
+
+@pytest.mark.parametrize("w, d", [(3000, 900), (3000, 1500), (3000, 2000), (5000, 1500), (4000, 2500)])
+def test_a_big_plain_hall_is_one_plan_with_the_box_of_all_its_walls(w, d):
+    doc, msp = new_sheet()
+    add_hall(msp, w, d)
+    add_title(msp, "PIANTA PIANO TERRA", 0, -250)
+    add_elevation(msp, w + 2500, 0, w=1400)
+    hall = view_at(views_of(doc), w * S / 2, d * S / 2)
+    assert hall.kind == "plan" and box_m(hall) == pytest.approx((0.0, 0.0, w * S, d * S), abs=0.3)
+    from dwg2c4d import Config
+    from dwg2c4d.autodetect import apply_analysis
+
+    cfg, _ = apply_analysis(doc, Config(), analyze(doc))
+    assert cfg.area[2] - cfg.area[0] > w * S and cfg.area[3] - cfg.area[1] > d * S  # the sheet is not cropped to a part of the hall
+
+
+@pytest.mark.parametrize("w, windows", [(2500, 5), (3000, 5), (4000, 5), (4000, 10)])
+def test_a_long_plain_facade_is_one_view_not_the_pieces_its_long_lines_leave(w, windows):
+    doc, msp = new_sheet()
+    add_elevation(msp, 0, 0, w=w, windows=windows)  # wall, gable and ground line are each 12 m long or more
+    add_title(msp, "PROSPETTO SUD", 0, 600 + 150 + 100)
+    (v,) = views_of(doc)
+    assert v.kind == "elevation" and box_m(v)[2] - box_m(v)[0] > w * S and v.titles == ["PROSPETTO SUD"]
+    assert box_m(v)[3] > 7.4  # the gable (a ridge at 7.5 m, two lines of 12 m) runs beside the top of the wall: part of it
+
+
+def test_the_border_of_a_sheet_that_touches_one_drawing_does_not_become_a_part_of_it():
+    doc, msp = new_sheet()
+    add_plan(msp, 100, 100)  # 1 m from the left and bottom lines of the border
+    add_elevation(msp, 3000, 500, w=1400)  # another drawing, far from the border
+    msp.add_lwpolyline([(0, 0), (5600, 0), (5600, 2400), (0, 2400)], close=True)  # a border of 56 x 24 m: lines of 12 m or more
+    plan = view_at(views_of(doc), 7, 5)
+    assert plan.kind == "plan" and box_m(plan)[2] < 16.5  # not the border, that encloses the elevation too
+
+
+def test_a_tail_of_the_ground_line_that_almost_meets_another_links_nothing():
+    doc, msp = new_sheet()
+    add_elevation(msp, 0, 0, w=1400, marks=False)  # the ground line goes on for 2 m on each side
+    add_elevation(msp, 1850, 0, w=1400, marks=False)  # 4.5 m away: the two tails are 0.5 m from one another
+    left, right = views_of(doc)
+    assert box_m(left)[2] == pytest.approx(16.0, abs=0.1) and box_m(right)[0] == pytest.approx(16.5, abs=0.1)  # the tails are theirs
+
+
+def test_two_facades_closer_than_the_link_with_their_titles_are_two_views():
+    doc, msp = new_sheet()
+    for k, (x, name) in enumerate(((0, "PROSPETTO SUD"), (1650, "PROSPETTO EST"))):  # the roofs 0.5 m wide each: 1 m of ink between
+        add_elevation(msp, x, 0, w=1400, ground=False)
+        add_title(msp, name, x, 600 + 150 + 120)
+    left, right = views_of(doc)
+    assert left.titles == ["PROSPETTO SUD"] and right.titles == ["PROSPETTO EST"]
+    assert box_m(left)[2] < box_m(right)[0] and box_m(left)[3] > 8 and box_m(right)[3] > 8  # each with the frame of its title
+
+
+def test_four_facades_in_a_row_2_m_apart_are_four_views_each_with_its_title():
+    doc, msp = new_sheet()
+    for k, name in enumerate(("PROSPETTO SUD", "PROSPETTO EST", "PROSPETTO NORD", "PROSPETTO OVEST")):
+        add_elevation(msp, k * 1600, 0, w=1400)
+        add_title(msp, name, k * 1600, 600 + 150 + 120)
+    views = views_of(doc)
+    assert [v.titles for v in views] == [["PROSPETTO SUD"], ["PROSPETTO EST"], ["PROSPETTO NORD"], ["PROSPETTO OVEST"]]
+    assert all(v.kind == "elevation" and v.size_m(S)[0] < 20 for v in views)
+
+
+def test_a_plan_and_a_facade_1_m_apart_are_two_views():
+    doc, msp = new_sheet()
+    add_plan(msp, 0, 0)
+    add_elevation(msp, 0, 1000)  # its ground line a metre over the north wall of the plan
+    add_title(msp, "PIANTA PIANO TERRA", 0, -200)
+    add_title(msp, "PROSPETTO SUD", 0, 1000 + 600 + 150 + 120)
+    plan, elevation = (next(v for v in views_of(doc) if v.kind == k) for k in ("plan", "elevation"))
+    assert plan.titles == ["PIANTA PIANO TERRA"] and elevation.titles == ["PROSPETTO SUD"] and plan.doors == 5 and elevation.doors == 0
+    assert analyze(doc).plan.bbox == plan.bbox
+
+
+def test_two_titles_of_one_drawing_do_not_cut_it():
+    doc, msp = new_sheet()
+    add_elevation(msp, 0, 0, w=1400)
+    add_title(msp, "PROSPETTO SUD", 0, 600 + 150 + 120)  # the same name again under it, and a section of the same facade
+    add_title(msp, "PROSPETTO SUD", 0, -300)
+    add_title(msp, "SEZIONE A-A", 600, -300)
+    (v,) = views_of(doc)
+    assert v.size_m(S)[0] < 20 and len(v.titles) == 3
+
+
 # --- stray marks -------------------------------------------------------------------------------
 
 def test_crop_marks_in_the_corners_do_not_stretch_a_view():
@@ -279,12 +377,38 @@ def test_a_title_inside_a_view_names_that_view():
     ("STATO DI FATTO - PROSPETTO SUD", "elevation"), ("1 - PIANTA PIANO TERRA", "plan"), ("A) SEZIONE B-B", "section"),
     ("TAV. 3 PROSPETTI", "elevation"), ("Stato di progetto: planimetria piano primo", "plan"), ("Fronte principale", "elevation"),
     ("SEZ. A-A", "section"), ("N 2 PIANTA COPERTURA", "roof"), ("PROGETTO DI RISTRUTTURAZIONE", None), ("STATO DI FATTO", None),
-    ("3 CAMERE", None), ("TETTOIA IN ACCIAIO", None),
+    ("3 CAMERE", None), ("TETTOIA IN ACCIAIO", None), ("TAVOLA N. 3 - PIANTA PIANO TERRA", "plan"),
 ])
 def test_the_state_and_the_number_before_the_word_do_not_change_what_a_title_says(text, kind):
     from dwg2c4d.autodetect import _title_kind
 
     assert _title_kind(text) == kind
+
+
+@pytest.mark.parametrize("text, kind", [
+    ("NORTH ELEVATION", "elevation"), ("SOUTH ELEVATION 1:100", "elevation"), ("BUILDING SECTION", "section"),
+    ("SECOND FLOOR PLAN", "plan"), ("BASEMENT PLAN", "plan"), ("VISTA SUD", "elevation"), ("STRALCIO CATASTALE", "site"),
+    ("COROGRAFIA", "site"), ("PIANO COPERTURA", "roof"), ("PIANTA DEL TETTO", "roof"), ("PIANTA PIANO COPERTURA", "roof"),
+    ("PIANTA DELLA COPERTURA", "roof"), ("PIANTA SOTTOTETTO", "plan"), ("PLANIMETRIA COPERTURA", "roof"),
+    ("PROSPETTO COPERTURA IN COPPI", "elevation"),  # what the text starts with wins, except for a PIANTA that is a roof
+    ("SITE PLAN", "site"), ("ROOF PLAN", "roof"),  # the strongest kind keeps its place
+])
+def test_a_view_word_ends_a_title_as_well_as_starts_it_and_a_roof_word_makes_a_pianta_a_roof(text, kind):
+    from dwg2c4d.autodetect import _title_kind
+
+    assert _title_kind(text) == kind
+
+
+@pytest.mark.parametrize("note", [
+    "NOTE: SEE THE GROUND FLOOR PLAN FOR THE POSITION OF THE POSTS",  # the view word is far in a long text
+    "ATTACCO A TERRA DEL MURO PIANO TERRA CON GUAINA",
+    "VEDI LA PIANTA DEL SOTTOTETTO PER LE QUOTE", "ACCESSO", "SOTTOTETTO NON ABITABILE", "FINESTRA DA 120X140",
+    "TAVOLA: PIANTE E PROSPETTI",  # the caption of a sheet, in its title block: several kinds of drawing, no one of them
+])
+def test_a_note_that_mentions_a_drawing_is_no_title(note):
+    from dwg2c4d.autodetect import _title_kind
+
+    assert _title_kind(note) is None
 
 
 def test_a_title_written_twice_counts_once_and_a_caption_with_a_number_is_a_title():
@@ -309,6 +433,93 @@ def test_a_plan_is_known_by_its_doors_and_the_areas_of_its_rooms():
     add_plan(msp, 0, 0)
     (v,) = views_of(doc)
     assert v.kind == "plan" and v.kind_from.startswith("contenuto") and v.doors == 5 and v.areas == 4
+
+
+def add_plan_with_door_blocks(doc, msp, x, y, rooms=True, areas=False, marks=0, doors=5):
+    """A plan like ``add_plan`` whose doors are blocks called PORTA90 (the swing is inside the block: no loose arc shows it),
+    with ``marks`` level marks written in it. The rooms are written with their names only unless ``areas``."""
+    for off in (0, 30):
+        msp.add_lwpolyline([(x + off, y + off), (x + 1400 - off, y + off), (x + 1400 - off, y + 900 - off), (x + off, y + 900 - off)],
+                           close=True)
+        msp.add_line((x + 600 + off, y), (x + 600 + off, y + 900))
+    if "PORTA90" not in doc.blocks:
+        block = doc.blocks.new("PORTA90")
+        block.add_arc((0, 0), 90, 0, 90)
+        block.add_line((0, 0), (0, 90))
+    for k in range(doors):
+        msp.add_blockref("PORTA90", (x + 120 + k * 250, y + 30))
+    if rooms:
+        for k, name in enumerate(("CAMERA", "BAGNO", "CUCINA", "SOGGIORNO")):
+            msp.add_text(f"{name} MQ {10 + k},5" if areas else name, height=20, dxfattribs={"insert": (x + 100 + k * 300, y + 700)})
+    for k in range(marks):
+        msp.add_text(["+0,00", "+0,15", "-0,05", "+3,00"][k], height=15, dxfattribs={"insert": (x + 100 + k * 300, y + 500)})
+
+
+@pytest.mark.parametrize("marks", [0, 1, 2, 3])
+def test_a_plan_with_a_few_level_marks_is_still_a_plan_when_its_rooms_are_written_with_their_areas(marks):
+    doc, msp = new_sheet()
+    add_plan(msp, 0, 0)  # five doors and the areas of four rooms
+    for k in range(marks):  # the level of a step, of a terrace
+        msp.add_text(["+0,00", "+0,15", "-0,05"][k], height=15, dxfattribs={"insert": (300 + k * 300, 500)})
+    add_elevation(msp, 3000, 0)
+    plan, elevation = (view_at(views_of(doc), x, 4) for x in (7, 40))
+    assert (plan.kind, elevation.kind) == ("plan", "elevation") and plan.levels == marks
+    assert analyze(doc).plan.bbox == plan.bbox
+
+
+def test_door_blocks_make_a_plan_not_a_section_of_its_room_names():
+    doc, msp = new_sheet()
+    add_plan_with_door_blocks(doc, msp, 0, 0)  # four room names, five door blocks, no 'mq', no arc
+    add_elevation(msp, 3000, 0)
+    plan = view_at(views_of(doc), 7, 4)
+    assert plan.kind == "plan" and plan.door_blocks == 5 and plan.doors == 0 and plan.rooms == 4
+    assert analyze(doc).plan.bbox == plan.bbox
+
+
+@pytest.mark.parametrize("marks", [2, 3])
+def test_the_title_of_a_plan_drawn_with_door_blocks_is_not_refused_for_its_level_marks(marks):
+    doc, msp = new_sheet()
+    add_plan_with_door_blocks(doc, msp, 0, 0, marks=marks)
+    add_title(msp, "PIANTA PIANO TERRA", 0, -200)
+    add_elevation(msp, 3000, 0)
+    plan = view_at(views_of(doc), 7, 4)
+    assert plan.kind == "plan" and plan.titles == ["PIANTA PIANO TERRA"] and plan.kind_from == "titolo"
+
+
+@pytest.mark.parametrize("note", ["COPERTURA IN COPPI", "TETTO", "ROOF", "ESTRATTO DI MAPPA", "DETTAGLIO A", "PARTICOLARE 3"])
+def test_a_note_written_in_a_plan_does_not_make_it_a_roof_a_map_or_a_detail(note):
+    doc, msp = new_sheet()
+    add_plan(msp, 0, 0)
+    msp.add_text(note, height=15, dxfattribs={"insert": (300, 600)})
+    add_elevation(msp, 3000, 0)
+    views = views_of(doc)
+    plan = view_at(views, 7, 4)
+    assert plan.kind == "plan" and plan.titles == [] and analyze(doc).plan.bbox == plan.bbox
+    assert [v.kind for v in views] == ["plan", "elevation"]  # the note names no other view either
+
+
+def test_a_title_that_says_roof_names_a_roof_plan_and_a_roof_is_never_chosen_over_a_plan_with_rooms():
+    doc, msp = new_sheet()
+    add_plan_with_door_blocks(doc, msp, 0, 0, areas=True)
+    add_title(msp, "PIANTA PIANO TERRA", 0, -250)
+    for k in range(40):  # the lines of the tiles: a bigger drawing than the plan
+        msp.add_line((3000 + k * 35, 0), (3000 + k * 35, 900))
+    for k in range(30):
+        msp.add_line((3000, k * 30), (4400, k * 30))
+    add_title(msp, "PIANTA DEL TETTO", 3000, -250)
+    views = views_of(doc)
+    roof = view_at(views, 36, 4)
+    assert roof.kind == "roof" and roof.kind_from == "titolo" and roof.cells > view_at(views, 7, 4).cells
+    assert analyze(doc).plan.bbox == view_at(views, 7, 4).bbox
+
+
+def test_the_plan_to_convert_counts_the_areas_written_in_it_as_evidence_of_a_plan():
+    def v(id_, cells, **kw):
+        return View(id_, (0, 0, 1, 1), cells, kind="plan", **kw)
+
+    roof_like, rooms = v(1, 668), v(2, 135, areas=4)  # a plan that is a roof by its lines has no doors and no areas
+    assert choose_plan([roof_like, rooms])[0].id == 2
+    assert choose_plan([v(1, 668), v(2, 135, door_blocks=3)])[0].id == 2
 
 
 def test_a_plan_turned_at_any_angle_is_still_a_plan_and_no_site():
@@ -382,6 +593,28 @@ def test_contour_lines_make_a_site_and_the_house_on_it_is_a_view_inside_it():
     assert site.size_m(S)[0] > 60
     a = analyze(doc)
     assert a.plan.bbox == house.bbox  # the plan to convert is the house, not the hillside
+
+
+def test_a_house_on_its_lot_with_all_its_doors_on_one_wall_is_found_whole_not_cut_at_the_doors():
+    doc, msp = new_sheet()
+    _site(msp, None)
+    add_plan(msp, 2700, 2000, doors=6)  # a house of 14 x 9 m (x 27..41, y 20..29) with six doors on its south wall
+    views = views_of(doc)
+    site = next(v for v in views if v.kind == "site")
+    house = next(v for v in views if v.parent == site.id)
+    x0, y0, x1, y1 = box_m(house)
+    assert (x0, y0, x1, y1) == pytest.approx((27.0, 20.0, 41.0, 29.0), abs=1.2)  # the doors alone said y 17 to 24
+    assert analyze(doc).plan.bbox == house.bbox
+
+
+def test_walls_that_go_on_to_the_lot_do_not_make_the_house_bigger():
+    doc, msp = new_sheet()
+    _site(msp, None)
+    add_plan(msp, 2700, 2000, doors=6)
+    msp.add_line((4100, 2030), (7000, 2030))  # a garden wall that starts at the corner of the house and runs along the lot
+    msp.add_line((7000, 2030), (7000, 4800))
+    house = next(v for v in views_of(doc) if v.kind == "plan")
+    assert box_m(house)[2] - box_m(house)[0] < 25  # the house, not the house and the walls of the garden
 
 
 def test_contour_lines_alone_are_a_site():
@@ -537,6 +770,44 @@ def test_two_plans_with_no_words_and_the_same_lines_are_twins_even_when_one_is_t
     assert first.copy_of is None and second.copy_of == first.id
 
 
+def _count_comparisons(monkeypatch):
+    """The number of times two drawings are compared line by line (``_Lines.shift``)."""
+    from dwg2c4d import autodetect
+
+    calls: list[int] = []
+    real = autodetect._Lines.shift
+    monkeypatch.setattr(autodetect._Lines, "shift", lambda self, *a: calls.append(1) or real(self, *a))
+    return calls
+
+
+def test_thirty_alike_plans_are_twins_found_without_comparing_every_pair(monkeypatch):
+    doc, msp = new_sheet()
+    for k in range(30):
+        add_plan(msp, (k % 6) * 2200, (k // 6) * 1500)
+    _without_words(msp)
+    calls = _count_comparisons(monkeypatch)
+    views = views_of(doc)
+    assert len(views) == 30 and sum(v.copy_of is not None for v in views) == 29  # one original, the rest its copies
+    assert len(calls) <= 2 * 29  # a pair linked through a third plan is not compared: 435 pairs before
+
+
+def test_dozens_of_unlike_drawings_of_one_size_are_compared_a_bounded_number_of_times(monkeypatch):
+    from dwg2c4d.autodetect import COPY_TRIES
+
+    rng = np.random.default_rng(5)
+    seg = []
+    for k in range(40):  # forty clouds of lines in boxes of 30 x 20 m, 20 m apart
+        ox, oy = (k % 8) * 5000, (k // 8) * 4000
+        p = np.column_stack([rng.uniform(ox, ox + 3000, 400), rng.uniform(oy, oy + 2000, 400)])
+        seg.append(np.hstack([p, p + rng.uniform(-100, 100, (400, 2))]))
+    seg = np.vstack(seg)
+    soup = Soup("cm", ["0"], seg, np.zeros(len(seg), dtype=int), np.zeros((0, 5)), np.zeros(0, dtype=int), np.zeros((0, 3)),
+                np.zeros((0, 4)))
+    calls = _count_comparisons(monkeypatch)
+    assert len(find_views(soup, S)) >= 40
+    assert len(calls) <= 4 * COPY_TRIES  # four turns for each pair tried, 780 pairs before
+
+
 def test_two_floors_with_the_same_walls_and_other_partitions_are_no_copies():
     doc, msp = new_sheet()
     for k, x in enumerate((0, 2000)):
@@ -558,6 +829,57 @@ def test_two_plans_of_a_sheet_that_repeat_each_other_are_copies_even_with_titles
         add_title(msp, ("PIANTA PIANO TERRA", "PIANTA PIANO TERRA - COPIA")[k], x, 1050)
     first, second = views_of(doc)
     assert first.copy_of is None and second.copy_of == first.id and second.kind == "plan"
+
+
+def _two_states(titles):
+    """The same plan drawn twice, 20 m apart, with the same words in it and one partition moved in the second."""
+    doc, msp = new_sheet()
+    for k, x in enumerate((0, 2000)):
+        add_plan(msp, x, 0)
+        if k:
+            msp.add_line((x + 300, 100), (x + 300, 800))  # the project adds a partition
+        add_title(msp, titles[k], x, 1050)
+    return doc
+
+
+def test_the_plans_of_the_existing_state_and_of_the_project_are_two_drawings_not_a_copy_and_its_original():
+    doc = _two_states(("STATO DI FATTO - PIANTA PIANO TERRA", "STATO DI PROGETTO - PIANTA PIANO TERRA"))
+    old, new = views_of(doc)
+    assert old.copy_of is None and new.copy_of is None  # the lines coincide, the words coincide: but the states differ
+    a = analyze(doc)
+    assert a.plan.id == new.id and "progetto" in " ".join(a.notes) and f"--vista {old.id}" in " ".join(a.notes)
+
+
+def test_where_a_plan_is_paired_with_the_plan_of_the_project_the_project_is_the_original():
+    doc = _two_states(("PIANTA PIANO TERRA", "PIANTA PIANO TERRA - STATO DI PROGETTO"))
+    first, second = views_of(doc)
+    assert first.copy_of == second.id and second.copy_of is None  # the project is the one to build, not the leftmost
+
+
+def _rooms(msp, x, y, w, d, step=400):
+    """Walls of rooms of ``step`` all over a plan: pieces of 4 m, so that no long line holds them together."""
+    for px in range(step, w, step):
+        for y0 in range(0, d, 400):
+            msp.add_line((x + px, y + y0 + 30), (x + px, y + min(y0 + 400, d) - 30))
+    for py in range(step, d, step):
+        for x0 in range(0, w, 400):
+            msp.add_line((x + x0 + 30, y + py), (x + min(x0 + 400, w) - 30, y + py))
+
+
+def test_a_big_building_is_no_site_just_because_an_upper_floor_is_a_tenth_of_it():
+    def sheet(doors):
+        doc, msp = new_sheet()
+        add_plan(msp, 0, 0, w=9000, d=4000, doors=doors, door_gap=200)  # a hall of 90 x 40 m
+        _rooms(msp, 0, 0, 9000, 4000)
+        add_title(msp, "PIANTA PIANO TERRA", 0, -250)
+        add_plan(msp, 10500, 0, w=1000, d=600, doors=2)  # ... and a mezzanine of 10 x 6 m
+        add_title(msp, "PIANTA PIANO PRIMO", 10500, -250)
+        return doc
+
+    big, small = views_of(sheet(40))
+    assert big.cells >= 6 * small.cells  # by the size alone the first is the site
+    assert (big.kind, small.kind) == ("plan", "plan") and analyze(sheet(40)).plan.id == big.id  # forty doors, a building
+    assert [v.kind for v in views_of(sheet(1))] == ["site", "plan"]  # no more doors than the small one: the lot around it
 
 
 def test_the_plan_to_convert_is_the_biggest_that_is_not_a_site_a_copy_or_a_part_of_a_bigger_view():
