@@ -642,6 +642,18 @@ def _thick_enough(box: tuple[float, float, float, float], scale: float) -> bool:
     return min(box[2] - box[0], box[3] - box[1]) * scale >= MIN_VIEW_SIDE
 
 
+def _thickness(xy: np.ndarray, label: np.ndarray, count: int) -> np.ndarray:
+    """How thick every piece is (``xy``: the centres of its cells), across its main direction, whatever that is: the width
+    of a band holding the cells as evenly as they lie. A wall with its windows is thin at any angle; the box of one turned
+    by 31 degrees is 28 m thick."""
+    n = np.maximum(np.bincount(label, minlength=count), 1)
+    mean = np.stack([np.bincount(label, weights=xy[:, k], minlength=count) for k in (0, 1)], axis=1) / n[:, None]
+    d = xy - mean[label]
+    xx, yy, xy_ = (np.bincount(label, weights=w, minlength=count) / n for w in (d[:, 0] ** 2, d[:, 1] ** 2, d[:, 0] * d[:, 1]))
+    low = (xx + yy) / 2 - np.sqrt(np.maximum(((xx - yy) / 2) ** 2 + xy_ ** 2, 0.0))  # the smaller eigenvalue of the spread
+    return np.sqrt(12.0 * np.maximum(low, 0.0))
+
+
 def _bare_runs(near: np.ndarray, which: np.ndarray, per: float) -> np.ndarray:
     """The points of the long lines that lie in a bare run: a stretch of a line with no drawing near it that is too long
     to be a gap in a drawing (BARE_RUN). ``near``: the point has drawing near it; ``which``: the line it is on;
@@ -722,7 +734,8 @@ def _closed_outlines(which: np.ndarray, line: np.ndarray, cut: np.ndarray, ink: 
     joined = _components(cKDTree(all_xy), reach)
     count = np.bincount(piece) if len(piece) else np.zeros(0, dtype=int)
     boxes, whole = _extent(base_xy, piece, cell / 2), _extent(all_xy, joined, cell / 2)
-    real = {g for g, b in boxes.items() if count[g] >= MIN_VIEW_CELLS and _thick_enough(b, scale)}
+    thick = _thickness(base_xy, piece, len(count)) * scale  # a wall with its windows is no drawing of its own, at any angle
+    real = {g for g in boxes if count[g] >= MIN_VIEW_CELLS and thick[g] >= MIN_VIEW_SIDE}
     base_in, extra_in = joined[np.searchsorted(everything, base)], joined[np.searchsorted(everything, extra)]
     stays = np.zeros(len(everything), bool)  # the cells of the closed lines that stay
     for t in np.unique(extra_in):
