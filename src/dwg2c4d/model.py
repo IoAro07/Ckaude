@@ -21,6 +21,7 @@ from .walls import clean_footprint
 
 SLIVER = 0.004  # wall remnants thinner than 2*SLIVER next to an opening are removed
 FLOOR_CLOSING = 0.6  # gaps up to twice this (door openings) are bridged when filling the floor
+OTHER_FLOOR = "Pavimento"  # the name of the floor that covers what no room's floor does (see floors.floor_left_over)
 
 
 @dataclass
@@ -181,7 +182,8 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
 
     by_room = cfg.floor_thickness > 0 and bool(plan.floors)
     for name, shape in plan.floors if by_room else []:
-        mesh.add_extrusion(f"Pavimento_{name}", [Slab(-cfg.floor_thickness, 0.0, shape)])
+        mesh.add_extrusion("Pavimento" if name == OTHER_FLOOR else f"Pavimento_{name}",
+                           [Slab(-cfg.floor_thickness, 0.0, shape)])
     if (cfg.floor_thickness > 0 and not by_room) or cfg.ceiling:
         footprint = floor_footprint(walls)
         if footprint.is_empty:
