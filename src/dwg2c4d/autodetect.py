@@ -1634,6 +1634,22 @@ def choose_plan(views: list[View], wanted: int | None = None) -> tuple[View | No
     return None, ""
 
 
+def other_view_boxes(a: Analysis, kinds: tuple[str, ...] | None = None) -> list[tuple[float, float, float, float]]:
+    """The boxes (drawing units) of the views of the sheet other than the converted plan: the plan of another storey,
+    the roof plan, sections, elevations, details, the copies of the plan. What they hold (terraces, tiles, a lawn
+    drawn to another scale) is no garden of this plan. The views the plan lies in (its lot, the site) are kept out of
+    the list: that is where its garden is drawn. ``kinds``: only the views of these kinds."""
+    if a.plan is None:
+        return []
+    by_id = {v.id: v for v in a.views}
+    around: set[int] = set()  # the lots the plan is drawn in
+    host = by_id.get(a.plan.parent)
+    while host is not None and host.id not in around:
+        around.add(host.id)
+        host = by_id.get(host.parent)
+    return [v.bbox for v in a.views if v is not a.plan and v.id not in around and (kinds is None or v.kind in kinds)]
+
+
 def analyze(doc, layer_used=None, wanted_view: int | None = None, unit: str | None = None, rules=None) -> Analysis:
     """``unit``: the unit the user gave (then nothing is guessed). ``rules``: the layer rules (default ones), to tell
     which layers the names call walls, doors and windows."""

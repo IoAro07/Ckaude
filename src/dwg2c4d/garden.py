@@ -305,9 +305,10 @@ def _expand(doc, cfg: Config, entities, depth: int = 0):
 
 def _scan(doc, cfg: Config, dist: float, zones, skip, user_window, reach=None):
     """Hatches / outlines and blocks of the garden, in drawing units: (fills, blocks, fills drawn in an
-    elevation, blocks drawn in an elevation). ``zones``: where the elevations are; ``skip``: boxes whose
-    contents (a roof plan left out) are not the garden unless they are on a layer that says they are; ``reach``: the
-    box (drawing units) beyond which nothing is garden (a sheet holds other drawings than the one converted)."""
+    elevation, blocks drawn in an elevation, how many hatches and blocks the ``skip`` boxes left out). ``zones``:
+    where the elevations are; ``skip``: boxes whose contents (another storey, a roof plan) are not the garden unless
+    they are on a layer that says they are; ``reach``: the box (drawing units) beyond which nothing is garden (a sheet
+    holds other drawings than the one converted)."""
     rules = cfg.layers
     fills: list[_Fill] = []
     blocks: list[_Block] = []
@@ -318,8 +319,13 @@ def _scan(doc, cfg: Config, dist: float, zones, skip, user_window, reach=None):
     window = box(*user_window) if user_window else None
     limit = box(*reach) if reach else None
 
+    left_out = 0
+
     def skipped(x0: float, y0: float, x1: float, y1: float, lk) -> bool:
-        return lk is None and any(b[0] <= x0 and b[1] <= y0 and x1 <= b[2] and y1 <= b[3] for b in skip)
+        nonlocal left_out
+        hit = lk is None and any(b[0] <= x0 and b[1] <= y0 and x1 <= b[2] and y1 <= b[3] for b in skip)
+        left_out += hit
+        return hit
 
     for order, e in enumerate(_expand(doc, cfg, _ordered(doc.modelspace()))):
         t = e.dxftype()
@@ -385,7 +391,7 @@ def _scan(doc, cfg: Config, dist: float, zones, skip, user_window, reach=None):
         if not shape.is_empty and (window is None or window.intersects(box(*shape.bounds))) \
                 and (limit is None or limit.intersects(box(*shape.bounds))):
             fills.append(_Fill(order, layer, lk, "", None, shape))
-    return fills, blocks, e_fills, e_blocks
+    return fills, blocks, e_fills, e_blocks, left_out
 
 
 def _scaled(geom: BaseGeometry, scale: float) -> BaseGeometry:
@@ -577,9 +583,13 @@ def build_garden(doc, cfg: Config, unit_scale: float, footprint: BaseGeometry, z
     not the garden. ``footprint``: the building, walls included, in metres."""
     dist = cfg.arc_tolerance / unit_scale
     user_window = cfg.garden_area or (cfg.area if cfg.area and not cfg.area_auto else None)
-    fills, blocks, e_fills, e_blocks = _scan(doc, cfg, dist, [tuple(z[:4]) for z in zones],
-                                             [] if user_window else [tuple(b) for b in cfg.garden_exclude],
-                                             user_window, cfg.garden_reach)
+    fills, blocks, e_fills, e_blocks, left_out = _scan(doc, cfg, dist, [tuple(z[:4]) for z in zones],
+                                                       [] if user_window else [tuple(b) for b in cfg.garden_exclude],
+                                                       user_window, cfg.garden_reach)
+    if left_out:
+        warnings.append(f"Giardino: ho lasciato fuori {left_out} campiture o blocchi che stanno dentro altri disegni del "
+                        "foglio (un'altra pianta, il tetto, una sezione): non sono giardino di questa pianta. Se lo sono "
+                        "indica dove con --area-giardino.")
     for f in (*fills, *e_fills):
         f.geom = _scaled(f.geom, unit_scale)
     for b in (*blocks, *e_blocks):

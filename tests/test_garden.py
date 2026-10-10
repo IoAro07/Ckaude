@@ -723,3 +723,51 @@ def test_a_garden_whose_mesh_fails_leaves_the_house_alone(tmp_path, monkeypatch)
     assert not any(g.startswith(("Siepe_", "Tronco_", "Chioma_", "Arredo_")) for g in groups)
     assert any(w.startswith("Giardino non costruito: RuntimeError: mesh went wrong") for w in rep.warnings)
     assert any(g.startswith("Muri") for g in groups) and any(g.startswith("Pavimento") for g in groups)
+
+
+# --- the garden of a plan is not what the other drawings of the sheet hold -----------------------
+
+def _two_storeys(**kw):
+    """The ground floor (14 x 9 m, six doors) and, 2.5 m to the east, the first floor (10 x 9 m, smaller, so the ground floor
+    is the plan converted) with a terrace hatched inside it, 2.6 m from the walls of the ground floor."""
+    from test_views import add_plan, new_sheet
+
+    doc, msp = new_sheet()
+    doc.layers.add("Retini")
+    add_plan(msp, 0, 0, doors=6)
+    add_plan(msp, 1650, 0, w=1000, doors=6)
+    hatch(msp, rect(1660, 100, 1860, 300), GREY, **kw)
+    return doc, msp
+
+
+def test_the_hatches_of_the_other_storey_are_not_the_garden_of_the_plan(tmp_path):
+    doc, msp = _two_storeys()
+    hatch(msp, rect(-200, -400, 800, 0), GREEN)  # a lawn south of the ground floor, in no other view
+    rep = run(doc, tmp_path, auto=True, units="cm")
+    assert rep.analysis.plan.bbox[2] < 1500 and len(rep.analysis.views) == 2
+    assert rep.garden is not None and rep.garden.area("paving") == 0.0  # the terrace of the first floor is not paving
+    assert rep.garden.area("lawn") == pytest.approx(40.0, rel=0.05)
+    assert any("ho lasciato fuori 1 campiture o blocchi" in w for w in rep.warnings)
+
+
+def test_a_layer_that_says_garden_stays_garden_even_inside_another_view(tmp_path):
+    doc, msp = _two_storeys()
+    doc.layers.add("Pavimentazione")
+    hatch(msp, rect(1660, 400, 1860, 600), GREY, layer="Pavimentazione")  # the layer name decides, not the view it is in
+    rep = run(doc, tmp_path, auto=True, units="cm")
+    assert rep.garden is not None and rep.garden.area("paving") == pytest.approx(4.0, rel=0.05)  # the 2 x 2 m of that layer only
+    assert any("ho lasciato fuori 1 campiture o blocchi" in w for w in rep.warnings)  # the terrace on 'Retini' was left out
+
+
+def test_the_lot_the_plan_is_drawn_in_is_where_its_garden_is(tmp_path):
+    from test_views import _site, add_plan, new_sheet
+
+    doc, msp = new_sheet()
+    doc.layers.add("Retini")
+    _site(msp, None)  # a hillside of contour lines...
+    add_plan(msp, 2700, 2000, doors=6)  # ... with a house on it
+    hatch(msp, rect(2500, 1700, 3300, 1990), GREEN)  # a lawn on the hillside, south-west of the house
+    rep = run(doc, tmp_path, auto=True, units="cm")
+    host = next(v for v in rep.analysis.views if v.kind == "site")
+    assert rep.analysis.plan.parent == host.id
+    assert rep.garden is not None and rep.garden.area("lawn") > 15.0

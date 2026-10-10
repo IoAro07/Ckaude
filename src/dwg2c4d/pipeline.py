@@ -8,7 +8,7 @@ from pathlib import Path
 
 from shapely.geometry.base import BaseGeometry
 
-from .autodetect import _KIND_IT, analyze, apply_analysis, write_views_image
+from .autodetect import _KIND_IT, analyze, apply_analysis, other_view_boxes, write_views_image
 from .config import UNIT_TO_METERS, Config
 from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer, read_elevation
 from .export import to_model_dict, write_json
@@ -89,6 +89,7 @@ def _better_unit(span_m: float, declared: str) -> str | None:
     return best
 
 
+GARDEN_SKIPPED_KINDS = ("elevation", "section", "roof", "detail")  # views whose contents are never garden, even with --area
 GROUP_GAP = 3.0  # m: wall pieces closer than this are one building
 MIN_GROUP_AREA = 1.0  # m2 of wall: smaller pieces are not worth a remark
 
@@ -268,7 +269,6 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         elevation_report.append({"side": ev.side, "matched": matched, "total": total,
                                  "zero_source": ev.zero_source, **({"found_on": found_on} if found_on else {})})
 
-    unaligned_views: list[tuple[float, float, float, float]] = []
     if cfg.analysis is not None and cfg.elevations_auto and not cfg.elevations:
         try:
             more, more_report, height = match_views(doc, cfg, cfg.analysis, openings, solid, result.unit,
@@ -284,8 +284,6 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             for o in openings:  # what an elevation in line with the plan cut at the old height can now reach higher
                 if o.from_elevation and o.z1_drawn is not None and o.z1_drawn > o.z1:
                     o.z1 = min(height, o.z1_drawn)
-        unaligned_views = [v.bbox for v in cfg.analysis.views if v.kind in ("elevation", "section", "roof", "detail")
-                           and v is not cfg.analysis.plan]
 
     labels = apply_labels(openings, words, cfg, text_unit, solid.bounds, warnings) if words else 0
 
@@ -336,8 +334,12 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if cfg.garden:
         # the walls may have a gap (a doorway wider than a passage): what the floor bridges is inside as well
         outside_of = union([footprint, floor_footprint(solid)])
+        # what the sheet draws apart from the plan (another storey, the roof, sections...) is not its garden; where the
+        # user says where the plan is (--area), only the views that are surely no plan are left out
+        others = other_view_boxes(cfg.analysis, None if cfg.area is None or cfg.area_auto else GARDEN_SKIPPED_KINDS) \
+            if cfg.analysis is not None else []
         try:
-            garden = build_garden(doc, replace(cfg, garden_exclude=[*cfg.garden_exclude, *unaligned_views]),
+            garden = build_garden(doc, replace(cfg, garden_exclude=[*cfg.garden_exclude, *others]),
                                   result.unit_scale, outside_of, garden_zones, warnings)
         except Exception as exc:  # the garden is a help: whatever goes wrong in it is never the reason a conversion fails
             garden = None
