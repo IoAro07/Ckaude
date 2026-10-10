@@ -3,6 +3,7 @@
 import csv
 
 import pytest
+from shapely.geometry import box
 from builders import D, PLAN_AREA, T, W, building
 from helpers import Obj
 
@@ -108,3 +109,23 @@ def test_the_table_lists_it_and_can_close_it(tmp_path):
     again = run(plan(tmp_path), tmp_path, "o2", table_in=str(rep.table_path))
     assert Obj(again.output).volume("Muri") > Obj(rep.output).volume("Muri") + 1.2 * 0.1 * 2.0
     assert W == 1000
+
+
+def _room_with_a_doorway():
+    """A 4 x 4 m room with 30 cm walls and a 1.2 m doorway in its north wall."""
+    return box(0, 0, 4, 4).difference(box(0.3, 0.3, 3.7, 3.7)).difference(box(1.5, 3.5, 2.7, 4.5))
+
+
+def test_a_doorway_is_a_window_when_nothing_stands_beyond_it():
+    from dwg2c4d.passages import find_passages
+
+    (op,) = find_passages(_room_with_a_doorway(), Config(shape_openings=True), [])
+    assert op.kind == "window"  # the outside is behind it: a gap in the outside wall
+
+
+def test_a_doorway_to_a_space_the_walls_do_not_close_is_not_a_window():
+    from dwg2c4d.passages import find_passages
+
+    walls = _room_with_a_doorway().union(box(-2, 8, 6, 8.3))  # another wall across, 4 m away: the room is not alone
+    (op,) = find_passages(walls, Config(shape_openings=True), [])
+    assert op.kind == "passage"

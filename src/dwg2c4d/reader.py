@@ -6,6 +6,7 @@ import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 
+import numpy as np
 from ezdxf import path as ezpath
 from ezdxf.document import Drawing
 from shapely import affinity
@@ -20,6 +21,9 @@ FILL_TYPES = {"HATCH", "SOLID", "TRACE"}  # filled shapes: an elevation's glass 
 MAX_BLOCK_DEPTH = 8
 SWING_RADIUS = (0.55, 1.40)  # m: the arc a door leaf sweeps (a quarter circle, drawn on any layer)
 SWING_SPAN = (70.0, 110.0)  # degrees
+THIN_MIN_LENGTH = 0.6  # m: shorter straight pieces are no part of a glazing strip (glazing.py looks at the longer ones)
+THIN_MAX_VERTICES = 40  # a polyline with more vertices is a contour or a curve, not a pane
+THIN_TYPES = {"LINE", "LWPOLYLINE", "POLYLINE"}
 
 
 @dataclass
@@ -49,6 +53,7 @@ class ReadResult:
     unit_guessed: bool
     skipped_entities: int
     warnings: list[str]
+    thin: np.ndarray = field(default_factory=lambda: np.zeros((0, 4)))  # x0, y0, x1, y1 (m): long straight pieces of any layer
 
 
 def guess_unit(span: float) -> str:
@@ -176,6 +181,8 @@ class _Reader:
         self.items: list[Item] = []
         self.arcs: list[Item] = []  # arcs on layers that are no category: maybe the swing of a door
         self.shape_arcs = cfg.shape_openings and not ignore_veto and not keep_other  # not in the elevations
+        self.thin: list[tuple[float, float, float, float]] | None = None  # long straight pieces, drawing units (None: not collected)
+        self.thin_min = 0.0  # THIN_MIN_LENGTH in drawing units
         self.skipped = 0
         self.wall_layer_blocks = 0
         self._block_cat: dict[tuple[str, str], str | None] = {}
@@ -197,6 +204,23 @@ class _Reader:
 
     def visible(self, layer: str) -> bool:
         return self.layer_info(layer)[0]
+
+    def _note_thin(self, e) -> None:
+        """Keep the straight pieces of a line or a small polyline that are long enough to be a glazing strip: the
+        panes of a ribbon window are drawn as thin rectangles or bundles of lines on any layer."""
+        if e.dxftype() == "LINE":
+            s, f = e.dxf.start, e.dxf.end
+            if math.hypot(f.x - s.x, f.y - s.y) >= self.thin_min:
+                self.thin.append((s.x, s.y, f.x, f.y))
+            return
+        vertices = len(e) if e.dxftype() == "LWPOLYLINE" else len(e.vertices)
+        if vertices > THIN_MAX_VERTICES:
+            return
+        for p in self.prims_of([e]):
+            for part in getattr(p.geom, "geoms", [p.geom]):  # a ring that is not valid comes back in several parts
+                pts = list((part.exterior if part.geom_type == "Polygon" else part).coords)
+                self.thin.extend((a[0], a[1], b[0], b[1]) for a, b in zip(pts, pts[1:])
+                                 if math.hypot(b[0] - a[0], b[1] - a[1]) >= self.thin_min)
 
     def prims_of(self, entities) -> list[Prim]:
         out: list[Prim] = []
@@ -251,6 +275,8 @@ class _Reader:
                 prims = [p for p in self.prims_of([e]) if p.meta.get("arc")]
                 if prims:  # maybe the swing of a door: decided later, when the walls are known
                     self.arcs.append(Item(layer, None, "door", prims))
+            if self.thin is not None and t in THIN_TYPES and not vetoed:
+                self._note_thin(e)
             if not cat:
                 if not (self.keep_other and (t in LINE_TYPES or (self.keep_fills and t in FILL_TYPES))):
                     continue
@@ -281,6 +307,8 @@ def read_items(doc: Drawing, cfg: Config, area=_ALL, ignore_veto: bool = False,
     provisional = UNIT_TO_METERS[unit] if unit else 0.01
     reader = _Reader(doc, cfg, dist=cfg.arc_tolerance / provisional, ignore_veto=ignore_veto,
                      keep_other=keep_other, keep_fills=keep_fills)
+    if cfg.shape_openings and not ignore_veto and not keep_other and not guessed:
+        reader.thin, reader.thin_min = [], THIN_MIN_LENGTH / provisional  # glazing strips: see glazing.py
     reader.walk(doc.modelspace())
     items = reader.items
 
@@ -333,6 +361,12 @@ def read_items(doc: Drawing, cfg: Config, area=_ALL, ignore_veto: bool = False,
         if prims:
             kept.append(Item(it.layer, None, "door", prims))
 
+    thin = np.asarray(reader.thin or [], float).reshape(-1, 4) * scale
+    if window is not None and len(thin):
+        mid_x, mid_y = (thin[:, 0] + thin[:, 2]) / 2, (thin[:, 1] + thin[:, 3]) / 2
+        x0, y0, x1, y1 = (v * scale for v in area[:4])
+        thin = thin[(mid_x >= x0) & (mid_x <= x1) & (mid_y >= y0) & (mid_y <= y1)]
+
     if reader.wall_layer_blocks:
         warnings.append(
             f"{reader.wall_layer_blocks} blocchi inseriti su un layer di muri sono stati ignorati "
@@ -343,7 +377,7 @@ def read_items(doc: Drawing, cfg: Config, area=_ALL, ignore_veto: bool = False,
             f"{reader.skipped} entita' o blocchi non leggibili sono stati ignorati "
             "(blocchi senza definizione o entita' danneggiate)."
         )
-    return ReadResult(kept, unit, scale, guessed, reader.skipped, warnings)
+    return ReadResult(kept, unit, scale, guessed, reader.skipped, warnings, thin)
 
 
 def _rough_bounds(e) -> list[tuple[float, float]] | None:

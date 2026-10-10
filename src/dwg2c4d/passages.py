@@ -26,6 +26,7 @@ MIN_END = 0.04  # m: shorter edges are noise
 LONG_SIDE = 0.25  # m: the two edges next to an end must be at least this long
 LINE_UP = 0.6  # the ends must overlap at least this fraction of the shorter one
 SAME_THICKNESS = 0.35  # the two ends' lengths differ by less than this fraction
+OUTSIDE_FREE = 12.0  # m: the outside of a building has no wall of it this far across (a doorway between two rooms, one of which the walls do not close, is no window)
 
 
 @dataclass
@@ -128,15 +129,23 @@ def find_passages(walls: BaseGeometry, cfg: Config, openings: list[Opening]) -> 
     return found
 
 
+def _open_side(footprint: BaseGeometry, op: Opening, side: int) -> bool:
+    """Is the outside on this side of the opening: the point just beyond the wall is not inside the building and no
+    wall stands across the opening within ``OUTSIDE_FREE``?"""
+    ux, uy = op.axis
+    cx, cy = op.center
+    reach = op.thickness / 2.0 + 0.3
+    if footprint.covers(Point(cx - side * uy * reach, cy + side * ux * reach)):
+        return False
+    stripe = oriented_rect(cx, cy, ux, uy, 0.8 * op.width, min(side * reach, side * (reach + OUTSIDE_FREE)),
+                           max(side * reach, side * (reach + OUTSIDE_FREE)))
+    return not footprint.intersects(stripe)
+
+
 def _outside_window(op: Opening, footprint: BaseGeometry, cfg: Config) -> Opening:
     """A gap in a wall that has the outside on one side and the rooms on the other is a window (or a glazed door) the
     drawing shows only as a break in the wall lines: the same opening, with a sill and a glass pane."""
-    ux, uy = op.axis
-    vx, vy = -uy, ux
-    reach = op.thickness / 2.0 + 0.3
-    cx, cy = op.center
-    ahead = not footprint.covers(Point(cx + vx * reach, cy + vy * reach))
-    behind = not footprint.covers(Point(cx - vx * reach, cy - vy * reach))
+    ahead, behind = _open_side(footprint, op, 1), _open_side(footprint, op, -1)
     if ahead == behind:
         return op  # inside, or a free-standing wall: a doorway
     win = Opening("window", Polygon(), Polygon(), cfg.window_sill,

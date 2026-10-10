@@ -16,6 +16,7 @@ from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
 from .model import Plan, build_mesh, building_footprint, facing_sign, floor_footprint
 from .objwriter import write_obj
+from .glazing import ribbon_windows
 from .openings import assign_ids, build_openings
 from .reader import layer_used, storeys, read_items
 from .roof import build_roof, ridge_hints_from
@@ -177,7 +178,17 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     columns = build_columns(result.items, cfg)
     if not columns.is_empty:
         columns = columns.difference(walls)
+    ribbon: list = []
+    if cfg.shape_openings and len(result.thin):  # windows drawn as thin glazing strips along the outside wall
+        ribbon, cleared = ribbon_windows(result.thin, walls, result.items, cfg)
+        if ribbon:
+            walls = clean_footprint(walls.difference(cleared), cfg.merge_tolerance)
     openings = build_openings(result.items, walls, cfg, warnings)
+    if ribbon:
+        openings.extend(ribbon)
+        assign_ids(openings)
+        warnings.append(f"{len(ribbon)} finestre a nastro dedotte dalle strisce sottili del vetro (linee parallele a meno "
+                        "di 6 cm l'una dall'altra nel muro esterno): controlla nella tabella delle aperture.")
 
     span = max(_extent(walls))
     if not (3.0 <= span <= 300.0) and cfg.units is None and not result.unit_guessed:
