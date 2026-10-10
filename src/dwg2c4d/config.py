@@ -78,9 +78,21 @@ class LayerRules:
                    "luci", "prese", "interrutt", "elettr", "impiant", "immagin", "riferiment",
                    "intern", "interior", "indoor", "interrat", "piano")
 
+    # Layers that outline the ground or the roof tiles (the walkable surface, the soil, contour lines, tiles): their
+    # closed outlines are parcels, fields, roads and slopes, never the walls of a building. Only layers that the
+    # names do not call walls are told apart by this ("Muro di sostegno terreno" is still a wall layer).
+    _SURFACE = ("calpest", "terren", "coppi", "tegol", "livell", "superf", "orograf")
+
     @staticmethod
     def tokens(name: str) -> list[str]:
         return [t for t in re.split(r"[^a-z]+", name.lower()) if t]
+
+    def is_surface(self, layer: str) -> bool:
+        """Does the name say that the layer outlines the ground or the roof tiles (Polilinea sup. calpestabile,
+        Terreno, Coppi Chiaro, CURVE-LIV)? Such a layer is not taken for the walls by the shape of its lines."""
+        toks = self.tokens(layer)
+        return any(t.startswith(self._SURFACE) for t in toks) or \
+            ("curve" in toks and any(t.startswith("liv") for t in toks))
 
     def garden_kind(self, layer: str) -> str | None:
         """What a layer holds of the garden: water | lawn | paving | plants | furniture | garden (outside, in

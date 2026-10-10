@@ -10,6 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from shapely.geometry import Polygon
+
+from .autodetect import BUILDING_ROOM, closes_surfaces
 from .config import Config, LayerRules
 
 GARDEN_LABELS = {"water": "giardino: acqua / piscina", "lawn": "giardino: prato", "paving": "giardino: pavimentazione esterna",
@@ -83,6 +86,7 @@ def propose_layers(doc, cfg: Config, rows: list[dict]) -> list[Proposal]:
     drawable = ("LINE", "LWPOLYLINE", "ARC", "POLYLINE", "CIRCLE", "SPLINE", "ELLIPSE")
     best: tuple[str, Config, int, float] | None = None  # strongest wall hypothesis: layer, config, rooms, area
     undecided: list[dict] = []
+    surfaces: set[str] = set()  # layers of outlines of the ground: not walls, and no symbols on the walls either
 
     for row in unknown:
         layer, counts = row["layer"], row["entities"]
@@ -93,6 +97,8 @@ def propose_layers(doc, cfg: Config, rows: list[dict]) -> list[Proposal]:
         hint = None if maybe_walls else (GARDEN_LABELS.get(garden or "") or _name_hint(layer))
         if hint:
             out.append(Proposal(layer, None, hint, "alta", "dal nome del layer"))
+        elif cfg.layers.is_surface(layer):
+            out.append(Proposal(layer, None, "superfici del terreno o del tetto (non muri)", "alta", "dal nome del layer"))
         elif _only(counts, ("TEXT", "MTEXT", "DIMENSION", "LEADER", "MULTILEADER", "ATTRIB")):
             out.append(Proposal(layer, None, "quote e testi", "alta", "contiene solo testi/quote"))
         elif _only(counts, ("HATCH", "SOLID")):
@@ -110,6 +116,13 @@ def propose_layers(doc, cfg: Config, rows: list[dict]) -> list[Proposal]:
         except Exception:
             continue
         if walls.is_empty or walls.area < MIN_WALL_AREA:
+            continue
+        spaces = [Polygon(r).area for p in polygons_of(walls) for r in p.interiors]
+        if closes_surfaces(spaces):  # parcels, fields, roads: a ring of lines around them is no wall
+            out.append(Proposal(layer, None, "contorni di superfici (particelle, prati, strade): non sono muri", "media",
+                                f"le linee chiudono {sum(1 for a in spaces if a > BUILDING_ROOM)} spazi piu' grandi di "
+                                f"{BUILDING_ROOM:.0f} m2 (il piu' grande {max(spaces):.0f} m2): non sono locali{note}"))
+            surfaces.add(layer)
             continue
         thickness = 2.0 * walls.area / walls.length if walls.length else 0.0
         if not WALL_THICKNESS[0] <= thickness <= WALL_THICKNESS[1]:
@@ -136,8 +149,8 @@ def propose_layers(doc, cfg: Config, rows: list[dict]) -> list[Proposal]:
         wall_override = {"wall": [best[0]]} if best else {}
         for row in undecided:
             layer = row["layer"]
-            if any(p.layer == layer for p in out if p.category == "wall"):
-                continue  # already read as walls
+            if layer in surfaces or any(p.layer == layer for p in out if p.category == "wall"):
+                continue  # already read as walls (or as ground)
             trial = replace(base, layers=LayerRules({**wall_override, "door": [layer]}))
             try:
                 res = read_items(doc, trial)

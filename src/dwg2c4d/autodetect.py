@@ -1714,6 +1714,8 @@ def write_views_image(analysis: Analysis, path) -> "Path":
 THIN = 0.6  # m: wall bodies are thinner than this; what is thicker is a floor, a room, a hatch over an area
 CLOSE = 0.8  # m: the gaps of doors and windows up to twice this are shut before the rooms are counted
 MAX_ROOM = 2500.0  # m2: a hole of the walls up to this size is a room or the inside of a building (not the sheet around it)
+BUILDING_ROOM = 300.0  # m2: a space enclosed by lines bigger than this is a hall, a field, a lot, rather than a room
+SURFACE_SPACES = 2  # a layer that encloses this many spaces that big, and more area in them than in all the others, outlines surfaces
 PAIR_GAIN = 1.25  # the reading with parallel line pairs replaces the plain one if it scores this many times more
 MIN_WALL_SCORE = 3.0  # a layer that scores less is not taken for the walls
 ADD_FACTOR = 1.5  # a layer is added to the walls the names found only if it makes them this many times better
@@ -1744,14 +1746,27 @@ def candidate_layers(a: Analysis, rules=None) -> list[str]:
             continue  # the name says it is a door layer, a roof, floors...: not the walls
         if category is None and rules is not None and (rules.vetoed(name) or rules.garden_kind(name)):
             continue  # a layer the names do not call walls, and that is furniture, the garden, an annotation...
+        if category is None and rules is not None and rules.is_surface(name):
+            continue  # the ground or the roof tiles: parcels, fields, slopes outlined by closed lines, not walls
         if category == "wall" or (long_ >= 8 and m.sum() / max(long_, 1) <= 30) or hatches >= 5:
             out.append(name)
     return out
 
 
+def closes_surfaces(spaces: list[float]) -> bool:
+    """Does a layer enclose lots, fields and roads rather than the rooms of a building? ``spaces``: the areas
+    (m2) of what its lines enclose. So when at least ``SURFACE_SPACES`` of them are bigger than any room can be
+    and hold more area than all the others together (a layer of parcel outlines: a meadow of 9575 m2 and a
+    road of 740 m2 are no rooms, however thin the line is that is drawn around them). A single big space is
+    still a hall."""
+    giant = [a for a in spaces if a > BUILDING_ROOM]
+    return len(giant) >= SURFACE_SPACES and sum(giant) > sum(a for a in spaces if a <= BUILDING_ROOM)
+
+
 def wall_metrics(footprint, plan_area_m2: float) -> dict:
     """How much a footprint looks like the walls of a plan: the part of it thinner than THIN, the rooms that part
-    closes, how much of the view it spans, how many crumbs it has."""
+    closes, how much of the view it spans, how many crumbs it has. A footprint that encloses surfaces (parcels,
+    fields) instead of rooms scores nothing."""
     from shapely.geometry import Polygon
 
     from .geom import polygons_of
@@ -1764,6 +1779,9 @@ def wall_metrics(footprint, plan_area_m2: float) -> dict:
     # Rooms: the holes of the walls once the openings (doors, windows: gaps up to 2 * CLOSE wide) are shut.
     shut = thin.buffer(CLOSE, join_style="mitre", mitre_limit=2.0).buffer(-CLOSE, join_style="mitre", mitre_limit=2.0)
     holes = [Polygon(r).area for b in polygons_of(shut) for r in b.interiors]
+    if closes_surfaces(holes):
+        return {"score": 0.0, "area": thin.area, "rooms": 0, "thin": 0.0, "frag": 0, "cover": 0.0, "enclosed": 0.0,
+                "surfaces": True}
     rooms = sum(1 for a_ in holes if 1.0 <= a_ <= MAX_ROOM)
     enclosed = sum(a_ for a_ in holes if 1.0 <= a_ <= MAX_ROOM)
     frag = sum(1 for b in bodies if b.area < 0.08)

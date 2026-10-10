@@ -239,6 +239,70 @@ def test_what_the_user_says_beats_the_analysis(sheet, tmp_path):
     assert not any("ha la forma dei muri" in w for w in report.warnings)  # nothing was added to what was asked
 
 
+# --- outlines of the ground are no walls ------------------------------------------------------
+
+def _sheet_with_parcels(path, layer="PARCELLE", rings=None):
+    """The messy sheet with a layer of closed outlines of lots (540 m2 each) round the building, on a layer whose name
+    says nothing: closed polylines are read as the axes of walls, and they close 'rooms' as big as a field."""
+    messy_sheet(path)
+    doc = ezdxf.readfile(path)
+    doc.layers.add(layer)
+    for x0, y0, x1, y1 in rings or ((1100, -400, 4100, 1400), (1100, 1400, 4100, 3200), (-3000, -400, -100, 3200)):
+        doc.modelspace().add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
+    doc.saveas(path)
+    return path
+
+
+def test_closed_outlines_of_lots_are_not_chosen_as_walls_by_their_shape(tmp_path):
+    from dwg2c4d.autodetect import choose_wall_layers
+
+    path = _sheet_with_parcels(tmp_path / "p.dxf")
+    doc = ezdxf.readfile(path)
+    a = analyze(doc)
+    assert "PARCELLE" in candidate_layers(a, LayerRules())  # it has the shape of a candidate...
+    added, _, _ = choose_wall_layers(doc, Config(units="cm"), a, LayerRules())
+    assert "PARCELLE" not in added and "LINEE" in added  # ... but encloses fields, not rooms
+    report = convert(path, tmp_path / "p.obj", Config(auto=True))
+    assert report.wall_area_m2 == pytest.approx(9.42, abs=0.7) and report.size_m[0] == pytest.approx(10.0, abs=0.2)
+    assert not any("PARCELLE" in w for w in report.warnings)
+
+
+def test_a_single_big_space_is_still_a_hall_and_surfaces_need_more_area_than_the_rooms():
+    from dwg2c4d.autodetect import closes_surfaces
+
+    assert not closes_surfaces([420.0])  # one hall
+    assert not closes_surfaces([40.0, 25.0, 12.0])  # rooms
+    assert closes_surfaces([9575.0, 741.0, 98.0, 89.0])  # a meadow, a road, two sheds
+    assert not closes_surfaces([320.0, 305.0] + [90.0] * 10)  # two halls in a building of many rooms: the rooms are most of it
+    assert not closes_surfaces([9575.0, 2000.0, 12000.0][:1])  # a single big outline is never enough to tell
+
+
+def test_wall_metrics_give_nothing_to_outlines_that_enclose_fields():
+    fields = unary_union([box(0, 0, 40, 30).difference(box(0.3, 0.3, 39.7, 29.7)),
+                          box(41, 0, 81, 30).difference(box(41.3, 0.3, 80.7, 29.7))])
+    m = wall_metrics(fields, 5000.0)
+    assert m["score"] == 0.0 and m["surfaces"] and m["rooms"] == 0
+    hall = box(0, 0, 40, 30).difference(box(0.3, 0.3, 39.7, 29.7))
+    assert wall_metrics(hall, 1300.0)["score"] > 3.0  # a single big hall is still a building
+
+
+def test_the_names_of_the_ground_and_the_tiles_are_no_wall_layers():
+    rules = LayerRules()
+    for name in ("Polilinea sup. calpestabile", "Terreno", "COPPI CHIARO", "Coppi Scuro", "CURVE-LIV", "Curve di livello",
+                 "Superficie terreno", "Tegole"):
+        assert rules.is_surface(name) and rules.classify_layer(name) is None, name
+    for name in ("MURI", "Muri contenimento terreno", "Muro di sostegno terreno", "Pareti", "0", "Linee", "RETINI", "Pilastri"):
+        assert not rules.is_surface(name) or rules.classify_layer(name) == "wall", name  # a name that says wall stays wall
+    assert rules.classify_layer("Muro di sostegno terreno") == "wall"
+    assert not rules.is_surface("RETINI") and not rules.is_surface("Linee")  # the vocabulary of the walls is untouched
+
+
+def test_a_layer_named_like_the_ground_is_not_a_candidate_whatever_its_shape(tmp_path):
+    path = _sheet_with_parcels(tmp_path / "t.dxf", layer="Polilinea sup. calpestabile")
+    a = analyze(ezdxf.readfile(path))
+    assert "Polilinea sup. calpestabile" not in candidate_layers(a, LayerRules()) and "LINEE" in candidate_layers(a, LayerRules())
+
+
 # --- doors by the shape of the swing ----------------------------------------------------------
 
 def _arc_symbol(cx, cy, r=0.9, span=90.0, mid=None):

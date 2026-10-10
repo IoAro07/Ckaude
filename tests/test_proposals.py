@@ -109,3 +109,39 @@ def test_a_second_wall_candidate_is_only_a_guess(tmp_path):
     found, _ = proposals(tmp_path / "two.dxf")
     assert found["XX-7"].confidence == "alta" and found["OUTER-9"].confidence == "bassa"
     assert "il candidato migliore e' 'XX-7'" in found["OUTER-9"].reason
+
+
+def _plan_with_lots(tmp_path, layer="XX-9"):
+    """The odd plan and, on a layer whose name says nothing, the closed outlines of three lots (540 m2 each) round it."""
+    doc = ezdxf.readfile(odd_plan(tmp_path))
+    doc.layers.add(layer)
+    for x0, y0, x1, y1 in ((1100, -400, 4100, 1400), (1100, 1400, 4100, 3200), (-3000, -400, -100, 3200)):
+        doc.modelspace().add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
+    path = tmp_path / "lots.dxf"
+    doc.saveas(path)
+    return path
+
+
+def test_outlines_of_lots_are_not_proposed_as_walls(tmp_path):
+    doc = ezdxf.readfile(_plan_with_lots(tmp_path))
+    cfg = Config(units="cm")
+    found = {p.layer: p for p in propose_layers(doc, cfg, layer_summary(doc, cfg))}
+    assert found["XX-7"].category == "wall" and found["XX-7"].confidence == "alta"
+    lots = found["XX-9"]
+    assert lots.category is None and "non sono muri" in lots.label and "spazi piu' grandi di 300 m2" in lots.reason
+    cfg2 = Config(units="cm")
+    taken = apply_proposals(cfg2, list(found.values()), layer_summary(doc, cfg2))
+    assert cfg2.layers.overrides.get("wall") == ["XX-7"] and all(p.layer != "XX-9" for p in taken)
+
+
+def test_the_names_of_the_ground_and_the_roof_tiles_are_not_walls_in_the_proposals(tmp_path):
+    doc = ezdxf.readfile(odd_plan(tmp_path))
+    for name in ("Polilinea sup. calpestabile", "Coppi Chiaro"):
+        doc.layers.add(name)
+        for pts in ([(1200, 0), (1500, 0), (1500, 100), (1200, 100)], [(1210, 10), (1490, 10), (1490, 90), (1210, 90)]):
+            doc.modelspace().add_lwpolyline(pts, close=True, dxfattribs={"layer": name})  # the shape of walls that close a room
+    doc.saveas(tmp_path / "names.dxf")
+    found, _ = proposals(tmp_path / "names.dxf")
+    for name in ("Polilinea sup. calpestabile", "Coppi Chiaro"):
+        assert found[name].category is None and found[name].confidence == "alta" and "superfici" in found[name].label
+    assert found["XX-7"].category == "wall" and found["XX-7"].confidence == "alta"
