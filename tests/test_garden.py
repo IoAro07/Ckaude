@@ -672,3 +672,54 @@ def test_nothing_beyond_the_reach_is_garden_even_if_a_chain_of_ground_leads_ther
     assert any(o.cx > 100 for o in everything.garden.objects)  # without a reach the far tree is a plant of the garden
     near = far(garden_reach=(-1500, -1500, 3000, 1500))
     assert near.garden is not None and not any(o.cx > 100 for o in near.garden.objects)
+
+
+# --- a failure in the garden never stops the conversion ----------------------------------------
+
+def test_a_collection_of_slivers_and_stray_lines_is_tidied_without_crashing():
+    """The site plan of a real sheet left, after the pieces of ground were cut out of each other, a collection of
+    slivers and stray lines (coordinates 46 km from the origin); the opening of it is empty and GEOS cannot intersect
+    that with a collection ("Unable to determine overlay result geometry dimension")."""
+    from shapely.geometry import GeometryCollection, LineString, Polygon, box
+
+    from dwg2c4d import garden as G
+
+    sliver = Polygon([(24863.96978324881, 46613.45296265214), (24864.029965771995, 46613.45634149456),
+                      (24864.030032606046, 46613.45620923092), (24863.980781438517, 46613.43101605976)])
+    stray = LineString([(24864.03, 46613.4563), (24862.0592, 46617.3565)])
+    assert G._tidy(GeometryCollection([sliver, stray])).is_empty
+    assert G._tidy(GeometryCollection([box(0, 0, 5, 5), sliver, stray])).area == pytest.approx(25.0, rel=0.01)
+
+
+def test_a_garden_that_cannot_be_built_is_a_warning_not_the_end_of_the_conversion(tmp_path, monkeypatch):
+    import dwg2c4d.pipeline as pipeline
+
+    def broken(*args, **kwargs):
+        raise ValueError("boom")
+
+    doc, _ = garden_plan(tmp_path)
+    monkeypatch.setattr(pipeline, "build_garden", broken)
+    rep = run(doc, tmp_path)
+    groups = Obj(tmp_path / "o.obj").groups
+    assert rep.garden is None and rep.wall_area_m2 > 5.0 and "Prato" not in groups
+    assert any(w.startswith("Giardino non costruito: ValueError: boom") for w in rep.warnings)
+    assert any(g.startswith("Muri") for g in groups)
+
+
+def test_a_garden_whose_mesh_fails_leaves_the_house_alone(tmp_path, monkeypatch):
+    import dwg2c4d.model as model
+
+    real = model.add_garden
+
+    def half_built(mesh, garden, cfg):
+        real(mesh, garden, cfg)
+        raise RuntimeError("mesh went wrong")
+
+    doc, _ = garden_plan(tmp_path)
+    monkeypatch.setattr(model, "add_garden", half_built)
+    rep = run(doc, tmp_path)
+    groups = Obj(tmp_path / "o.obj").groups
+    assert rep.garden is None and not {"Prato", "Pavimentazione", "Acqua", "Vasca"} & set(groups)
+    assert not any(g.startswith(("Siepe_", "Tronco_", "Chioma_", "Arredo_")) for g in groups)
+    assert any(w.startswith("Giardino non costruito: RuntimeError: mesh went wrong") for w in rep.warnings)
+    assert any(g.startswith("Muri") for g in groups) and any(g.startswith("Pavimento") for g in groups)

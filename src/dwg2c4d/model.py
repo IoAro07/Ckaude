@@ -177,7 +177,14 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
         mesh.add_extrusion("Battiscopa", [Slab(0.0, cfg.skirting_height, plan.skirting)], bottom=False)
 
     if plan.garden is not None:
-        add_garden(mesh, plan.garden, cfg)
+        before = set(mesh.groups)
+        try:
+            add_garden(mesh, plan.garden, cfg)
+        except Exception as exc:  # the garden is a help: what it had made is taken out again, the house stays
+            for name in set(mesh.groups) - before:
+                del mesh.groups[name]
+            plan.garden = None
+            warnings.append(f"Giardino non costruito: {type(exc).__name__}: {exc}. Il resto del modello e' completo.")
 
     by_room = cfg.floor_thickness > 0 and bool(plan.floors)
     for name, shape in plan.floors if by_room else []:

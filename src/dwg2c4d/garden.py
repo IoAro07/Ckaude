@@ -401,10 +401,13 @@ def _thin(poly: Polygon) -> bool:
 
 def _tidy(geom: BaseGeometry) -> BaseGeometry:
     """Drop slivers and specks: what the cutting of one piece out of another leaves behind."""
+    # What the cutting leaves can be a collection of slivers and stray lines; GEOS cannot intersect such a
+    # collection with the empty shape the opening makes of it (a crash on the site plan of a real sheet): only its
+    # polygons are ground.
+    geom = union(polygons_of(fix(geom)))
     if geom.is_empty:
         return geom
     # (2 mm short of the way back: two parts that only touched at a point stay apart, no pinched vertical edges)
-    geom = fix(geom)
     opened = geom.buffer(-SLIVER, join_style="mitre").buffer(SLIVER - 0.002, join_style="mitre")
     opened = opened.intersection(geom)  # the opening can close a narrow hole (a pool in a paving): never more than was
     # a centimetre of tolerance: the wiggles of a hatch outline (a leaf pattern) make necks that the mesh welds shut

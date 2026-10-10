@@ -336,8 +336,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if cfg.garden:
         # the walls may have a gap (a doorway wider than a passage): what the floor bridges is inside as well
         outside_of = union([footprint, floor_footprint(solid)])
-        garden = build_garden(doc, replace(cfg, garden_exclude=[*cfg.garden_exclude, *unaligned_views]),
-                              result.unit_scale, outside_of, garden_zones, warnings)
+        try:
+            garden = build_garden(doc, replace(cfg, garden_exclude=[*cfg.garden_exclude, *unaligned_views]),
+                                  result.unit_scale, outside_of, garden_zones, warnings)
+        except Exception as exc:  # the garden is a help: whatever goes wrong in it is never the reason a conversion fails
+            garden = None
+            warnings.append(f"Giardino non costruito: {type(exc).__name__}: {exc}. Il resto della conversione e' "
+                            "completo; per escludere il giardino usa --no-giardino, per limitarlo --area-giardino.")
         if cfg.garden_table_in:
             if garden is None:
                 warnings.append("Tabella del giardino indicata, ma non ho trovato nessun giardino a cui applicarla.")
@@ -345,6 +350,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
                 warnings.append("Tabella del giardino: nessuna riga con celle MODIFICA_* compilate da applicare.")
         plan.garden = garden
     mesh = build_mesh(plan, cfg, warnings)
+    garden = plan.garden  # (None when its mesh could not be built)
     offset = (0.0, 0.0)
     if cfg.origin != "drawing":
         x0, y0, x1, y1 = solid.bounds
