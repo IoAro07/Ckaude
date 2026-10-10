@@ -28,6 +28,8 @@ MIN_OPENING_WIDTH = 0.2
 MIN_DIVIDER = 0.02  # a cut mark across a window symbol is at least this long (m)
 OVERLAP = 0.005  # a gap filler reaches this far into the wall on each side, so the pieces merge
 STATION_OFFSETS = (0.03, 0.10, 0.25)  # where to look for the wall just outside the symbol
+DUPLICATE_CENTRE = 0.02  # m: two openings of one kind whose centres lie this close and whose widths differ by less than
+DUPLICATE_WIDTH = 0.02  # m: ... this are one opening drawn twice (two symbols on top of each other)
 
 
 @dataclass
@@ -397,8 +399,32 @@ def build_openings(items: list[Item], walls: BaseGeometry, cfg: Config,
             openings.append(op)
     if skipped:
         warnings.append(f"{skipped} porte/finestre non toccano nessun muro e sono state ignorate.")
+    openings, twice = merge_duplicates(openings)
+    if twice:
+        warnings.append(f"{twice} porte/finestre erano disegnate due volte nello stesso punto (stesso centro e stessa "
+                        "larghezza): ne ho tenuta una per ciascuna.")
     assign_ids(openings)
     return openings
+
+
+def merge_duplicates(openings: list[Opening]) -> tuple[list[Opening], int]:
+    """(the openings without the ones drawn twice, how many were dropped). Two symbols of one kind that coincide (same
+    centre, same width, same direction) would build two frames and two panes in the same hole; the one that says more
+    (dividers, a leaf's arc) stays, with a note."""
+    kept: list[Opening] = []
+    twice = 0
+    for op in openings:
+        same = next((k for k in kept if k.kind == op.kind and abs(k.axis[0] * op.axis[0] + k.axis[1] * op.axis[1]) > 0.999
+                     and math.dist(k.center, op.center) <= DUPLICATE_CENTRE and abs(k.width - op.width) <= DUPLICATE_WIDTH), None)
+        if same is None:
+            kept.append(op)
+            continue
+        twice += 1
+        if len(op.dividers) + len(op.leaves) > len(same.dividers) + len(same.leaves):
+            kept[kept.index(same)] = op
+            same = op
+        same.notes.append("era disegnata due volte nello stesso punto (due simboli identici sovrapposti): ne ho tenuto uno")
+    return kept, twice
 
 
 def assign_ids(openings: list[Opening]) -> None:

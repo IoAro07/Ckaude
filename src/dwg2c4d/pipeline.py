@@ -14,8 +14,9 @@ from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer
 from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
-from .model import Plan, build_mesh, building_footprint, facing_sign, floor_footprint
+from .model import OTHER_FLOOR, Plan, build_mesh, building_footprint, facing_sign, floor_footprint
 from .objwriter import write_obj
+from .glazing import ribbon_windows
 from .openings import assign_ids, build_openings
 from .reader import layer_used, storeys, read_items
 from .roof import build_roof, ridge_hints_from
@@ -28,7 +29,7 @@ from .passages import find_passages
 from .elevmatch import match_views
 from .garden import build_garden
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
-from .floors import extend_to_outer_faces, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
+from .floors import extend_to_outer_faces, floor_left_over, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
 from .qa import plan_overlay, preview_3d, write_report
 
 
@@ -187,7 +188,17 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     columns = union([build_columns(result.items, cfg), false.columns])
     if not columns.is_empty:
         columns = columns.difference(walls)
+    ribbon: list = []
+    if cfg.shape_openings and len(result.thin):  # windows drawn as thin glazing strips along the outside wall
+        ribbon, cleared = ribbon_windows(result.thin, walls, result.items, cfg)
+        if ribbon:
+            walls = clean_footprint(walls.difference(cleared), cfg.merge_tolerance)
     openings = build_openings(result.items, walls, cfg, warnings)
+    if ribbon:
+        openings.extend(ribbon)
+        assign_ids(openings)
+        warnings.append(f"{len(ribbon)} finestre a nastro dedotte dalle strisce sottili del vetro (linee parallele a meno "
+                        "di 6 cm l'una dall'altra nel muro esterno): controlla nella tabella delle aperture.")
 
     span = max(_extent(walls))
     if not (3.0 <= span <= 300.0) and cfg.units is None and not result.unit_guessed:
@@ -313,7 +324,14 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         if regions:
             plan.floors = name_floors(regions, rooms)
         elif rooms and (len(rooms) > 1 or rooms[0].named):
-            plan.floors = room_floors(rooms, openings)
+            plan.floors = floor_left_over(solid, room_floors(rooms, openings))  # what no room covers: one more floor
+        elif floor_footprint(solid).is_empty:  # no closed room at all: the building's outline, gaps of a few metres bridged
+            plan.floors = floor_left_over(solid, [])
+        rest = dict(plan.floors).get(OTHER_FLOOR)
+        if rest is not None:
+            warnings.append(f"Pavimento: {rest.area:.0f} m2 dell'edificio non stanno in nessun locale chiuso dai muri (spazi "
+                            "aperti, locali dai muri incompleti): ho steso un pavimento unico, 'Pavimento', sull'impronta dei "
+                            "muri (varchi fino a 4 m ponticellati). Controlla.")
         if cfg.floors_to_outer_face:
             plan.floors = extend_to_outer_faces(plan.floors, solid, cfg.max_wall_thickness, plan.partitions)
     if skirting_items(result.items):

@@ -20,6 +20,7 @@ from shapely.strtree import STRtree
 from .config import Config
 from .geom import fix, polygons_of, union
 from .labels import Room
+from .model import OTHER_FLOOR
 from .openings import Opening
 from .reader import Item
 
@@ -28,6 +29,9 @@ OVERLAP_SAME = 0.5  # a floor covers a room when it holds at least this share of
 SKIRTING_WALL_NEAR = 0.02  # a skirting line this close to a wall is on its face: the strip goes room-side
 GUARD = 0.005
 OUTER_TOLERANCE = 0.05  # m: the band of perimeter wall is this much thicker than the walls found
+OUTLINE_CLOSING = 2.0  # m: gaps up to twice this (window bays, doorways, a missing wall piece) are bridged to find the building's outline
+MIN_ENCLOSED = 4.0  # m2: an outline that holds less space than this (without its walls) is a wall, not a building
+LEFT_OVER_SLIVER = 0.05  # m: a strip of floor thinner than this, between a room's floor and a wall, is no space of its own
 
 
 def _slug(name: str) -> str:
@@ -96,6 +100,27 @@ def room_floors(rooms: list[Room], openings: list[Opening]) -> list[tuple[str, B
         shapes[i] = shape.difference(seen) if not seen.is_empty else shape
         seen = seen.union(shapes[i])
     return name_floors(shapes, rooms)
+
+
+def building_outline(solid: BaseGeometry) -> BaseGeometry:
+    """The filled outline of every network of walls that holds space (not a lone wall): gaps up to
+    ``2 * OUTLINE_CLOSING`` are bridged first, so a window bay or a doorway does not open the outline."""
+    closed = solid.buffer(OUTLINE_CLOSING, join_style="mitre").buffer(-OUTLINE_CLOSING, join_style="mitre")
+    filled = (Polygon(p.exterior) for p in polygons_of(closed))
+    return union(f for f in filled if f.difference(solid).area >= MIN_ENCLOSED)
+
+
+def floor_left_over(solid: BaseGeometry, floors: list[tuple[str, BaseGeometry]]) -> list[tuple[str, BaseGeometry]]:
+    """The floors plus one more, ``OTHER_FLOOR``, for the part of the building no room's floor covers: the building
+    outline without the walls and without the floors. Open plans, rooms the walls do not close and the corridors
+    between them then have a floor too. The floors that are there stay as they are."""
+    outline = building_outline(solid)
+    if outline.is_empty:
+        return floors
+    rest = outline.difference(solid).difference(union(shape for _, shape in floors))
+    rest = rest.buffer(-LEFT_OVER_SLIVER / 2.0, join_style="mitre").buffer(LEFT_OVER_SLIVER / 2.0, join_style="mitre")
+    pieces = [p for p in polygons_of(rest) if p.area >= MIN_FLOOR_AREA]
+    return floors + [(OTHER_FLOOR, union(pieces))] if pieces else floors
 
 
 SAMPLE = 0.1  # m: spacing of the points that stand for a floor's outline when sharing the wall band
