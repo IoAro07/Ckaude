@@ -502,11 +502,14 @@ layer, il programma **guarda il foglio** come lo guarderebbe una persona (`--no-
    `PLANIMETRIA GENERALE`...). Le cornici del foglio, le linee lunghe (linee di terra, tracce di sezione) e i segni
    isolati non uniscono due disegni; una pianta disegnata dentro l'inquadramento del lotto (o la sua copia) è una
    vista a sé; una vista senza titolo è riconosciuta da quello che contiene (archi di porta e metrature = pianta,
-   quote di livello = prospetto, curve di livello = lotto). Il risultato è l'immagine **`NOME_viste.png`** con le viste numerate e il tipo
+   quote di livello = prospetto, curve di livello = lotto). I titoli si leggono anche in inglese (`NORTH ELEVATION`,
+   `SECOND FLOOR PLAN`) e dentro frasi brevi (`VISTA SUD`, `STRALCIO CATASTALE`); una nota dentro la pianta (`COPERTURA
+   IN COPPI`) non ne fa una copertura. Il risultato è l'immagine **`NOME_viste.png`** con le viste numerate e il tipo
    che gli ho dato: controllala.
 3. **La pianta da convertire**: la vista più grande che non sia la planimetria generale (il lotto intorno alla casa)
    né la copia di un'altra. Se il foglio ha due piante (piani diversi, stato di fatto e di progetto) ne converte
-   una e dice quale: per un'altra `--vista N`, con il numero dell'immagine.
+   una e dice quale (di fatto e di progetto non sono mai copie una dell'altra: converte il progetto): per un'altra
+   `--vista N`, con il numero dell'immagine.
 4. **I muri**, quando i nomi dei layer non bastano: per ogni layer che ha linee lunghe o campiture dentro la pianta
    guarda se ha *la forma dei muri*, cioè corpi sottili che chiudono dei locali anche se porte e finestre li
    interrompono. Due linee parallele a distanza da muro (4-60 cm) sono un muro anche con le estremità aperte; i

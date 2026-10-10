@@ -25,6 +25,13 @@ decomprimi il progetto in una **cartella nuova** e controlla che la versione sia
   tipi (porta/finestra) risolvono i pareggi tra campate, piani interrati e titoli `1° PIANO`/`PIANO 2`, linea di
   gronda vicina alle finestre, due piani sovrapposti senza quote, larghezza del prospetto contro l'edificio, lato
   dichiarato nel riferimento del disegno quando il nord non si sa, un errore nel confronto non ferma più la conversione.
+- **Revisione indipendente** delle viste, dell'unità e dei simboli dei prospetti: muri lunghi che chiudono il
+  contorno di un edificio non spezzano più la vista; due disegni a meno di un metro con due titoli si separano;
+  titoli in inglese o dentro una frase; stato di fatto e di progetto non sono copie; una pianta molto più grande
+  dell'altra è il lotto solo se la contiene; unità: un'intestazione in pollici o piedi si può sovrascrivere, un pareggio va
+  all'intestazione poi ai cm; simboli: pavimento dalla linea di terra quando le porte sono a un piano superiore, piani
+  solo a 2,3-4,5 m, ante con segni V/X, persiane, tetto a campitura, cornici di linee che non si toccano, il contorno di
+  una facciata cieca non è una porta, viste troppo grandi non vengono lette.
 - **Foglio senza pianta** (solo prospetti, sezioni, planimetria generale): messaggio chiaro con `NOME_viste.png`
   invece di un modello senza senso.
 - Giardino: niente più oltre 25 m dalla pianta (o dal lotto in cui è disegnata).
