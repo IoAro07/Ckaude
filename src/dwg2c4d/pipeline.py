@@ -26,7 +26,7 @@ from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
 from .texts import read_words
-from .passages import find_passages
+from .passages import find_passages, wall_gaps
 from .elevmatch import match_views
 from .garden import build_garden
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
@@ -264,6 +264,12 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             assign_ids(openings)
             plan.__dict__.pop("solid_walls", None)  # the lintels over the passages close the footprint
             solid = plan.solid_walls
+        gaps = wall_gaps(solid, cfg)
+        if gaps:  # a partition with its middle not drawn: offered, never closed
+            where = "; ".join(f"{gap:.1f} m in x={gx / result.unit_scale:.0f}, y={gy / result.unit_scale:.0f}" for gap, (gx, gy) in gaps[:5])
+            warnings.append(f"{len(gaps)} coppie di spezzoni di muro allineati stanno in uno stesso locale a una distanza maggiore di un "
+                            f"vano ({where}{', ...' if len(gaps) > 5 else ''}): se e' un muro unico a cui manca la parte di mezzo, "
+                            "completalo nel disegno; non l'ho chiuso io.")
 
     words = read_words(doc, cfg, result.unit_scale) if cfg.texts else []
     text_unit = text_scale(words)
