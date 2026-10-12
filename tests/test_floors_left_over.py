@@ -111,6 +111,23 @@ def test_one_more_wall_never_takes_a_room_out_of_the_outline(seed):
     assert before.difference(after).area == pytest.approx(0.0, abs=0.05)
 
 
+def walled(*rects):
+    return unary_union([box(*r) for r in rects])
+
+
+def test_a_room_with_a_piece_missing_at_a_corner_is_a_room():
+    """10 x 6 m: the east wall stops 0.5 m short of the north wall, which stops 0.4 m short of the east one (a diagonal
+    opening of 0.64 m): a square sees that gap shorter than it is, and the whole room fell out of the outline."""
+    corner_missing = walled((0, 0, 10, 0.3), (0, 0, 0.3, 6), (9.7, 0, 10, 5.2), (0, 5.7, 9.3, 6))
+    assert building_outline(corner_missing).area == pytest.approx(10 * 6, abs=0.5)
+
+
+def test_a_corner_gap_wider_than_a_metre_is_left_open():
+    """The same room with the east wall 1.5 m short of the north one: an opening, not a missing piece of corner."""
+    open_corner = walled((0, 0, 10, 0.3), (0, 0, 0.3, 6), (9.7, 0, 10, 3.5), (0, 5.7, 7.8, 6))
+    assert building_outline(open_corner).area < 10 * 6 - 4.0
+
+
 def test_a_building_with_no_closed_room_at_all_still_gets_a_floor(tmp_path):
     doc = ezdxf.new("R2018", setup=True)
     doc.units = 5

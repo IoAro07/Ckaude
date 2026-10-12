@@ -12,7 +12,8 @@ import math
 import random
 import re
 
-from shapely.geometry import MultiPoint, Point, Polygon
+import numpy as np
+from shapely.geometry import LineString, MultiPoint, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import polygonize, unary_union, voronoi_diagram
 from shapely.strtree import STRtree
@@ -22,6 +23,7 @@ from .geom import closed_by_square, fix, polygons_of, union
 from .labels import Room
 from .model import OTHER_FLOOR
 from .openings import Opening
+from .passages import wall_ends
 from .reader import Item
 
 MIN_FLOOR_AREA = 0.5  # m2
@@ -31,6 +33,10 @@ GUARD = 0.005
 OUTER_TOLERANCE = 0.05  # m: the band of perimeter wall is this much thicker than the walls found
 OUTLINE_CLOSING = 2.0  # m: gaps up to twice this (window bays, doorways, a missing wall piece) are bridged to find the building's outline
 MIN_ENCLOSED = 4.0  # m2: an outline that holds less space than this (without its walls) is a wall, not a building
+CORNER_REACH = 1.0  # m: two free wall ends that meet at a corner are joined when this close or closer (a missing piece of the corner)
+CORNER_TURN = 0.1  # the end faces of such two ends are at right angles within this (the cosine of the angle between them)
+END_THICKNESS = 0.6  # m: a free end of a wall is at most this wide (the thickest wall that is read)
+LINK_WIDTH = 0.01  # m: half the width of the link drawn between two ends
 MIN_WALL_RUN = 2.0  # m: a piece of wall shorter than this in both directions (a post, a symbol, a stray fragment) bounds no space and bridges no gap
 LEFT_OVER_SLIVER = 0.05  # m: a strip of floor thinner than this, between a room's floor and a wall, is no space of its own
 
@@ -103,6 +109,24 @@ def room_floors(rooms: list[Room], openings: list[Opening]) -> list[tuple[str, B
     return name_floors(shapes, rooms)
 
 
+def corner_links(walls: BaseGeometry) -> BaseGeometry:
+    """Thin links between free wall ends that meet at a corner (their end faces at right angles) no more than
+    ``CORNER_REACH`` apart: a wall drawn with its corner piece missing. A square sees such a diagonal gap shorter than
+    it is, so a room closed in every other way is taken for open ground; the link closes it. Ends that face each
+    other are doorways (the passages) and are left to the closing."""
+    ends = wall_ends(walls, END_THICKNESS)
+    links = []
+    for i, a in enumerate(ends):
+        for b in ends[i + 1:]:
+            if abs(float(np.dot(a.out, b.out))) > CORNER_TURN:
+                continue
+            gap, p, q = min(((float(np.linalg.norm(p - q)), p, q) for p in (a.a, a.b) for q in (b.a, b.b)), key=lambda t: t[0])
+            link = LineString([tuple(p), tuple(q)])
+            if gap <= CORNER_REACH and not link.buffer(-0.001).intersects(walls):
+                links.append(link.buffer(LINK_WIDTH))
+    return union(links)
+
+
 def building_outline(solid: BaseGeometry) -> BaseGeometry:
     """The filled outline of every network of walls that holds space (not a lone wall): gaps up to
     ``2 * OUTLINE_CLOSING`` are bridged first, so a window bay or a doorway does not open the outline. Small
@@ -111,7 +135,7 @@ def building_outline(solid: BaseGeometry) -> BaseGeometry:
     walls = union(p for p in polygons_of(solid) if max(p.bounds[2] - p.bounds[0], p.bounds[3] - p.bounds[1]) >= MIN_WALL_RUN)
     if walls.is_empty:
         return walls
-    closed = closed_by_square(walls, OUTLINE_CLOSING)
+    closed = closed_by_square(union([walls, corner_links(walls)]), OUTLINE_CLOSING)
     filled = (Polygon(p.exterior) for p in polygons_of(closed))
     return union(f for f in filled if f.difference(solid).area >= MIN_ENCLOSED)
 
