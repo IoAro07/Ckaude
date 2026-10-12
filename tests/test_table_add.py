@@ -2,6 +2,7 @@
 
 import csv
 
+import ezdxf
 import pytest
 from builders import PLAN_AREA, building
 from helpers import Obj
@@ -81,6 +82,28 @@ def test_a_new_row_that_lacks_what_it_needs_says_so(plan, tmp_path, cells):
     add_row(first.table_path, **cells)
     again = run(plan, tmp_path, "o2", table_in=str(first.table_path))
     assert any("riga senza sigla" in w for w in again.warnings) and (again.windows, again.doors) == (first.windows, first.doors)
+
+
+def test_an_opening_can_be_put_in_a_gap_of_the_wall_that_nothing_marks(tmp_path):
+    """A 3 m gap in the south wall with no symbol and too wide for the passage finder (no opening found, so no table was
+    written: the user makes one with the header of the columns): the row gives the centre of the gap and its width."""
+    doc = ezdxf.new("R2018", setup=True)
+    doc.units = 5
+    doc.layers.add("MURI")
+    msp = doc.modelspace()
+    for x0, y0, x1, y1 in ((0, 0, 350, 30), (650, 0, 1000, 30), (0, 570, 1000, 600), (0, 0, 30, 600), (970, 0, 1000, 600)):
+        msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": "MURI"})
+    path = tmp_path / "gap.dxf"
+    doc.saveas(path)
+    first = run(path, tmp_path)
+    assert first.openings == [] and first.table_path is None
+    table = tmp_path / "mia.csv"
+    table.write_text(";".join(COLUMNS) + "\n", encoding="utf-8-sig")
+    add_row(table, x="500", y="15", MODIFICA_tipo="porta", MODIFICA_larghezza="300")
+    again = run(path, tmp_path, "o2", table_in=str(table))
+    (door,) = again.openings
+    assert door.id == "P01" and door.width == pytest.approx(3.0) and door.thickness == pytest.approx(0.30, abs=0.01)
+    assert door.center == pytest.approx((5.0, 0.15), abs=0.02)
 
 
 def test_a_blank_row_is_no_new_opening(plan, tmp_path):

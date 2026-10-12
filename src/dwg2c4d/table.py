@@ -128,8 +128,8 @@ def _add_opening(row: dict[str, str], openings: list[Opening], walls: BaseGeomet
         return False
     op = opening_at((x * unit_scale, y * unit_scale), width, kind, walls, cfg) if walls is not None else None
     if op is None:
-        warnings.append(f"Tabella, riga senza sigla in {where}: nessun muro a meno di {MANUAL_REACH * 100:.0f} cm da quel punto "
-                        "(x e y sono le coordinate del disegno, come nelle altre righe): riga ignorata.")
+        warnings.append(f"Tabella, riga senza sigla in {where}: nessun muro a meno di {MANUAL_REACH * 100:.0f} cm dai lati "
+                        "dell'apertura (x e y sono le coordinate del centro nel disegno, come nelle altre righe): riga ignorata.")
         return False
     op.id = next_id(openings, kind)
     op.src = {"width": "tabella", "height": "default", "sill": "default", "kind": "tabella"}

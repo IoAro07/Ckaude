@@ -427,7 +427,7 @@ def merge_duplicates(openings: list[Opening]) -> tuple[list[Opening], int]:
     return kept, twice
 
 
-MANUAL_REACH = 0.30  # m: an opening the user places lies this close to a wall at most (the centre of a wall is within half its thickness)
+MANUAL_REACH = 0.30  # m: an opening the user places lies this close to a wall at most, beyond its own half width (a wall's centre is within half its thickness)
 ID_PREFIX = {"window": "F", "door": "P", "passage": "V"}
 
 
@@ -436,11 +436,12 @@ def opening_at(centre: tuple[float, float], width: float, kind: str, walls: Base
     point, whose direction and thickness are measured there, centred on the wall's middle. None when no wall is within
     ``MANUAL_REACH``. ``walls`` must be the filled walls (the opening is cut out of them, so a missing symbol leaves no gap)."""
     point = Point(centre)
-    if walls.is_empty or walls.distance(point) > MANUAL_REACH:
+    reach = MANUAL_REACH + width / 2.0  # a point in the middle of a gap in the wall (no symbol, no wall lines) is half the gap from the wall
+    if walls.is_empty or walls.distance(point) > reach:
         return None
     edges = _WallEdges(walls)
     fallback = None
-    for ux, uy in edges.directions_near(point.buffer(MANUAL_REACH + REGION)):
+    for ux, uy in edges.directions_near(point.buffer(reach + REGION)):
         if ux < -1e-9 or (abs(ux) <= 1e-9 and uy < 0):
             ux, uy = -ux, -uy  # a fixed sense (east / north), as for the openings found
         found = _try_direction(oriented_rect(centre[0], centre[1], ux, uy, width, -0.005, 0.005), walls, ux, uy,
