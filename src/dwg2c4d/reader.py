@@ -187,6 +187,7 @@ class _Reader:
         self.skipped = 0
         self.wall_layer_blocks = 0
         self._block_cat: dict[tuple[str, str], str | None] = {}
+        self._broken_linetypes: dict[str, bool] = {}  # linetype name -> does it have dashes or dots?
         self._by_layer: dict[str, tuple[bool, str | None, bool]] = {}  # layer -> (visible, category, vetoed)
 
     def _count_skipped(self) -> None:
@@ -284,7 +285,25 @@ class _Reader:
                 cat = "other"  # loose linework (and, on request, fills) of any layer, e.g. an elevation's roof silhouette
             prims = self.prims_of([e])
             if prims:
+                if cat == "wall" and self._is_broken(e, layer):
+                    for p in prims:
+                        p.meta["broken"] = True
                 self.items.append(Item(layer, None, cat, prims))
+
+    def _is_broken(self, e, layer: str) -> bool:
+        """Is the entity drawn dashed, dotted or the like (a grid line, an axis, a hidden edge: never a wall)? Its own
+        linetype, or the layer's when it follows the layer."""
+        name = str(e.dxf.get("linetype", "BYLAYER") or "BYLAYER")
+        if name.upper() == "BYBLOCK":
+            return False
+        if name.upper() == "BYLAYER":
+            name = str(self.doc.layers.get(layer).dxf.get("linetype", "CONTINUOUS")) if self.doc.layers.has_entry(layer) else "CONTINUOUS"
+        broken = self._broken_linetypes.get(name)
+        if broken is None:
+            entry = self.doc.linetypes.get(name) if self.doc.linetypes.has_entry(name) else None
+            broken = entry is not None and any(t.code == 73 and t.value > 0 for t in entry.pattern_tags.tags)  # 73: how many dashes
+            self._broken_linetypes[name] = broken
+        return broken
 
 
 Swing = tuple[tuple[float, float], tuple[tuple[float, float], tuple[float, float]], float]  # centre, the two ends and the radius of a swing arc (m)

@@ -17,6 +17,7 @@ from .geom import union, polygons_of
 from .model import OTHER_FLOOR, Plan, build_mesh, building_footprint, facing_sign, floor_footprint
 from .objwriter import write_obj
 from .glazing import ribbon_windows
+from .thinwalls import THICKNESS, single_line_walls
 from .openings import assign_ids, build_openings
 from .reader import layer_used, storeys, read_items
 from .roof import build_roof, ridge_hints_from
@@ -188,6 +189,14 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     columns = union([build_columns(result.items, cfg), false.columns])
     if not columns.is_empty:
         columns = columns.difference(walls)
+    if cfg.pair_layers:  # walls drawn in pairs of lines: a single line that closes a space the others leave open is a thin wall
+        thin, thin_lines, closed = single_line_walls(items, walls, cfg.pair_layers, cfg.max_wall_thickness)
+        if thin_lines:
+            walls = clean_footprint(union([walls, thin]), cfg.merge_tolerance)
+            warnings.append(f"{len(thin_lines)} linee singole lunghe in tutto {sum(l.length for l in thin_lines):.1f} m (senza una linea "
+                            f"parallela vicina: di solito non sono muri) sono state trattate come muri sottili di "
+                            f"{THICKNESS * 100:.0f} cm perche' chiudono {closed:.0f} m2 di locali che nessun altro muro chiude: "
+                            "controlla nella pianta di controllo e, se non sono muri, escludile con --muri.")
     ribbon: list = []
     if cfg.shape_openings and len(result.thin):  # windows drawn as thin glazing strips along the outside wall
         ribbon, cleared = ribbon_windows(result.thin, walls, result.items, cfg)
