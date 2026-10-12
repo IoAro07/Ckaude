@@ -129,6 +129,13 @@ def test_a_row_of_equal_parallel_lines_a_step_apart_is_a_stair_and_leaves_no_blo
     assert stairs.stairs[0].width == pytest.approx(1.1, abs=0.2)
 
 
+def test_a_step_drawn_twice_goes_with_the_row():
+    rows = steps()
+    twin = rows[3].prims[0]
+    kept = drop_stair_steps(house() + rows + [wall(Prim(twin.geom, "line"))], FalseWalls())
+    assert left(kept) == left(house())
+
+
 def test_the_walls_at_the_sides_of_a_stair_stay():
     sides = [wall(line(1.95, 0.5, 1.95, 3.5)), wall(line(3.25, 0.5, 3.25, 3.5))]  # just outside the steps
     kept = drop_stair_steps(house() + steps() + sides, FalseWalls())
@@ -139,9 +146,9 @@ def test_the_walls_at_the_sides_of_a_stair_stay():
     steps(4),  # too few
     steps(7, pitch=0.005),  # the lines of a glazing, a few millimetres apart
     steps(7, pitch=0.9),  # a row of tables
-    [wall(line(2, 1 + k * 0.28, 2 + 1.2 + (k % 2) * 0.5, 1 + k * 0.28)) for k in range(7)],  # lengths differ
+    [wall(line(2 + (k % 2) * 0.3, 1 + k * 0.28, 3.2 - (k % 2) * 0.3, 1 + k * 0.28)) for k in range(7)],  # lengths differ
     [wall(line(2 + (k % 3) * 0.4, 1 + k * 0.28, 3.2 + (k % 3) * 0.4, 1 + k * 0.28)) for k in range(7)],  # ends do not line up
-    [wall(line(2, 1 + k * 0.28 * (1 + 0.5 * (k % 2)), 3.2, 1 + k * 0.28 * (1 + 0.5 * (k % 2)))) for k in range(7)],  # uneven
+    [wall(line(2, y, 3.2, y)) for y in (1.0, 1.2, 1.6, 1.8, 2.2, 2.4, 2.8)],  # uneven: 20 cm, then 40, then 20...
 ])
 def test_what_is_not_a_row_of_steps_is_not_a_stair(rows):
     stairs = FalseWalls()
@@ -208,9 +215,12 @@ def test_a_drawing_without_hatches_is_never_sorted_by_them():
 
 def test_when_most_of_the_walls_would_go_low_the_hatches_are_no_evidence():
     items = hatched_house()
-    walls = walls_of(items, box(-20, -30, 40, -29.5), box(-20, -40, 40, -39.5), box(-20, -50, 40, -49.5))
+    far = box(-30, -30, -5, -29.5)  # 12 m2 of walls beside the 7.4 m2 of hatches: more than half would be lowered
+    walls = walls_of(items, far)
     false = FalseWalls()
     assert lower_far_walls(walls, items, false).area == pytest.approx(walls.area) and false.low.is_empty
+    walls = walls_of(items, box(-30, -30, -20, -29.5))  # 5 m2: that is not much, it is lowered
+    assert lower_far_walls(walls, items, FalseWalls()).area == pytest.approx(walls.area - 5.0)
 
 
 def test_a_long_thin_free_standing_body_in_a_hatched_drawing_is_low_but_not_when_it_encloses_a_room():
@@ -238,6 +248,18 @@ def test_with_few_hatches_only_the_free_standing_bodies_go_low_and_with_fewer_no
             assert false.low.area == pytest.approx(curb.area) and rest.area == pytest.approx(walls.area - curb.area)
         else:
             assert false.low.is_empty and rest.area == pytest.approx(walls.area)
+
+
+def test_a_free_standing_room_is_no_curb_however_thin_its_walls():
+    door = Item("PORTE", None, "door", [line(25, 0, 25, 2)])
+    items = hatched_house() + [door]
+    shed = box(20, 0, 30, 2)  # with a door: keeps the share of the hatches in the middle band
+    room = box(-12, 0, -8, 4).difference(box(-11.9, 0.1, -8.1, 3.9))  # 40 cm thick walls around 14 m2, no hatch, no door
+    straight = box(-12, -6, -6, -5.9)  # a thin wall in the open
+    walls = walls_of(items, shed, room, straight)
+    false = FalseWalls()
+    rest = lower_far_walls(walls, items, false)
+    assert false.low.area == pytest.approx(straight.area) and rest.area == pytest.approx(walls.area - straight.area)
 
 
 def test_a_thick_part_no_hatch_fills_is_a_block_and_low():
@@ -349,6 +371,27 @@ def test_curbs_come_out_low_in_their_own_groups_and_the_walls_keep_their_height(
     assert obj.bbox("Cordoli")[1][1] == pytest.approx(0.2) and obj.bbox("Muri")[1][1] == pytest.approx(2.7)
     assert any("alti 0.6 m (Muretti) o 0.2 m (Cordoli" in w for w in rep.warnings)
     assert rep.wall_area_m2 == pytest.approx(rep.plan.solid_walls.area) and rep.plan.low.area > 0
+
+
+def test_the_partition_layers_the_names_vouch_for_are_never_lowered(tmp_path):
+    def drawing(layer):
+        doc, msp = building()
+        for e in list(msp.query("LWPOLYLINE")):
+            msp.delete_entity(e)
+        if layer not in doc.layers:
+            doc.layers.add(layer)
+        h = msp.add_hatch(dxfattribs={"layer": "MURI"})
+        h.paths.add_polyline_path([(0, 0), (W, 0), (W, D), (0, D)], is_closed=True)
+        h.paths.add_polyline_path([(30, 30), (W - 30, 30), (W - 30, D - 30), (30, D - 30)], is_closed=True)
+        msp.add_lwpolyline([(-200, -800), (1200, -800), (1200, -790), (-200, -790)], close=True, dxfattribs={"layer": layer})
+        path = tmp_path / f"{layer}.dxf"
+        doc.saveas(path)
+        return path
+
+    area = (-400, -1000, 1400, 800)
+    assert convert(drawing("MURI"), tmp_path / "a.obj", Config(area=area, walls_guessed=True)).plan.low.area > 0
+    kept = convert(drawing("TRAMEZZI"), tmp_path / "b.obj", Config(area=area, walls_guessed=True))
+    assert kept.plan.low.is_empty and kept.false_walls.empty
 
 
 def test_the_command_line_has_the_switches():

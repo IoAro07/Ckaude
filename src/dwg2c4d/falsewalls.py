@@ -182,9 +182,7 @@ def _is_square(geom: BaseGeometry) -> bool:
     x0, y0, x1, y1 = geom.bounds
     w, h = x1 - x0, y1 - y0
     lo, hi = COLUMN_SIDE
-    eps = 1e-6  # a side of 0.2 m comes out of the drawing as 0.19999999999
-    return lo - eps <= w <= hi + eps and lo - eps <= h <= hi + eps and max(w, h) <= COLUMN_ASPECT * min(w, h) \
-        and geom.area >= 0.4 * w * h
+    return lo <= w <= hi and lo <= h <= hi and max(w, h) <= COLUMN_ASPECT * min(w, h) and geom.area >= 0.4 * w * h
 
 
 def _side(geom: BaseGeometry) -> float:
@@ -303,8 +301,11 @@ def _step_chains(seg: np.ndarray) -> list[list[int]]:
                 last = nxt
             if len(chain) < MIN_STEPS:
                 continue
-            twins = np.flatnonzero(same & (np.min(np.abs(across[:, None] - across[chain][None, :]), axis=1) <= STEP_COPY))
-            members = sorted(set(chain) | set(twins.tolist()))
+            steps = across[chain]  # ascending, like the row
+            at = np.searchsorted(steps, across)
+            gap = np.minimum(np.abs(across - steps[np.clip(at - 1, 0, len(steps) - 1)]),
+                             np.abs(across - steps[np.clip(at, 0, len(steps) - 1)]))
+            members = sorted(set(chain) | set(np.flatnonzero(same & (gap <= STEP_COPY)).tolist()))
             used[pool[members]] = True
             chains.append([int(pool[m]) for m in members])
     return chains
