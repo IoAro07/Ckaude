@@ -309,7 +309,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
 
     if cfg.table_in:
         rows = read_table(cfg.table_in)
-        changed = apply_table(openings, rows, cfg, warnings)
+        changed = apply_table(openings, rows, cfg, warnings, solid, result.unit_scale)
         if changed:
             plan.__dict__.pop("solid_walls", None)  # widths/kinds changed: the filled walls too
             solid = plan.solid_walls
