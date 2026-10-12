@@ -267,9 +267,10 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         gaps = wall_gaps(solid, cfg)
         if gaps:  # a partition with its middle not drawn: offered, never closed
             where = "; ".join(f"{gap:.1f} m in x={gx / result.unit_scale:.0f}, y={gy / result.unit_scale:.0f}" for gap, (gx, gy) in gaps[:5])
-            warnings.append(f"{len(gaps)} coppie di spezzoni di muro allineati stanno in uno stesso locale a una distanza maggiore di un "
-                            f"vano ({where}{', ...' if len(gaps) > 5 else ''}): se e' un muro unico a cui manca la parte di mezzo, "
-                            "completalo nel disegno; non l'ho chiuso io.")
+            many = len(gaps) > 1
+            warnings.append(f"{len(gaps)} {'coppie' if many else 'coppia'} di spezzoni di muro allineati {'stanno' if many else 'sta'} in "
+                            f"uno stesso locale a una distanza maggiore di un vano ({where}{', ...' if len(gaps) > 5 else ''}): "
+                            "se e' un muro unico a cui manca la parte di mezzo, completalo nel disegno; non l'ho chiuso io.")
 
     words = read_words(doc, cfg, result.unit_scale) if cfg.texts else []
     text_unit = text_scale(words)
