@@ -8,7 +8,7 @@ from pathlib import Path
 
 from shapely.geometry.base import BaseGeometry
 
-from .autodetect import _KIND_IT, analyze, apply_analysis, other_view_boxes, write_views_image
+from .autodetect import _KIND_IT, analyze, apply_analysis, other_view_boxes, site_plan_asked, write_views_image
 from .config import UNIT_TO_METERS, Config
 from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer, read_elevation
 from .export import to_model_dict, write_json
@@ -138,7 +138,8 @@ def _read_walls(items: list, cfg: Config, warnings: list[str]) -> tuple[BaseGeom
         layer_walls = build_wall_layers(kept, cfg, own)
         walls = clean_footprint(union(layer_walls.values()), cfg.merge_tolerance)
         keep = union(g for k, g in layer_walls.items() if k in vouched)
-        walls = clean_footprint(lower_far_walls(walls, items, false, keep), cfg.merge_tolerance)
+        site = cfg.analysis is not None and site_plan_asked(cfg.analysis, cfg)  # a site plan the user asked for
+        walls = clean_footprint(lower_far_walls(walls, items, false, keep, site), cfg.merge_tolerance)
         if not walls.is_empty:  # a drawing of nothing but furniture is read as it is: no wall at all is no model
             warnings.extend(own)
             warnings.extend(false.notes(cfg.low_wall_height, cfg.curb_height))

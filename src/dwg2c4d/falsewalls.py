@@ -55,7 +55,7 @@ LOW_LENGTH = 3.0  # m: a free-standing body shorter than this is no curb or wall
 THIN_OUTLINE = 0.4  # m: a free-standing body thinner than this (2 * area / perimeter) is a line, not a building
 BLOCK_RADIUS = 0.4  # m: what no hatch fills and a circle of this radius fits in is a block, not a wall
 MIN_BLOCK = 0.5  # m2: a block smaller than this is a crumb of the walls
-ROOM_HOLE = 4.0  # m2: a body that encloses a hole this big is a room, however thin its walls
+ROOM_HOLE = (4.0, 300.0)  # m2: a body that encloses a hole this big is a room, however thin its walls (a bigger one is a lot)
 CURB_THICKNESS = 0.25  # m: a low wall thinner than this is a curb (Cordoli), a thicker one a low wall (Muretti)
 STEP_LENGTH = (0.6, 3.0)  # m: the length of the line of one step (the width of a stair)
 STEP_PITCH = (0.15, 0.45)  # m: the distance between two steps, tread after tread
@@ -380,12 +380,14 @@ def _openings(items: list[Item]) -> BaseGeometry:
 
 
 def lower_far_walls(walls: BaseGeometry, items: list[Item], false: FalseWalls,
-                    keep: BaseGeometry | None = None) -> BaseGeometry:
+                    keep: BaseGeometry | None = None, site: bool = False) -> BaseGeometry:
     """The walls without what is not part of the building; ``false.low`` gets the curbs, lot lines and free-standing
     low walls. Only in a drawing whose walls are marked with hatches (see the module); a piece that carries a door
-    or a window, or touches a hatch, is a wall whatever else it is. ``keep``: what the layer names vouch for."""
+    or a window, or touches a hatch, is a wall whatever else it is. ``keep``: what the layer names vouch for.
+    ``site``: the drawing is a site plan (the user asked for it as it is): there the hatches are not needed, what
+    lies in the open and carries no opening is a road edge, a boundary, a retaining wall."""
     masonry = _masonry(items)
-    if walls.is_empty or masonry.area < MASONRY_FREE * walls.area:
+    if walls.is_empty or (masonry.area < MASONRY_FREE * walls.area and not site):
         return walls
     vouched = union([_openings(items), keep if keep is not None else Polygon()])
     closed = masonry.buffer(ENVELOPE_GAP, join_style="mitre").buffer(-ENVELOPE_GAP, join_style="mitre")
@@ -401,7 +403,7 @@ def lower_far_walls(walls: BaseGeometry, items: list[Item], false: FalseWalls,
         x0, y0, x1, y1 = body.bounds
         free = not body.intersects(masonry) and not body.intersects(vouched) and body.intersection(envelope).area < 0.5 * body.area
         if free and _thickness(body) <= THIN_OUTLINE and max(x1 - x0, y1 - y0) >= LOW_LENGTH \
-                and not any(h >= ROOM_HOLE for h in holes):
+                and not any(ROOM_HOLE[0] <= h <= ROOM_HOLE[1] for h in holes):
             low.append(body)
     bare = (walls.difference(union(low)) if low else walls).difference(masonry.buffer(TOUCH))
     low.extend(p for p in polygons_of(bare.buffer(-BLOCK_RADIUS, join_style="mitre").buffer(BLOCK_RADIUS, join_style="mitre"))

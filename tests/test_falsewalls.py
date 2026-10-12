@@ -262,6 +262,40 @@ def test_a_free_standing_room_is_no_curb_however_thin_its_walls():
     assert false.low.area == pytest.approx(straight.area) and rest.area == pytest.approx(walls.area - straight.area)
 
 
+def test_in_a_site_plan_the_hatches_are_not_needed_and_the_lot_is_no_room():
+    room = box(-12, 0, -8, 4).difference(box(-11.9, 0.1, -8.1, 3.9))  # a hut: 14 m2 inside
+    lot = box(30, -20, 90, 20).difference(box(30.1, -19.9, 89.9, 19.9))  # the boundary of the lot: 2300 m2 inside
+    road = box(-5, -40, 60, -39.9)
+    items = [Item("PORTE", None, "door", [line(-10, 0, -10, 0.1)])]  # the hut has a door: a wall
+    walls = walls_of(items, room, lot, road)
+    false = FalseWalls()
+    assert lower_far_walls(walls, items, false).area == pytest.approx(walls.area)  # not a site plan: no hatch, no judgement
+    rest = lower_far_walls(walls, items, false, site=True)
+    assert false.low.area == pytest.approx(lot.area + road.area) and rest.area == pytest.approx(room.area)
+    items = [it for it in items if it.category != "door"]  # without its door it is a hut with a roof: a room, still
+    false = FalseWalls()
+    assert lower_far_walls(walls_of(items, room, road), items, false, site=True).area == pytest.approx(room.area)
+
+
+def test_the_conversion_judges_a_site_plan_only_when_the_user_asked_for_it():
+    from types import SimpleNamespace
+
+    from dwg2c4d.pipeline import _read_walls
+
+    items = [wall(ring(-12, 0, -8, 4), ring(-11.9, 0.1, -8.1, 3.9)),  # a hut
+             wall(ring(30, -20, 90, 20), ring(30.1, -19.9, 89.9, 19.9)),  # the boundary of the lot
+             Item("PORTE", None, "door", [line(-10, 0, -10, 0.1)])]
+
+    def read(kind, **cfg):
+        analysis = SimpleNamespace(plan=SimpleNamespace(kind=kind, id=2))
+        return _read_walls(items, Config(walls_guessed=True, view=2, analysis=analysis, **cfg), [])
+
+    walls, _, false = read("site")
+    assert false.low.area > 1 and walls.area < 3 and len(false.lowered) == 1  # the lot goes low, the hut stays
+    assert read("plan")[2].low.is_empty  # a plan: no hatches, no judgement
+    assert read("site", area=(0, 0, 1, 1))[2].low.is_empty  # where the building is was said
+
+
 def test_a_thick_part_no_hatch_fills_is_a_block_and_low():
     items = hatched_house()
     block = box(2, 1, 3.4, 4.0)  # 1.4 m wide: the landing of a stair

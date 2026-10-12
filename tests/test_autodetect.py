@@ -447,6 +447,27 @@ def test_a_cadastral_plan_is_the_site_not_the_building(tmp_path):
     assert 9.5 < report.size_m[0] < 11.0 and (report.doors, report.windows) == (1, 2)
 
 
+def test_a_site_plan_asked_for_as_the_plan_is_called_one_and_the_building_is_not(tmp_path):
+    doc, path = _titled_building(tmp_path)
+    doc = ezdxf.readfile(path)
+    doc.layers.add("CATASTO")
+    msp = doc.modelspace()
+    for pts in (((5000, -6000), (11000, -6000), (11000, -2000), (5000, -2000)),
+                ((5100, -5900), (10900, -5900), (10900, -2100), (5100, -2100))):
+        msp.add_lwpolyline(list(pts), close=True, dxfattribs={"layer": "CATASTO"})
+    msp.add_text("PLANIMETRIA CATASTALE", height=20, dxfattribs={"layer": "TESTI", "insert": (7000, -6300)})
+    doc.saveas(path)
+    site = next(v for v in analyze(ezdxf.readfile(path)).views if v.kind == "site")
+    asked = _opened(path, Config(auto=True, view=site.id, layers=LayerRules({"wall": ["CATASTO"]})))
+    assert any("che hai indicato e' una planimetria generale" in w and "--area" in w and "estruse come muri" in w
+               for w in asked.warnings)  # the walls were named: they stay walls
+    proposal = _opened(path, Config(auto=True, view=site.id, layers=LayerRules({"wall": ["CATASTO"]}), proposed=["wall"]))
+    assert any("planimetria generale" in w and "costruiti bassi" in w for w in proposal.warnings)
+    assert not any("che hai indicato" in w for w in _opened(path).warnings)  # the building: nothing to say
+    zone = _opened(path, Config(auto=True, view=site.id, area=(5000, -6000, 11000, -2000), layers=LayerRules({"wall": ["CATASTO"]})))
+    assert not any("che hai indicato" in w for w in zone.warnings)  # where the plan is was said: nothing to add
+
+
 def test_three_overall_dimensions_do_not_beat_a_right_header():
     # a 8 x 6 m plan in centimetres: its overall dimensions (800, 800, 600) would fit "mm" as 0.8 m...
     guess = infer_unit(_soup("cm", dims=[800, 800, 600], extent=800))

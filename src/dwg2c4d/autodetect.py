@@ -1892,6 +1892,11 @@ def names_say_openings(soup: Soup, rules) -> bool:
     return any(rules.classify_block(i["name"]) in ("door", "window") for i in soup.inserts)
 
 
+def site_plan_asked(a: Analysis, cfg) -> bool:
+    """Did the user ask (--vista) for a view that is a site plan, without saying where the building is (--area)?"""
+    return a.plan is not None and a.plan.kind == "site" and cfg.view is not None and (cfg.area is None or cfg.area_auto)
+
+
 def apply_analysis(doc, cfg, a: Analysis, rules=None) -> tuple["Config", list[str]]:
     """What the analysis changes in the configuration: the unit, the area of the plan, the wall layers, whether doors
     and windows are told by their shape. Whatever the user gave (``--unita``, ``--area``, ``--muri``) is left alone."""
@@ -1935,6 +1940,13 @@ def apply_analysis(doc, cfg, a: Analysis, rules=None) -> tuple["Config", list[st
     new = replace(cfg, **change) if change else cfg
     proposed = "wall" in getattr(cfg, "proposed", ())
     guessed = "wall" not in cfg.layers.overrides or proposed  # the wall layers are ours, not the ones --muri names
+    if site_plan_asked(a, cfg):
+        what = ("i muri che non racchiudono locali ne' hanno porte o finestre (bordi di strade, confini, muri di contenimento) "
+                f"sono costruiti bassi (Muretti, Cordoli)" if guessed and cfg.separate_walls else
+                "le linee doppie che somigliano a muri sono estruse come muri")
+        notes.append(f"La vista {a.plan.id} che hai indicato e' una planimetria generale (terreno, strade, confini, edifici in "
+                     f"piccolo), non la pianta di una casa: {what}. Per una casa usa la sua pianta (--vista N) o la sua zona "
+                     "(--area x0,y0,x1,y1).")
     if guessed:
         added, more, by_shape = choose_wall_layers(doc, new, a, rules)
         if added:  # the name rules stop deciding once there is a list: it holds the layers the names call walls too
