@@ -12,7 +12,7 @@ import math
 import random
 import re
 
-from shapely.geometry import MultiPoint, Point, Polygon
+from shapely.geometry import MultiPoint, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import polygonize, unary_union, voronoi_diagram
 from shapely.strtree import STRtree
@@ -103,13 +103,37 @@ def room_floors(rooms: list[Room], openings: list[Opening]) -> list[tuple[str, B
     return name_floors(shapes, rooms)
 
 
+def _grown_by_square(shape: BaseGeometry, half: float) -> BaseGeometry:
+    """``shape`` grown by the square of half-side ``half`` (the Minkowski sum): itself plus every edge swept by the
+    square. A mitred buffer does the same on square-cornered plans but is not monotone on others: one more thin wall
+    can make it drop a whole room from the outline. This one never takes anything away when a wall is added."""
+    corners = ((-half, -half), (-half, half), (half, -half), (half, half))
+    parts = [shape]
+    for poly in polygons_of(shape):
+        for ring in (poly.exterior, *poly.interiors):
+            pts = ring.coords
+            for (ax, ay), (bx, by) in zip(pts[:-1], pts[1:]):
+                parts.append(MultiPoint([(x + dx, y + dy) for x, y in ((ax, ay), (bx, by)) for dx, dy in corners]).convex_hull)
+    return unary_union(parts)
+
+
+def _closed_by_square(shape: BaseGeometry, half: float) -> BaseGeometry:
+    """``shape`` with the gaps up to ``2 * half`` filled: grown by the square, then shrunk by it (the free space around
+    it grown, and taken from a frame that holds it)."""
+    grown = _grown_by_square(shape, half)
+    frame = box(*grown.bounds).buffer(half + 1.0)
+    return frame.difference(_grown_by_square(frame.difference(grown), half))
+
+
 def building_outline(solid: BaseGeometry) -> BaseGeometry:
     """The filled outline of every network of walls that holds space (not a lone wall): gaps up to
     ``2 * OUTLINE_CLOSING`` are bridged first, so a window bay or a doorway does not open the outline. Small
     pieces (posts, stray fragments outside the building) take no part: bridging to them would pull the floor out
     of the walls."""
     walls = union(p for p in polygons_of(solid) if max(p.bounds[2] - p.bounds[0], p.bounds[3] - p.bounds[1]) >= MIN_WALL_RUN)
-    closed = walls.buffer(OUTLINE_CLOSING, join_style="mitre").buffer(-OUTLINE_CLOSING, join_style="mitre")
+    if walls.is_empty:
+        return walls
+    closed = _closed_by_square(walls, OUTLINE_CLOSING)
     filled = (Polygon(p.exterior) for p in polygons_of(closed))
     return union(f for f in filled if f.difference(solid).area >= MIN_ENCLOSED)
 

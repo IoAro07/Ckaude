@@ -1,10 +1,13 @@
 """The floor that covers what no room's floor does (open plans, rooms the walls do not close)."""
 
+import random
+
 import ezdxf
 import pytest
 from builders import building
 from helpers import Obj
-from shapely.geometry import Point, box
+from shapely.geometry import LineString, Point, box
+from shapely.ops import unary_union
 
 from dwg2c4d import Config, convert
 from dwg2c4d.floors import building_outline
@@ -82,6 +85,30 @@ def test_the_floor_layer_of_the_drawing_is_all_the_floor_there_is(tmp_path):
     doc.saveas(tmp_path / "l.dxf")
     rep = run(tmp_path / "l.dxf", tmp_path)
     assert [n for n, _ in rep.plan.floors] == ["Locale_01"]  # what the layer does not cover stays bare: the user said so
+
+
+def thin_wall(a, b, width):
+    return LineString([a, b]).buffer(width / 2, cap_style="flat")
+
+
+def partitioned_building(seed):
+    """A 14 x 9 m building with a diagonal wall and a few partitions placed by ``seed``, and one more thin wall to add."""
+    rnd = random.Random(seed)
+    parts = [box(0, 0, 14, 9).difference(box(0.3, 0.3, 13.7, 8.7)),
+             thin_wall((0.3, 3.0), (rnd.uniform(4, 8), rnd.uniform(5, 8.7)), 0.15)]
+    for _ in range(rnd.randint(2, 4)):
+        x, y0 = rnd.uniform(2, 12), rnd.uniform(0.3, 4)
+        parts.append(thin_wall((x, y0), (x, y0 + rnd.uniform(2, 5)), 0.1))
+    extra = thin_wall((rnd.uniform(0.3, 2), rnd.uniform(0.3, 8)), (rnd.uniform(3, 6), rnd.uniform(0.3, 8)), 0.1)
+    return unary_union(parts), extra
+
+
+@pytest.mark.parametrize("seed", [321, 325, 356, 393])
+def test_one_more_wall_never_takes_a_room_out_of_the_outline(seed):
+    """A mitred closing of the walls lost 30-85 m2 of the outline on these plans when one thin wall was added."""
+    base, extra = partitioned_building(seed)
+    before, after = building_outline(base), building_outline(unary_union([base, extra]))
+    assert before.difference(after).area == pytest.approx(0.0, abs=0.05)
 
 
 def test_a_building_with_no_closed_room_at_all_still_gets_a_floor(tmp_path):
