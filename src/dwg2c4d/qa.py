@@ -6,6 +6,7 @@ import math
 from collections import OrderedDict
 from pathlib import Path
 
+from .config import UNIT_TO_METERS
 from .render import save_views
 
 KIND_COLOR = {"window": "#1f77b4", "door": "#d62728", "passage": "#ff7f0e"}
@@ -111,6 +112,10 @@ def write_report(report, path: str | Path, created: list[str]) -> Path:
     if notes:
         lines += ["", "DA CONTROLLARE (note sulle aperture)", "-" * 60]
         lines += [f"  {', '.join(ids)}: {n}" for n, ids in notes.items()]
+    false = getattr(report, "false_walls", None)
+    if false is not None and not false.empty:
+        lines += ["", "MURI MESSI DA PARTE (non estrusi, o bassi: controlla)", "-" * 60]
+        lines += false.listing(UNIT_TO_METERS[report.unit], report.unit)
     path = Path(path)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -131,7 +136,7 @@ def plan_overlay(report, path: str | Path) -> Path:
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.patches import PathPatch
+    from matplotlib.patches import PathPatch, Rectangle
     from matplotlib.path import Path as MplPath
     from shapely.geometry.polygon import orient
 
@@ -180,6 +185,13 @@ def plan_overlay(report, path: str | Path) -> Path:
         draw(plan.partitions, fc="#9a9a9a", ec="#444", lw=0.5, zorder=3)
     else:
         draw(walls, fc="#5d5d5d", ec="#222", lw=0.5, zorder=3)
+    draw(plan.columns, fc="#3a3a3a", ec="#111", lw=0.4, zorder=3)
+    draw(plan.low, fc="#7fc8c8", ec="#2a7f7f", lw=0.5, zorder=3)  # curbs and low walls: built low, apart from the walls
+    false = getattr(report, "false_walls", None)
+    for o in (*false.furniture, *false.stairs) if false is not None else ():  # left out: where they were
+        colour = "#2ca02c" if o.kind == "arredo" else "#d98c00"
+        ax.add_patch(Rectangle((o.x - o.width / 2, o.y - o.depth / 2), o.width, o.depth, fill=False, ec=colour, lw=0.9,
+                               ls="--", zorder=3))
     if not plan.skirting.is_empty:
         draw(plan.skirting, fc="#c040c0", ec="#c040c0", lw=0.3, zorder=4)
     for o in report.openings:
@@ -198,8 +210,9 @@ def plan_overlay(report, path: str | Path) -> Path:
     ax.autoscale()
     ax.margins(0.06)
     ax.grid(alpha=0.15)
-    ax.set_title("Controllo: muri (grigio), tramezzi (grigio chiaro), locali, aperture con sigla, larghezza×altezza "
-                 "e quota da terra in cm (blu finestre, rosso porte, arancio vani; * = vedi note)"
+    ax.set_title("Controllo: muri (grigio), tramezzi (grigio chiaro), muretti e cordoli (verde acqua), locali, aperture con "
+                 "sigla, larghezza×altezza e quota da terra in cm (blu finestre, rosso porte, arancio vani; * = vedi note); "
+                 "tratteggiati: arredi (verde) e scale (arancio) non estrusi"
                  + ("; giardino: pavimentazione, prato, acqua, siepi/alberi/cespugli/arredi con sigla"
                     if garden is not None else ""), fontsize=9)
     path = Path(path)

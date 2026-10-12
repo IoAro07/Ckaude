@@ -20,7 +20,7 @@ from .glazing import ribbon_windows
 from .openings import assign_ids, build_openings
 from .reader import layer_used, storeys, read_items
 from .roof import build_roof, ridge_hints_from
-from .falsewalls import FalseWalls, drop_loose_outlines, lower_far_walls
+from .falsewalls import FalseWalls, lower_far_walls, separate_prims
 from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
@@ -127,6 +127,26 @@ def _describe_groups(groups: list[dict], unit_scale: float) -> str:
     return "; ".join(lines)
 
 
+def _read_walls(items: list, cfg: Config, warnings: list[str]) -> tuple[BaseGeometry, dict[str, BaseGeometry], FalseWalls]:
+    """(the walls, the footprint of each wall layer, what was taken out of them). Furniture, stairs, curbs and lot lines on
+    the layers the program chose are not walls (see falsewalls); --muri and --modalita-muri say what is a wall, then nothing
+    is told apart, and the partition layers the names vouch for are never touched."""
+    if cfg.separate_walls and cfg.walls_guessed and cfg.wall_mode == "auto":
+        vouched = frozenset(it.layer for it in items if it.category == "wall" and cfg.layers.is_partition(it.layer))
+        own: list[str] = []
+        kept, false = separate_prims(items, vouched)
+        layer_walls = build_wall_layers(kept, cfg, own)
+        walls = clean_footprint(union(layer_walls.values()), cfg.merge_tolerance)
+        keep = union(g for k, g in layer_walls.items() if k in vouched)
+        walls = clean_footprint(lower_far_walls(walls, items, false, keep), cfg.merge_tolerance)
+        if not walls.is_empty:  # a drawing of nothing but furniture is read as it is: no wall at all is no model
+            warnings.extend(own)
+            warnings.extend(false.notes(cfg.low_wall_height, cfg.curb_height))
+            return walls, layer_walls, false
+    layer_walls = build_wall_layers(items, cfg, warnings)
+    return clean_footprint(union(layer_walls.values()), cfg.merge_tolerance), layer_walls, FalseWalls()
+
+
 def convert(input_path: str | Path, output_path: str | Path | None = None,
             cfg: Config | None = None, _doc=None) -> ConversionReport:
     """``_doc``: the drawing already opened (a second pass over the same file does not read it again)."""
@@ -169,15 +189,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         warnings.append(f"I layer nominano {len(found)} piani ({', '.join(f'P{n}' for n in found)}): ho letto il "
                         f"piano {found[0]}. Per un altro usa --piano N.")
 
-    items, false = result.items, FalseWalls()
-    sorting = cfg.separate_walls and cfg.walls_guessed  # --muri says what is a wall: then nothing is told apart
-    if sorting:  # furniture, curbs and lot lines on the layers we chose are not walls
-        items, false = drop_loose_outlines(items)
-    layer_walls = build_wall_layers(items, cfg, warnings)
-    walls = clean_footprint(union(layer_walls.values()), cfg.merge_tolerance)
-    if sorting:
-        walls = clean_footprint(lower_far_walls(walls, result.items, false), cfg.merge_tolerance)
-        warnings.extend(false.notes(cfg.low_wall_height, cfg.curb_height))
+    walls, layer_walls, false = _read_walls(result.items, cfg, warnings)
     if walls.is_empty:
         found = sorted({it.layer for it in result.items})
         raise ConversionError(

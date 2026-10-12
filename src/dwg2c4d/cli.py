@@ -102,12 +102,19 @@ def build_parser() -> argparse.ArgumentParser:
                    help="se i layer sono nominati per piano (P1_Muri, pianta2...) legge solo il piano N "
                         "(default: il piu' basso); i layer senza numero valgono per tutti")
     g.add_argument("--includi-nascosti", action="store_true", help="usa anche layer spenti/congelati")
+    g.add_argument("--muri-tutti", action="store_true",
+                   help="tutto cio' che sta sui layer dei muri e' muro: niente arredi, cordoli e muretti messi da parte "
+                        "(con --muri indicato da te e' gia' cosi')")
     g.add_argument("--muri-da-blocchi", action="store_true",
                    help="leggi come muri anche i blocchi inseriti su un layer di muri "
                         "(di solito sono arredi e vengono ignorati)")
 
     g = p.add_argument_group("altezze e spessori (metri)")
     g.add_argument("--altezza-muri", type=float)
+    g.add_argument("--altezza-muretti", type=float, metavar="M",
+                   help="altezza dei muretti messi da parte come bassi (default 0.50 m): contorni di lotti, muri senza campiture fuori dall'edificio")
+    g.add_argument("--altezza-cordoli", type=float, metavar="M",
+                   help="altezza dei cordoli, i muretti sottili (default 0.15 m)")
     g.add_argument("--altezza-porte", type=float)
     g.add_argument("--davanzale", type=float, help="quota del davanzale delle finestre")
     g.add_argument("--altezza-finestre", type=float)
@@ -246,6 +253,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
         "roof_thickness": args.spessore_tetto, "roof_offset": args.sposta_tetto,
         "garden_area": args.area_giardino, "pool_depth": args.profondita_piscina,
         "tree_height": args.altezza_alberi, "hedge_height": args.altezza_siepi, "shrub_height": args.altezza_cespugli,
+        "low_wall_height": args.altezza_muretti, "curb_height": args.altezza_cordoli,
     }
     for name, value in simple.items():
         if value is not None:
@@ -267,6 +275,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.include_hidden = True
     if args.muri_da_blocchi:
         cfg.walls_from_blocks = True
+    if args.muri_tutti:
+        cfg.separate_walls = False
     if args.specchia:
         cfg.mirror = True
     cfg.origin = {"centro": "center", "minimo": "min", "disegno": "drawing"}[args.origine]
