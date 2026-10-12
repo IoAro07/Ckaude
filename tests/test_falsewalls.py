@@ -1,8 +1,10 @@
 """What is not a wall on the layers taken for the walls: furniture, stairs, curbs, lots, solid blocks."""
 
+import json
+
 import pytest
 from builders import D, PLAN_AREA, W, building
-from shapely.geometry import LineString, Polygon, box
+from shapely.geometry import LineString, box
 
 from dwg2c4d import Config, convert
 from dwg2c4d.cli import build_parser, config_from_args, main
@@ -399,12 +401,16 @@ def test_curbs_come_out_low_in_their_own_groups_and_the_walls_keep_their_height(
     path = tmp_path / "c.dxf"
     doc.saveas(path)
     rep = convert(path, tmp_path / "c.obj", Config(area=(-400, -1000, 1400, 800), walls_guessed=True, low_wall_height=0.6,
-                                                   curb_height=0.2, floor_thickness=0.0))
+                                                   curb_height=0.2, floor_thickness=0.0, c4d_json=True))
     obj = Obj(tmp_path / "c.obj")
     assert "Cordoli" in rep.groups and "Muretti" not in rep.groups
     assert obj.bbox("Cordoli")[1][1] == pytest.approx(0.2) and obj.bbox("Muri")[1][1] == pytest.approx(2.7)
     assert any("alti 0.6 m (Muretti) o 0.2 m (Cordoli" in w for w in rep.warnings)
     assert rep.wall_area_m2 == pytest.approx(rep.plan.solid_walls.area) and rep.plan.low.area > 0
+    assert "newmtl Cordoli" in (tmp_path / "c.mtl").read_text()
+    model = json.loads((tmp_path / "c_model.json").read_text())
+    curb = next(o for o in model["objects"] if o["name"] == "Cordoli")
+    assert curb["group"] == "Murature" and curb["material"] == "curb" and "curb" in model["materials"]
 
 
 def test_the_partition_layers_the_names_vouch_for_are_never_lowered(tmp_path):

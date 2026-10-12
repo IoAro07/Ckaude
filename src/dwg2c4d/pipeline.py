@@ -234,7 +234,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if groups:
         real = [g for g in groups if g["openings"] > 0]
         area = None
-        if (cfg.area is None or cfg.area_auto) and 0 < len(real) < len(groups):
+        if (cfg.area is None or cfg.area_auto) and not cfg.groups_cut and 0 < len(real) < len(groups):
             # Only some groups have doors/windows: the others are a roof plan, a section... drawn on the same
             # layer. Read the drawing again cropped to the groups that are plans.
             margin = 1.0
@@ -244,13 +244,14 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             y1 = max(g["bounds"][3] for g in real) + margin
             area = tuple(v / result.unit_scale for v in (x0, y0, x1, y1))
             if cfg.area is not None and all(abs(p - q) < 1e-6 for p, q in zip(cfg.area, area)):
-                area = None  # this window was already tried: a group without openings inside it stays (no endless loop)
+                area = None  # this window is the one in use: a group without openings inside it stays
         if area is not None:
             dropped = [g for g in groups if g["openings"] == 0]
             skip = [tuple((v + d) / result.unit_scale for v, d in zip(g["bounds"], (-0.5, -0.5, 0.5, 0.5)))
                     for g in dropped]  # a roof plan or a section is not the garden either
             fixed = convert(input_path, output_path,
-                            replace(cfg, area=area, area_auto=True, garden_exclude=[*cfg.garden_exclude, *skip]),
+                            replace(cfg, area=area, area_auto=True, groups_cut=True,
+                                    garden_exclude=[*cfg.garden_exclude, *skip]),
                             _doc=doc)
             fixed.warnings.insert(0, (
                 f"Ho escluso {len(dropped)} gruppo/i di muri senza porte ne' finestre (di solito la pianta del tetto "

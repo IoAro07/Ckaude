@@ -74,6 +74,29 @@ def test_a_group_without_openings_is_left_out_when_no_area_is_given(tmp_path):
     assert Obj(rep.output).bbox("Muri")[0][2] == pytest.approx(-6.0)
 
 
+def test_the_groups_are_left_out_once_never_again_whatever_the_window_does(tmp_path):
+    """Cutting the window to the plans and reading again may find groups without openings again, a little different each
+    time: the second reading is the last (a site plan of a real sheet once read itself without end)."""
+    rep = convert_all(with_second_drawing(tmp_path), tmp_path, groups_cut=True)
+    assert rep.size_m[1] > 15.0 and not any("Ho escluso" in w for w in rep.warnings)
+    assert any("gruppi distanti" in w for w in rep.warnings)
+
+
+def test_the_second_reading_is_told_it_is_the_last(tmp_path, monkeypatch):
+    from dwg2c4d import pipeline
+
+    seen = []
+    first = pipeline.convert
+
+    def spy(path, output=None, cfg=None, _doc=None):
+        seen.append(cfg.groups_cut)
+        return first(path, output, cfg, _doc)
+
+    monkeypatch.setattr(pipeline, "convert", spy)
+    first(with_second_drawing(tmp_path), tmp_path / "o.obj", Config())  # the reading that cuts the window calls itself once
+    assert seen == [True]
+
+
 def test_two_groups_both_with_openings_are_both_kept(tmp_path):
     doc, msp = building()
     for pts in ([(1500, 0), (2000, 0), (2000, 300), (1500, 300)],

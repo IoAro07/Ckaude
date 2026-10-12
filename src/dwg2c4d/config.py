@@ -245,6 +245,7 @@ class Config:
     write_garden_table: bool = True  # write <name>_giardino.csv: every plant / piece of furniture, editable by hand
     garden_table_in: str | None = None  # an edited garden table to apply (MODIFICA_* columns)
     area_auto: bool = False  # internal: ``area`` was set by the program (to leave out a roof plan), not by the user
+    groups_cut: bool = False  # internal: the groups of walls without doors or windows were left out once already (no endless loop)
     garden_exclude: list[tuple[float, float, float, float]] = field(default_factory=list)  # internal: drawing units
 
     # Reading a drawing whose layers do not say what things are (the library leaves it off, the command line turns it on):
