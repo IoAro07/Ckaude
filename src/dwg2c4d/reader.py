@@ -240,8 +240,8 @@ class _Reader:
             layer = e.dxf.layer
             inherits = bool(depth) and layer == "0"
             if inherits:
-                if not self.keep_other and not (self.shape_arcs and t == "ARC"):
-                    continue  # inside a block, layer 0 means "inherit": the insert itself was not a category (a swing arc still counts)
+                if not self.keep_other:
+                    continue  # inside a block, layer 0 means "inherit": the insert itself was not a category
                 layer = parent  # an elevation draws its windows, doors and level marks as blocks of layer 0 lines
             if not self.visible(layer):
                 continue
