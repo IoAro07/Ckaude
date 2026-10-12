@@ -24,6 +24,7 @@ SWING_SPAN = (70.0, 110.0)  # degrees
 THIN_MIN_LENGTH = 0.6  # m: shorter straight pieces are no part of a glazing strip (glazing.py looks at the longer ones)
 THIN_MAX_VERTICES = 40  # a polyline with more vertices is a contour or a curve, not a pane
 THIN_TYPES = {"LINE", "LWPOLYLINE", "POLYLINE"}
+LEAF_TOLERANCE = 0.03  # m: a leaf line of a door joins the centre of its swing arc to one of the arc's ends, this close at most
 
 
 @dataclass
@@ -239,8 +240,8 @@ class _Reader:
             layer = e.dxf.layer
             inherits = bool(depth) and layer == "0"
             if inherits:
-                if not self.keep_other:
-                    continue  # inside a block, layer 0 means "inherit": the insert itself was not a category
+                if not self.keep_other and not (self.shape_arcs and t == "ARC"):
+                    continue  # inside a block, layer 0 means "inherit": the insert itself was not a category (a swing arc still counts)
                 layer = parent  # an elevation draws its windows, doors and level marks as blocks of layer 0 lines
             if not self.visible(layer):
                 continue
@@ -284,6 +285,38 @@ class _Reader:
             prims = self.prims_of([e])
             if prims:
                 self.items.append(Item(layer, None, cat, prims))
+
+
+Swing = tuple[tuple[float, float], tuple[tuple[float, float], tuple[float, float]], float]  # centre, the two ends and the radius of a swing arc (m)
+
+
+def _without_swing_symbols(items: list[Item], swings: list[Swing]) -> list[Item]:
+    """``items`` without the lines of the door symbols that a swing arc and its leaf make on a wall layer: the arc, and
+    the leaf lines (the radii from the arc's centre to its ends). Closed by them the quarter disc is a thin face, which
+    the wall detector fills as a 2.7 m high wall on the very spot the door sweeps, and the door (whose arc must lie off
+    the walls) is lost. An arc with no leaf line is left alone: it may be the round corner of a wall."""
+    if not swings:
+        return items
+    leafed: set[int] = set()  # the swings that have a leaf line among the wall lines
+    leaves: set[int] = set()  # the wall items that are those leaf lines
+    for k, it in enumerate(items):
+        if it.category != "wall" or len(it.prims) != 1 or it.prims[0].kind != "line" or it.prims[0].meta.get("arc"):
+            continue
+        pts = it.prims[0].geom.coords
+        if len(pts) != 2:
+            continue
+        for n, (centre, ends, _) in enumerate(swings):
+            for a, b in ((pts[0], pts[1]), (pts[1], pts[0])):
+                if math.dist(a, centre) <= LEAF_TOLERANCE and any(math.dist(b, e) <= LEAF_TOLERANCE for e in ends):
+                    leafed.add(n)
+                    leaves.add(k)
+    arcs: set[int] = set()
+    for k, it in enumerate(items):
+        arc = it.prims[0].meta.get("arc") if it.category == "wall" and len(it.prims) == 1 else None
+        if arc and any(math.dist(arc[:2], swings[n][0]) <= LEAF_TOLERANCE and abs(arc[2] - swings[n][2]) <= LEAF_TOLERANCE
+                       for n in leafed):
+            arcs.add(k)
+    return [it for k, it in enumerate(items) if k not in leaves and k not in arcs]
 
 
 _ALL = object()  # "use cfg.area" marker
@@ -341,6 +374,8 @@ def read_items(doc: Drawing, cfg: Config, area=_ALL, ignore_veto: bool = False,
                 p.meta["arc"] = (cx * scale, cy * scale, r * scale, span, (mx * scale, my * scale))
         kept.append(it)
 
+    swings: list[Swing] = []
+    shape_doors: list[Item] = []
     for it in reader.arcs:  # swing arcs found by their shape, on layers whose names say nothing
         prims = []
         for p in it.prims:
@@ -357,9 +392,12 @@ def read_items(doc: Drawing, cfg: Config, area=_ALL, ignore_veto: bool = False,
             # shape (not the arc's chord) tells which way the wall runs.
             c = (cx * scale, cy * scale)
             ends = (p.geom.coords[0], p.geom.coords[-1])
+            swings.append((c, ends, r))
             prims.extend(Prim(LineString([c, e]), "line", {"shape_door": True}) for e in ends)
         if prims:
-            kept.append(Item(it.layer, None, "door", prims))
+            shape_doors.append(Item(it.layer, None, "door", prims))
+    kept = _without_swing_symbols(kept, swings)
+    kept.extend(shape_doors)
 
     thin = np.asarray(reader.thin or [], float).reshape(-1, 4) * scale
     if window is not None and len(thin):
