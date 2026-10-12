@@ -31,6 +31,7 @@ GUARD = 0.005
 OUTER_TOLERANCE = 0.05  # m: the band of perimeter wall is this much thicker than the walls found
 OUTLINE_CLOSING = 2.0  # m: gaps up to twice this (window bays, doorways, a missing wall piece) are bridged to find the building's outline
 MIN_ENCLOSED = 4.0  # m2: an outline that holds less space than this (without its walls) is a wall, not a building
+MIN_WALL_RUN = 2.0  # m: a piece of wall shorter than this in both directions (a post, a symbol, a stray fragment) bounds no space and bridges no gap
 LEFT_OVER_SLIVER = 0.05  # m: a strip of floor thinner than this, between a room's floor and a wall, is no space of its own
 
 
@@ -104,8 +105,11 @@ def room_floors(rooms: list[Room], openings: list[Opening]) -> list[tuple[str, B
 
 def building_outline(solid: BaseGeometry) -> BaseGeometry:
     """The filled outline of every network of walls that holds space (not a lone wall): gaps up to
-    ``2 * OUTLINE_CLOSING`` are bridged first, so a window bay or a doorway does not open the outline."""
-    closed = solid.buffer(OUTLINE_CLOSING, join_style="mitre").buffer(-OUTLINE_CLOSING, join_style="mitre")
+    ``2 * OUTLINE_CLOSING`` are bridged first, so a window bay or a doorway does not open the outline. Small
+    pieces (posts, stray fragments outside the building) take no part: bridging to them would pull the floor out
+    of the walls."""
+    walls = union(p for p in polygons_of(solid) if max(p.bounds[2] - p.bounds[0], p.bounds[3] - p.bounds[1]) >= MIN_WALL_RUN)
+    closed = walls.buffer(OUTLINE_CLOSING, join_style="mitre").buffer(-OUTLINE_CLOSING, join_style="mitre")
     filled = (Polygon(p.exterior) for p in polygons_of(closed))
     return union(f for f in filled if f.difference(solid).area >= MIN_ENCLOSED)
 

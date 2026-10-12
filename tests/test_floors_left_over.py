@@ -10,9 +10,10 @@ from dwg2c4d import Config, convert
 from dwg2c4d.floors import building_outline
 
 
-def open_plan(tmp_path):
+def open_plan(tmp_path, posts=()):
     """A 10 x 6 m building whose south wall has a 3 m opening (x 400..700): the main space is no closed room. In the
-    north-east corner a closed kitchen (10 cm partitions) with its name written in it."""
+    north-east corner a closed kitchen (10 cm partitions) with its name written in it. ``posts``: (x, y) of 60 cm squares
+    of wall drawn outside the building."""
     doc = ezdxf.new("R2018", setup=True)
     doc.units = 5
     for name in ("MURI", "Quote e Testi"):
@@ -21,6 +22,8 @@ def open_plan(tmp_path):
     for x0, y0, x1, y1 in ((0, 0, 400, 30), (700, 0, 1000, 30), (0, 570, 1000, 600), (0, 0, 30, 600), (970, 0, 1000, 600),
                            (700, 300, 710, 570), (700, 300, 970, 310)):
         msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": "MURI"})
+    for x, y in posts:
+        msp.add_lwpolyline([(x, y), (x + 60, y), (x + 60, y + 60), (x, y + 60)], close=True, dxfattribs={"layer": "MURI"})
     msp.add_mtext("CUCINA", dxfattribs={"insert": (840, 440), "char_height": 10, "layer": "Quote e Testi",
                                         "attachment_point": 5})
     doc.saveas(tmp_path / "open.dxf")
@@ -47,6 +50,14 @@ def test_what_no_room_covers_gets_a_floor_of_its_own(tmp_path):
     assert shapes["Cucina"].intersection(rest).area == pytest.approx(0.0, abs=1e-4)
     assert floor_groups(Obj(rep.output)) == ["Pavimento", "Pavimento_Cucina"]
     assert any(w.startswith("Pavimento:") and "Controlla" in w for w in rep.warnings)  # a guess: the report says so
+
+
+def test_a_post_or_a_fragment_of_wall_outside_the_building_does_not_pull_the_floor_out(tmp_path):
+    rep = run(open_plan(tmp_path, posts=((300, 700), (600, 700))), tmp_path)  # two 60 cm posts, 1 m north of the north wall
+    rest = dict(rep.plan.floors)["Pavimento"]
+    assert not rest.covers(Point(3.3, 6.5)) and not rest.covers(Point(4.5, 6.5)) and not rest.covers(Point(6.3, 6.5))
+    assert rest.covers(Point(2.0, 3.0)) and rest.covers(Point(5.5, 0.15))  # the open space inside is still floor
+    assert rest.difference(box(0, 0, 10, 6)).area == pytest.approx(0.0, abs=0.01)  # nothing beyond the walls' outer faces
 
 
 def test_the_floor_of_a_room_is_the_same_with_or_without_the_one_that_covers_the_rest(tmp_path, monkeypatch):
