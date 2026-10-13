@@ -34,6 +34,7 @@ from .config import Config
 from .geom import fix, nest_polygons, oriented_rect, polygons_of, union
 from .mesh import Mesh, Slab
 from .reader import LINE_TYPES, _entity_prims, _flatten, layer_used
+from .terrainmesh import add_draped
 
 GAP = 3.0  # m: a piece of ground this close to the garden found so far belongs to it
 OBJECT_GAP = 10.0  # m: plants and furniture this far from it still do
@@ -575,6 +576,13 @@ def place_on_ground(objects: list[GardenObject], ground: dict[str, BaseGeometry]
         o.z0 = -cfg.garden_lawn_drop if not soft.is_empty and soft.contains(Point(o.cx, o.cy)) else 0.0
 
 
+def place_on_terrain(objects: list[GardenObject], ground) -> None:
+    """Plants and furniture stand on the ground of the terrain: where the flat model puts them, higher by how much the ground
+    is higher than the platform there."""
+    for o in objects:
+        o.z0 += float(ground.lift(o.cx, o.cy))
+
+
 # --- building the garden ----------------------------------------------------------------------
 
 def build_garden(doc, cfg: Config, unit_scale: float, footprint: BaseGeometry, zones: list[tuple],
@@ -618,14 +626,18 @@ def _box(o: GardenObject, z0: float, z1: float) -> Slab:
     return Slab(z0, z1, oriented_rect(o.cx, o.cy, ux, uy, o.length, -o.width / 2.0, o.width / 2.0))
 
 
-def add_garden(mesh: Mesh, garden: Garden, cfg: Config) -> None:
-    """The ground slabs, the pools and the stand-ins of the plants and the furniture."""
+def add_garden(mesh: Mesh, garden: Garden, cfg: Config, ground=None) -> None:
+    """The ground slabs, the pools and the stand-ins of the plants and the furniture. On a terrain (``ground``) the slabs
+    follow the ground, flat on its platform, and the soil is the terrain itself."""
     th = cfg.garden_thickness
     for kind in KINDS:
         geom = garden.surfaces.get(kind)
         if geom is not None and not geom.is_empty:
             top = -cfg.garden_lawn_drop if kind in ("lawn", "soil") else 0.0
-            mesh.add_extrusion(GROUND_NAMES[kind], [Slab(top - th, top, geom)])
+            if ground is None:
+                mesh.add_extrusion(GROUND_NAMES[kind], [Slab(top - th, top, geom)])
+            elif kind != "soil":
+                add_draped(mesh, ground, GROUND_NAMES[kind], geom, top)
     for pool, shell in zip(garden.pools, garden.shells):
         mesh.add_extrusion("Vasca", [Slab(-cfg.pool_depth - cfg.pool_wall, -cfg.pool_depth, shell),
                                      Slab(-cfg.pool_depth, 0.0, shell.difference(pool))])

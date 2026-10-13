@@ -123,6 +123,11 @@ def summary_lines(report) -> list[str]:
                 srcs = sorted(heights[kind])
                 text = ", ".join(f"{h:g} m ({how})" for how, h in srcs[:3])
                 out.append(f"    altezza {label:<9}: {text}")
+    if report.terrain:
+        t = report.terrain
+        out.append(f"  Terreno            : {t['levels']} curve di livello (layer {t['layer']}, ogni {t['step']:g} m, da {t['low']:.1f} "
+                   f"a {t['high']:.1f} m), {t['size'][0]:.0f} x {t['size'][1]:.0f} m, spessore {t['thickness']:g} m; pavimento "
+                   f"finito a {t['floor']:.2f} m ({t['floor_source']})")
     out.append(f"  Facce / oggetti    : {report.faces} / {', '.join(report.groups)}")
     for msg in report.warnings:
         out.append(f"  ATTENZIONE: {msg}")
@@ -169,10 +174,11 @@ def write_report(report, path: str | Path, created: list[str]) -> Path:
 
 # --- pictures ---------------------------------------------------------------------------------
 
-def preview_3d(mesh, path: str | Path) -> Path:
-    """Three views of the model (needs only numpy)."""
+def preview_3d(mesh, path: str | Path, focus: tuple[float, float, float, float] | None = None) -> Path:
+    """Three views of the model (needs only numpy). ``focus`` (xmin, xmax, ymin, ymax, metres): only what lies there is
+    drawn (a terrain is far bigger than the house on it)."""
     return save_views(mesh, path, views=((-58, 38), (-128, 38), (-90, 86)), size=(620, 470),
-                      hide=("Soffitto",))
+                      hide=("Soffitto",), clip=focus)
 
 
 def plan_overlay(report, path: str | Path, openings: list | None = None) -> Path:
@@ -187,7 +193,7 @@ def plan_overlay(report, path: str | Path, openings: list | None = None) -> Path
     from matplotlib.path import Path as MplPath
     from shapely.geometry.polygon import orient
 
-    from .geom import polygons_of
+    from .geom import polygons_of, union
 
     plan = report.plan
     fig, ax = plt.subplots(figsize=(16, 10))
@@ -233,7 +239,7 @@ def plan_overlay(report, path: str | Path, openings: list | None = None) -> Path
     else:
         draw(walls, fc="#5d5d5d", ec="#222", lw=0.5, zorder=3)
     draw(plan.columns, fc="#3a3a3a", ec="#111", lw=0.4, zorder=3)
-    draw(plan.low, fc="#7fc8c8", ec="#2a7f7f", lw=0.5, zorder=3)  # curbs and low walls: built low, apart from the walls
+    draw(union([plan.low, *(body for body, _ in plan.low_written)]), fc="#7fc8c8", ec="#2a7f7f", lw=0.5, zorder=3)  # curbs and low walls: built low, apart from the walls
     false = getattr(report, "false_walls", None)
     for o in (*false.furniture, *false.stairs) if false is not None else ():  # left out: where they were
         colour = "#2ca02c" if o.kind == "arredo" else "#d98c00"
@@ -256,13 +262,28 @@ def plan_overlay(report, path: str | Path, openings: list | None = None) -> Path
     ax.set_aspect("equal")
     ax.autoscale()
     ax.margins(0.06)
+    terrain = plan.terrain
+    if terrain is not None:  # the ground under the plan: contour lines every metre and the flat platform dashed, drawn within the plan
+        import numpy as np
+
+        xlim, ylim = ax.get_xlim(), ax.get_ylim()
+        ny, nx = terrain.shape
+        gx, gy = np.meshgrid(terrain.x0 + np.arange(nx + 1) * terrain.step, terrain.y0 + np.arange(ny + 1) * terrain.step)
+        ax.contour(gx, gy, terrain.z, levels=np.arange(math.floor(terrain.z.min()), math.ceil(terrain.z.max()) + 1.0),
+                   colors="#b08850", linewidths=0.5, zorder=0.1)
+        for poly in polygons_of(terrain.platform):
+            ax.plot(*poly.exterior.xy, "--", color="#8a6a3a", lw=0.8, zorder=0.15)
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
     ax.grid(alpha=0.15)
     storey = f"Piano {report.cfg.storey} (vista {report.analysis.plan.id}). " if report.cfg is not None and report.cfg.part else ""
     ax.set_title(storey + "Controllo: muri (grigio), tramezzi (grigio chiaro), muretti e cordoli (verde acqua), locali, aperture con "
                  "sigla, larghezza×altezza e quota da terra in cm (blu finestre, rosso porte, arancio vani; * = vedi note); "
                  "tratteggiati: arredi (verde) e scale (arancio) non estrusi"
                  + ("; giardino: pavimentazione, prato, acqua, siepi/alberi/cespugli/arredi con sigla"
-                    if garden is not None else ""), fontsize=9)
+                    if garden is not None else "")
+                 + ("; terreno: curve di livello ogni metro (marrone) e piattaforma piana (tratteggio)"
+                    if terrain is not None else ""), fontsize=9)
     path = Path(path)
     fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)

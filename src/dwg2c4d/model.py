@@ -18,6 +18,7 @@ from .garden import add_garden
 from .mesh import Mesh, Slab
 from .openings import Opening
 from .roof import MODULE_HEIGHT, FlatRoof, Roof
+from .terrainmesh import add_draped, add_terrain
 from .walls import clean_footprint
 
 SLIVER = 0.004  # wall remnants thinner than 2*SLIVER next to an opening are removed
@@ -37,7 +38,9 @@ class Plan:
     skirting: BaseGeometry = field(default_factory=Polygon)
     partitions: BaseGeometry = field(default_factory=Polygon)  # the thin walls, apart from the main walls
     low: BaseGeometry = field(default_factory=Polygon)  # curbs, low walls and lot lines outside the building (falsewalls)
+    low_written: list[tuple[BaseGeometry, float]] = field(default_factory=list)  # (body, height m) of those whose height the drawing writes
     garden: object | None = None  # the ground, pools, plants and furniture outside (garden.Garden)
+    terrain: object | None = None  # the ground under it all, with the house on a platform (terrain.Terrain)
 
     @cached_property
     def solid_walls(self) -> BaseGeometry:
@@ -54,11 +57,11 @@ def floor_footprint(walls: BaseGeometry) -> BaseGeometry:
     return union(Polygon(p.exterior) for p in polygons_of(closed) if p.interiors)
 
 
-def wall_slabs(walls: BaseGeometry, openings: list[Opening], height: float) -> list[Slab]:
-    """Stack of footprints from z=0 to ``height``; each slab has the openings cut
-    that span it entirely. Equal neighbouring footprints are merged.
+def wall_slabs(walls: BaseGeometry, openings: list[Opening], height: float, base: float = 0.0) -> list[Slab]:
+    """Stack of footprints from z=``base`` (0, or the platform of the terrain the walls stand on) to ``height``; each slab
+    has the openings cut that span it entirely. Equal neighbouring footprints are merged.
     ``walls`` must already contain the opening footprints (``Plan.solid_walls``)."""
-    zs = {0.0, height}
+    zs = {base, height}
     for o in openings:
         zs.update((max(0.0, o.z0), min(height, o.z1)))
     levels = sorted(zs)
@@ -145,6 +148,18 @@ def outer_half_of_perimeter_walls(solid: BaseGeometry, max_thickness: float) -> 
     return None if outer.is_empty else outer
 
 
+def _add_low(mesh: Mesh, ground, name: str, shape: BaseGeometry, height: float) -> None:
+    """A curb or low wall: on a terrain it follows the ground, else (or if that fails) it is a plain extrusion from zero."""
+    before = len(mesh.groups.get(name, []))
+    try:
+        if ground is None:
+            raise ValueError  # flat ground: the plain extrusion below
+        add_draped(mesh, ground, name, shape, height)
+    except Exception:
+        del mesh.groups.get(name, [])[before:]
+        mesh.add_extrusion(name, [Slab(0.0, height, shape)], bottom=True)
+
+
 def add_roofs(mesh: Mesh, plan: Plan, cfg: Config, z_base: float) -> None:
     """The pitched roof and the flat roof of the plan, their eaves at ``z_base`` (the top of the walls they stand on)."""
     if plan.roof is not None:
@@ -166,27 +181,31 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str], roof: bool = True) 
     walls = plan.solid_walls
     cutting = [o for o in plan.openings if o.keep]  # a dropped opening is closed with wall
     main = walls if plan.partitions.is_empty else walls.difference(plan.partitions)
+    ground = plan.terrain  # walls and columns stand on its platform, a little below the finished floor
+    base = ground.level if ground is not None else 0.0
     outer = outer_half_of_perimeter_walls(walls, cfg.max_wall_thickness) if cfg.wall_finishes else None
     if outer is not None:
         # Two solids: the half of the perimeter walls that faces the outside, and everything else (the half
         # that faces the rooms and the walls between rooms). Each is closed, with its own top and bottom.
         outer_main = outer.intersection(main)
-        mesh.add_extrusion("Muri_esterno", wall_slabs(outer_main, cutting, cfg.wall_height), bottom=True)
-        mesh.add_extrusion("Muri_interno", wall_slabs(main.difference(outer_main), cutting, cfg.wall_height),
+        mesh.add_extrusion("Muri_esterno", wall_slabs(outer_main, cutting, cfg.wall_height, base), bottom=True)
+        mesh.add_extrusion("Muri_interno", wall_slabs(main.difference(outer_main), cutting, cfg.wall_height, base),
                            bottom=True)
     else:
-        mesh.add_extrusion("Muri", wall_slabs(main, cutting, cfg.wall_height), bottom=True)
+        mesh.add_extrusion("Muri", wall_slabs(main, cutting, cfg.wall_height, base), bottom=True)
     if not plan.partitions.is_empty:
-        mesh.add_extrusion("Tramezzi", wall_slabs(plan.partitions, cutting, cfg.wall_height), bottom=True)
+        mesh.add_extrusion("Tramezzi", wall_slabs(plan.partitions, cutting, cfg.wall_height, base), bottom=True)
 
-    if not plan.low.is_empty:
-        curbs, low_walls = split_low(plan.low)
-        for name, shape, height in (("Cordoli", curbs, cfg.curb_height), ("Muretti", low_walls, cfg.low_wall_height)):
+    for body, written in ((plan.low, None), *plan.low_written):
+        if body.is_empty:
+            continue
+        curbs, low_walls = split_low(body)
+        for name, shape, height in (("Cordoli", curbs, written or cfg.curb_height), ("Muretti", low_walls, written or cfg.low_wall_height)):
             if not shape.is_empty:
-                mesh.add_extrusion(name, [Slab(0.0, height, shape)], bottom=True)
+                _add_low(mesh, ground, name, shape, height)
 
     if not plan.columns.is_empty:
-        mesh.add_extrusion("Pilastri", [Slab(0.0, cfg.wall_height, plan.columns)], bottom=True)
+        mesh.add_extrusion("Pilastri", [Slab(base, cfg.wall_height, plan.columns)], bottom=True)
 
     if cfg.fixtures == "detailed":
         add_fixtures(mesh, cutting, cfg)
@@ -202,10 +221,12 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str], roof: bool = True) 
     if not plan.skirting.is_empty:
         mesh.add_extrusion("Battiscopa", [Slab(0.0, cfg.skirting_height, plan.skirting)], bottom=False)
 
+    if ground is not None:
+        add_terrain(mesh, ground)
     if plan.garden is not None:
         before = set(mesh.groups)
         try:
-            add_garden(mesh, plan.garden, cfg)
+            add_garden(mesh, plan.garden, cfg, ground)
         except Exception as exc:  # the garden is a help: what it had made is taken out again, the house stays
             for name in set(mesh.groups) - before:
                 del mesh.groups[name]

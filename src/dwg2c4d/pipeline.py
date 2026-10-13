@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
 
 from .autodetect import _KIND_IT, analyze, apply_analysis, other_view_boxes, site_plan_asked, write_views_image
@@ -14,6 +15,7 @@ from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer
 from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
+from .mesh import Mesh
 from .model import OTHER_FLOOR, Plan, build_mesh, building_footprint, facing_sign, floor_footprint
 from .stacking import (DEFAULT_SLAB, Floor, Stack, consensus_levels, consensus_slabs, find_storeys, fit_openings, moved, outline,
                        place_storeys, register, stack_mesh, stacking_on, storey_of_view)
@@ -28,14 +30,17 @@ from .falsewalls import FalseWalls, lower_far_walls, separate_prims
 from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, rows_of_storey, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
-from .texts import read_words
+from .lowheights import written_heights
+from .texts import read_texts, read_words
 from .passages import find_passages, wall_gaps
 from .elevmatch import agreed_height, match_known, match_views, storey_stated
-from .garden import build_garden
+from .garden import build_garden, place_on_terrain
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
 from .floors import extend_to_outer_faces, floor_left_over, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
 from .qa import plan_overlay, preview_3d, write_report
 from .mesh import storey_tag
+from .terrain import build_terrain
+from .terrainmesh import add_terrain
 
 
 @dataclass
@@ -73,6 +78,7 @@ class ConversionReport:
     roof: dict | None = None  # pitch_deg, pitch_source, ridge_height, faces
     flat_roof: dict | None = None  # area_m2, bodies, thickness, parapet_height
     garden: object | None = None  # the Garden: ground, pools, plants, furniture
+    terrain: dict | None = None  # the terrain from the contour lines: layer, levels, step, floor level, size...
     garden_table_path: Path | None = None
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
     views_path: Path | None = None
@@ -105,6 +111,7 @@ SURE_PAIRS = 3  # an elevation that pairs this many symbols with openings of the
 STOREY_OFF = dict(garden=False, roof=False, roof_auto=False, images=False, c4d_json=False, write_table=False,
                   write_garden_table=False, garden_table_in=None, area=None, roof_area=None, roof_offset=None)  # what an upper storey leaves to the base
 GARDEN_SKIPPED_KINDS = ("elevation", "section", "roof", "detail")  # views whose contents are never garden, even with --area
+PREVIEW_MARGIN = 15.0  # m: the 3D preview shows the terrain this far round the building
 GROUP_GAP = 3.0  # m: wall pieces closer than this are one building
 MIN_GROUP_AREA = 1.0  # m2 of wall: smaller pieces are not worth a remark
 
@@ -283,6 +290,29 @@ def _stack_storeys(doc, input_path: Path, output_path: Path, cfg: Config, stack:
     return floors
 
 
+def _build_terrain(doc, cfg: Config, result, solid: BaseGeometry, columns: BaseGeometry, garden,
+                   warnings: list[str]):
+    """The terrain from the contour lines of the sheet (terrain.py), or None. None as well when the plan converted is a site
+    plan the user asked for (--vista on it): all its linework would be taken for a building and flattened, unless --terreno.
+    It is a help: whatever goes wrong in it is never the reason a conversion fails."""
+    if not cfg.terrain and cfg.analysis is not None and site_plan_asked(cfg.analysis, cfg):
+        return None
+    footprint = building_footprint(solid)
+    parts = union([footprint, floor_footprint(solid), columns])
+    pools = union(garden.shells) if garden is not None else Polygon()
+    try:
+        ground = build_terrain(doc, cfg, cfg.analysis, result.unit_scale, footprint, parts, pools, warnings)
+        if ground is not None:
+            add_terrain(Mesh(), ground)  # the mesh must work out before the walls are built to stand on it
+    except Exception as exc:
+        warnings.append(f"Terreno non costruito: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; per "
+                        "escluderlo usa --no-terreno.")
+        return None
+    if ground is not None and garden is not None:
+        place_on_terrain(garden.objects, ground)
+    return ground
+
+
 def convert(input_path: str | Path, output_path: str | Path | None = None,
             cfg: Config | None = None, _doc=None, _analysis=None) -> ConversionReport:
     """``_doc``: the drawing already opened (a second pass over the same file does not read it again). ``_analysis``: the
@@ -429,6 +459,10 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
                             "se e' un muro unico a cui manca la parte di mezzo, completalo nel disegno; non l'ho chiuso io.")
 
     words = read_words(doc, cfg, result.unit_scale) if cfg.texts else []
+    if cfg.texts and cfg.low_heights_auto and not plan.low.is_empty:  # "Hmuro= 1,00 ml." next to a curb or a low wall
+        plan.low, given, notes = written_heights(plan.low, read_texts(doc, cfg, result.unit_scale))
+        plan.low_written = [(body, height) for body, height, _ in given]
+        warnings.extend(notes)
     text_unit = text_scale(words)
     rooms = find_rooms(solid, words, text_unit, warnings)
     wall_height_source = "indicata" if not cfg.wall_height_auto else "predefinita"
@@ -551,6 +585,8 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             elif not apply_garden_table(garden, read_garden_table(cfg.garden_table_in), cfg, warnings):
                 warnings.append("Tabella del giardino: nessuna riga con celle MODIFICA_* compilate da applicare.")
         plan.garden = garden
+    if cfg.terrain or cfg.terrain_auto:
+        plan.terrain = _build_terrain(doc, cfg, result, solid, columns, garden, warnings)
     mesh = build_mesh(plan, cfg, warnings, roof=not floors)
     garden = plan.garden  # (None when its mesh could not be built)
     if floors:
@@ -565,7 +601,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     json_path = None
     if cfg.c4d_json:
         json_path = write_json(to_model_dict(mesh, output_path.stem, offset, every_opening,
-                                             garden.objects if garden else None),
+                                             garden.objects if garden else None, plan.terrain is not None),
                                output_path.with_name(output_path.stem + "_model.json"))
 
     table_path = None
@@ -606,6 +642,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         false_walls=false,
         room_objects=rooms,
         garden=garden,
+        terrain=plan.terrain.info if plan.terrain is not None else None,
         garden_table_path=garden_table_path,
         analysis=cfg.analysis,
         floors=floors,
@@ -620,7 +657,10 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         except Exception as exc:  # a picture must never stop the conversion
             report.images_note = f"immagine delle viste non creata: {exc}"
     if cfg.images:
-        report.preview_path = preview_3d(mesh, output_path.with_name(output_path.stem + "_anteprima_3d.png"))
+        x0, y0, x1, y1 = solid.bounds  # (a terrain is shown only round the house)
+        focus = (x0 + offset[0] - PREVIEW_MARGIN, x1 + offset[0] + PREVIEW_MARGIN, y0 + offset[1] - PREVIEW_MARGIN,
+                 y1 + offset[1] + PREVIEW_MARGIN) if plan.terrain is not None else None
+        report.preview_path = preview_3d(mesh, output_path.with_name(output_path.stem + "_anteprima_3d.png"), focus)
         created.append(report.preview_path.name)
         try:
             report.overlay_path = plan_overlay(report, output_path.with_name(output_path.stem + "_controllo_pianta.png"),

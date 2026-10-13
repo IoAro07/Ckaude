@@ -69,7 +69,7 @@ class LayerRules:
         ("water", ("piscin", "pool", "acqua", "water", "vasca", "laghett", "stagn")),
         ("lawn", ("prato", "prati", "erba", "lawn", "grass")),
         ("paving", ("pavimentazion", "terrazz", "patio", "vialett", "camminament", "marciapied", "cortile",
-                    "piazzal", "paving", "deck", "selciat", "ghiai")),
+                    "piazzal", "paving", "deck", "selciat", "ghiai", "strad", "asfalt", "carrabil", "carregg", "viabil")),
         ("plants", ("siep", "hedge", "alber", "tree", "cespugl", "shrub", "bush", "arbust")),
     )
     _GARDEN_ANY = ("giardin", "garden", "verde", "green", "landscap", "estern", "outdoor", "exterior", "sistemazion")
@@ -184,6 +184,8 @@ def floor_of(layer: str) -> int | None:
 
 
 DEFAULT_WALL_HEIGHT = 2.70
+DEFAULT_LOW_WALL_HEIGHT = 0.50  # metres: low walls (group Muretti) and curbs (Cordoli), until the user or the drawing says otherwise
+DEFAULT_CURB_HEIGHT = 0.15
 
 
 @dataclass
@@ -214,8 +216,9 @@ class Config:
     partitions_apart: bool = True  # walls of the fondelli/tramezzi layers as their own object (Tramezzi)
     separate_walls: bool = True  # furniture outlines, curbs and free-standing outlines on a wall layer the program chose are not walls
     walls_guessed: bool = False  # internal: the wall layers are the program's choice (names, shapes, proposals), not --muri
-    low_wall_height: float = 0.50  # metres: low walls and lot lines apart from the building (group Muretti)
-    curb_height: float = 0.15  # metres: thin ones among them, curbs (group Cordoli)
+    low_wall_height: float = DEFAULT_LOW_WALL_HEIGHT  # metres: low walls and lot lines apart from the building (group Muretti)
+    curb_height: float = DEFAULT_CURB_HEIGHT  # metres: thin ones among them, curbs (group Cordoli)
+    low_heights_auto: bool = True  # a height written next to a low wall ("Hmuro= 1,00 ml.") is used (off once a height is given)
     wall_finishes: bool = False  # perimeter walls cut in two halves: Muri_esterno and Muri_interno (the command line turns it on)
     floors_to_outer_face: bool = True  # floors per room reach the outer face of the perimeter walls
     floors_by_room: bool = True  # one floor object per room (or per polygon of the floor layer)
@@ -247,6 +250,12 @@ class Config:
     area_auto: bool = False  # internal: ``area`` was set by the program (to leave out a roof plan), not by the user
     groups_cut: bool = False  # internal: the groups of walls without doors or windows were left out once already (no endless loop)
     garden_exclude: list[tuple[float, float, float, float]] = field(default_factory=list)  # internal: drawing units
+
+    # The terrain, from the contour lines the sheet draws (polylines, each at its own elevation, evenly spaced): the house on
+    # a flat platform, the ground sloping away from it, the garden laid on it. Heights in metres.
+    terrain: bool = False  # build it even when the evidence is weak (the command line: --terreno)
+    terrain_auto: bool = False  # build it when the sheet has contour lines laid over the plan (the command line turns it on)
+    terrain_thickness: float = 1.0  # metres of ground below the lowest point of the terrain
 
     # Reading a drawing whose layers do not say what things are (the library leaves it off, the command line turns it on):
     # the unit the numbers are really in, which view of the sheet is the plan, which layers hold the walls.
@@ -302,6 +311,8 @@ class Config:
     def __post_init__(self) -> None:
         if self.wall_height != DEFAULT_WALL_HEIGHT:
             self.wall_height_auto = False  # an explicit height beats the written ones
+        if self.low_wall_height != DEFAULT_LOW_WALL_HEIGHT or self.curb_height != DEFAULT_CURB_HEIGHT:
+            self.low_heights_auto = False  # ... and so does one given for the low walls
 
     def validate(self) -> None:
         numbers = [getattr(self, n) for n in (
@@ -310,7 +321,7 @@ class Config:
             "roof_thickness", "roof_default_pitch", "label_radius", "passage_max", "skirting_height",
             "skirting_thickness", "garden_thickness", "garden_lawn_drop", "pool_depth", "pool_wall",
             "pool_water_drop", "tree_height", "shrub_height", "hedge_height", "furniture_height",
-            "low_wall_height", "curb_height")]
+            "low_wall_height", "curb_height", "terrain_thickness")]
         numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset, self.garden_area) if box_ for v in box_]
         numbers += [v for ev in self.elevations for v in ev]
         if self.roof_pitch is not None:
@@ -340,7 +351,7 @@ class Config:
         if self.window_sill < 0 or self.floor_thickness < 0:
             raise ValueError("davanzale e spessore pavimento non possono essere negativi")
         for name in ("garden_thickness", "pool_depth", "pool_wall", "tree_height", "shrub_height", "hedge_height",
-                     "furniture_height", "low_wall_height", "curb_height"):
+                     "furniture_height", "low_wall_height", "curb_height", "terrain_thickness"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} deve essere positivo")
         if self.garden_lawn_drop < 0 or self.pool_water_drop < 0 or self.pool_water_drop >= self.pool_depth:
