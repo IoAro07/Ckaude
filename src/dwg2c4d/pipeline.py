@@ -379,7 +379,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         except Exception as exc:  # the analysis is a help: when it fails the layer names and the options decide
             analysis_failed = f"Analisi del foglio non riuscita ({type(exc).__name__}: {exc}): uso i nomi dei layer."
             cfg = replace(cfg, auto=False, analysis_notes=[analysis_failed])
-    if cfg.analysis is not None and cfg.site != "no" and (cfg.site == "yes" or (no_plan and len(analysis.views) > 1)):
+    if cfg.analysis is not None and cfg.site != "no" and (cfg.site == "yes" or no_plan):
         built = _convert_site(doc, output_path, cfg)  # a site plan that draws the roofs of its buildings: the buildings from those
         if built is not None:
             return built
