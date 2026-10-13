@@ -41,6 +41,7 @@ CLUSTER_GAP = 1.0  # m: planes this close belong to one building
 CLOSE_GAP = 0.15  # m: planes are widened by this, so the white strips drawn along ridges and hips close
 SIMPLIFY = 0.02  # m: the outlines of the hatches are simplified by this
 MITRE_LIMIT = 2.0  # a widened corner is never cut off further than this many times the widening
+COURTYARD = 12.0  # m2: a hole in the roof bigger than this is a courtyard; a smaller one is a skylight, which the slope it is in covers
 
 # --- the slope arrows ---
 ARROW_REACH = 6.0  # m: only straight pieces up to this long are looked at
@@ -209,13 +210,22 @@ def make_planes(hatches: list[Polygon], arrows: list[tuple[tuple[float, float], 
     closed = union(h.buffer(CLOSE_GAP, join_style="mitre", mitre_limit=MITRE_LIMIT) for h in hatches)
     outline = closed.buffer(-CLOSE_GAP, join_style="mitre", mitre_limit=MITRE_LIMIT)
     outline = union(polygons_of(outline))
-    planes: list[Plane] = []
+    holes = [Polygon(r) for poly in polygons_of(outline) for r in poly.interiors if Polygon(r).area < COURTYARD]  # skylights, left bare
+    outline = union([outline, *holes])
+    shapes: list[tuple[Polygon, Polygon]] = []  # (hatch, its plane)
     for h in hatches:
         shape = union([h.buffer(CLOSE_GAP, join_style="mitre", mitre_limit=MITRE_LIMIT).intersection(outline)])
         poly = max(polygons_of(shape), key=lambda p: p.area, default=None)
-        if poly is None:
-            continue
-        poly = Polygon(poly.exterior).simplify(SIMPLIFY)
+        if poly is not None:
+            shapes.append((h, Polygon(poly.exterior)))
+    for hole in holes:  # a skylight is part of the slope it is in: the plane that shares most of its edge takes it
+        k = max(range(len(shapes)), key=lambda i: shapes[i][1].buffer(CLOSE_GAP).intersection(hole).area, default=None)
+        if k is not None:
+            taken = max(polygons_of(union([shapes[k][1], hole])), key=lambda p: p.area)
+            shapes[k] = (shapes[k][0], Polygon(taken.exterior))
+    planes: list[Plane] = []
+    for h, poly in shapes:
+        poly = poly.simplify(SIMPLIFY)
         inside = [(t, tip) for t, tip in arrows if h.contains(Point((t[0] + tip[0]) / 2, (t[1] + tip[1]) / 2))]
         if inside:
             tail, tip = inside[0]
@@ -412,20 +422,29 @@ def body_roof(building: Building, body: Body, source: str) -> Roof:
                 faces=len(body.planes), offset=(0.0, 0.0), ridges_from_elevation=0)
 
 
-def building_mesh(building: Building, pitch_source: str, floor_thickness: float, roof_thickness: float, wall: float,
-                  openings: list | None = None) -> Mesh:
-    """The volumes of one building: the floor slab, the walls of every eaves height (a ring ``wall`` thick round each
-    volume: hollow inside, closed by the floor and the roof) and the roof of every body at its own eaves."""
+def building_mesh(building: Building, pitch_source: str, cfg, openings: list | None = None) -> Mesh:
+    """The volumes of one building: the floor slab, the walls of every eaves height (a ring ``site_wall`` thick round each
+    volume: hollow inside, closed by the floor and the roof) with its openings (``openings``: its own) cut in them and their
+    frames and glass in, and the roof of every body at its own eaves."""
+    from .fixtures import add_fixtures
     from .model import wall_slabs
 
     mesh = Mesh()
-    if floor_thickness > 0:
-        mesh.add_extrusion("Pavimento", [Slab(-floor_thickness, 0.0, building.footprint)])
+    if cfg.floor_thickness > 0:
+        mesh.add_extrusion("Pavimento", [Slab(-cfg.floor_thickness, 0.0, building.footprint)])
     cutting = [o for o in openings or [] if o.keep]
     for height, shape in eave_groups(building):
-        mesh.add_extrusion("Muri", wall_slabs(wall_ring(shape, wall), cutting, height), bottom=True)
+        ring = wall_ring(shape, cfg.site_wall)  # (only the openings in this ring: one of a higher volume would lift it to its top)
+        mesh.add_extrusion("Muri", wall_slabs(ring, [o for o in cutting if o.cut.intersects(ring) and o.z0 < height], height), bottom=True)
+    if cfg.fixtures == "detailed":
+        add_fixtures(mesh, cutting, cfg)
+    else:
+        for o in cutting:
+            if o.glass is not None:
+                group = f"Vetri_{o.id}" if cfg.fixtures_per_opening and o.id else "Vetri"
+                mesh.add_extrusion(group, [Slab(o.z0, o.z1, o.glass)], bottom=True)
     for body in building.bodies:
-        mesh.add_roof_solid("Tetto", body_roof(building, body, pitch_source), z_base=body.eave_height or 0.0, thickness=roof_thickness)
+        mesh.add_roof_solid("Tetto", body_roof(building, body, pitch_source), z_base=body.eave_height or 0.0, thickness=cfg.roof_thickness)
     return mesh
 
 
@@ -503,17 +522,43 @@ def default_heights(building: Building, cfg) -> None:
             body.storeys = max(1, round(body.eave_height / cfg.storey_height))
 
 
-def read_levels(doc, cfg, analysis, buildings: list[Building], warnings: list[str]) -> list:
-    """What the elevations of the sheet say of the buildings (siteelev): the matched bodies have their eaves height and their
-    pitch. An elevation that cannot be read is never the reason the conversion fails. [(building, body, level, bands)]."""
+def read_levels(doc, cfg, analysis, buildings: list[Building], warnings: list[str]) -> tuple[list, list]:
+    """(what the elevations of the sheet say of the buildings, the elevations): the bodies the roofs of the elevations match
+    have their eaves height and their pitch (siteelev). An elevation that cannot be read is never the reason the conversion
+    fails. [(building, body, level, bands)], [ElevationRead]."""
     from .siteelev import match_levels, read_elevations, roof_bands, roof_levels
 
     try:
-        levels = roof_levels(roof_bands(analysis, read_elevations(doc, cfg, analysis)))
-        return match_levels(buildings, levels) if levels else []
+        reads = read_elevations(doc, cfg, analysis)
+        levels = roof_levels(roof_bands(analysis, reads))
+        return (match_levels(buildings, levels) if levels else []), reads
     except Exception as exc:
         warnings.append(f"Altezze dai prospetti non lette ({type(exc).__name__}: {exc}): le gronde sono presunte.")
+        return [], []
+
+
+def read_openings(cfg, analysis, site: Site, reads: list) -> list[str]:
+    """The doors and windows of the elevations, put on the buildings they show (siteelev): ``site.openings``. They come with
+    a note: the elevations have no plan to be matched to. The notes."""
+    from .model import facing_sign
+    from .openings import assign_ids
+    from .siteelev import find_facades, place_openings
+
+    if not reads or not site.matched:
         return []
+    titles = {v.id: (v.titles[0] if v.titles else f"vista {v.id}") for v in analysis.views}
+    try:
+        facades, notes = find_facades(site.matched)
+        openings, more = place_openings(facades, reads, cfg, titles)
+    except Exception as exc:
+        return [f"Aperture dai prospetti non messe ({type(exc).__name__}: {exc}): i volumi sono completi, senza porte e finestre."]
+    for b in site.buildings:
+        mine = [o for o in openings if o.building == b.id]
+        assign_ids(mine)
+        for o in mine:
+            o.face_sign = facing_sign(o, b.footprint)
+    site.openings.extend(openings)
+    return notes + more
 
 
 def build_site(doc, cfg, analysis, warnings: list[str]) -> Site | None:
@@ -524,16 +569,18 @@ def build_site(doc, cfg, analysis, warnings: list[str]) -> Site | None:
     buildings, views = read_buildings(doc, cfg, analysis)
     if not buildings:
         return None
-    matched = read_levels(doc, cfg, analysis, buildings, warnings)
+    matched, reads = read_levels(doc, cfg, analysis, buildings, warnings)
     pitch, source = resolve_pitch(buildings, cfg, analysis)
     site = Site(buildings, [v.id for v in views], pitch, source, matched=matched)
     for b in buildings:
         default_heights(b, cfg)
-        mesh = building_mesh(b, source, cfg.floor_thickness, cfg.roof_thickness, cfg.site_wall, site.openings)
+    opening_notes = read_openings(cfg, analysis, site, reads)
+    for b in buildings:
+        mesh = building_mesh(b, source, cfg, [o for o in site.openings if o.building == b.id])
         site.mesh.add_mesh(mesh, rename=lambda name, b=b: f"{building_tag(b.id)}_{name}")
     walls = union(wall_ring(shape, cfg.site_wall) for b in buildings for _, shape in eave_groups(b))
     site.plan = Plan(walls=walls, columns=Polygon(), openings=site.openings, merge_tolerance=cfg.merge_tolerance)
-    site.notes.extend(site_notes(site, cfg, analysis))
+    site.notes.extend(site_notes(site, cfg, analysis) + opening_notes)
     warnings.extend(site.notes)
     return site
 
