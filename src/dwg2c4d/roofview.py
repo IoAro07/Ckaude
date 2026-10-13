@@ -528,6 +528,7 @@ class ViewRoof:
     size: tuple[float, float]  # m: the outline of the roof
     ambiguous: bool  # the roof fits the plan in another pose too, and the lines of the roof do not look the same in it
     moved: float = 0.0  # m: how far the middle of the roof was carried from where the sheet draws it
+    overhang_drawn: bool = False  # the overhang is the distance to a wall line the view draws under the eaves (else it is the fit's)
 
 
 def pitch_from_texts(texts: list[str]) -> tuple[float, str] | None:
@@ -610,7 +611,7 @@ def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale:
         bx0, by0, bx1, by1 = clean.outline.bounds
         middle = clean.outline.centroid
         found = ViewRoof(placed, flats, v.id, reg, clean.overhang if clean.overhang is not None else reg.overhang,
-                         (bx1 - bx0, by1 - by0), ambiguous, middle.distance(place(middle, reg)))
+                         (bx1 - bx0, by1 - by0), ambiguous, middle.distance(place(middle, reg)), clean.overhang is not None)
         if best is None or reg.iou > best.registration.iou:
             best = found
     if best is not None:
@@ -640,7 +641,8 @@ def view_roof_notes(found: ViewRoof, roof: "Roof | None", pitch: tuple[float, st
         moved += " e rovesciato (era speculare alla pianta)"
     notes = [f"Tetto: costruito dalla vista della copertura (vista {found.view}, {w:.1f} x {h:.1f} m, disegnata altrove nel foglio): "
              f"messo sulla pianta {moved} e portato {found.moved:.0f} m piu' in la', facendo combaciare il suo contorno "
-             f"con i muri (sovrapposizione {reg.iou * 100:.0f} %, sporto {found.overhang:.2f} m). Controlla nell'anteprima 3D "
+             f"con i muri (sovrapposizione {reg.iou * 100:.0f} %, sporto {found.overhang:.2f} m "
+             f"{'dalla linea del muro sotto la gronda' if found.overhang_drawn else 'stimato dal confronto con i muri'}). Controlla nell'anteprima 3D "
              "che sia al suo posto."]
     if found.ambiguous:
         others = ", ".join(f"{(a.turns - reg.turns) % 4 * 90} gradi" for a in reg.alternatives)

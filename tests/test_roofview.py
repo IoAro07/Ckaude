@@ -257,7 +257,9 @@ def test_elevations_that_end_at_the_roof_say_nothing_about_storeys():
 
 def test_the_notes_tell_where_the_roof_came_from_and_how_it_was_put_on_the_plan():
     note = rv.view_roof_notes(fake_found(), fake_roof(), (14.04, "25 %"), [], 3.2)
-    assert "vista 6" in note[0] and "54 m" in note[0] and "72 %" in note[0] and "0.60 m" in note[0]
+    assert "vista 6" in note[0] and "54 m" in note[0] and "72 %" in note[0] and "0.60 m" in note[0] and "stimato" in note[0]
+    drawn = rv.ViewRoof([], [], 6, rv.Registration(0, False, (0.0, 0.0), 0.8, 0.6), 0.6, (16.9, 16.8), False, 54.0, True)
+    assert "linea del muro sotto la gronda" in rv.view_roof_notes(drawn, fake_roof(), None, [], 3.2)[0]
     assert any("25 %" in n for n in note)
 
 
