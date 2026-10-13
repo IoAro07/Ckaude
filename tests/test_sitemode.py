@@ -62,10 +62,20 @@ def add_site_lines(msp, x0=-1500, y0=-1200, x1=4500, y1=2800):
         msp.add_line((x0 + k * 600, y0), (x0 + k * 600 + 700, y0 + 3600 + 150 * k), dxfattribs={"layer": "CONFINE"})
 
 
-def site_sheet(path, buildings=None, arrows=True, elevation=False, title="PLANIMETRIA GENERALE", lines=True):
-    """A site plan (a hip roof 12 x 8 m and a gable roof 6 x 5 m, 15 m apart) and, if asked, an elevation of the sheet."""
+def add_roof_band(msp, x, floor, w, eave, ridge):
+    """The roof of an elevation: a hatch of tiles from the eaves to the ridge, ``w`` cm wide at the eaves."""
+    hatch = msp.add_hatch(dxfattribs={"layer": "Coppi Chiaro"})
+    hatch.dxf.pattern_name = "COPPI01"
+    hatch.dxf.solid_fill = 0
+    hatch.paths.add_polyline_path([(x, floor + eave), (x + w, floor + eave), (x + w - 300, floor + ridge), (x + 300, floor + ridge)])
+
+
+def site_sheet(path, buildings=None, arrows=True, elevation=False, roofs=(), pendenza=None, title="PLANIMETRIA GENERALE", lines=True):
+    """A site plan (a hip roof 12 x 8 m and a gable roof 6 x 5 m, 15 m apart) and, if asked, elevations of the sheet: one with
+    no roof (``elevation``), or one for each of ``roofs``: (the width of the roof cm, its eaves cm, its ridge cm), seen above the
+    floor of the elevation (+0,00). ``pendenza``: a note on the slope written in the site plan."""
     doc, msp = new_sheet()
-    for name in ("Coppi Scuro", "Coppi Chiaro", "E", "CONFINE", "CURVE-LIV"):
+    for name in ("Coppi Scuro", "Coppi Chiaro", "E", "CONFINE", "CURVE-LIV", "TESTI"):
         doc.layers.add(name)
     if lines:
         add_site_lines(msp)
@@ -73,9 +83,14 @@ def site_sheet(path, buildings=None, arrows=True, elevation=False, title="PLANIM
         add_plane(msp, points, normal if arrows else None)
     if title:
         add_title(msp, title, -1500, -1600)
-    if elevation:
-        add_elevation(msp, 9000, 0, w=1200, h=600)
-        add_title(msp, "PROSPETTO SUD", 9000, -200)
+    if pendenza:
+        msp.add_text(pendenza, height=25, dxfattribs={"layer": "TESTI", "insert": (-1400, 2600)})
+    for k, band in enumerate(roofs if roofs else ((None,) if elevation else ())):
+        x = 9000 + k * 2800
+        add_elevation(msp, x, 0, w=1200, h=600)
+        if band is not None:
+            add_roof_band(msp, x, 0, *band)
+        add_title(msp, f"PROSPETTO {k + 1}", x, -200)
     doc.saveas(path)
     return path
 
@@ -151,3 +166,52 @@ def test_asking_for_the_site_mode_on_a_sheet_with_no_roofs_says_so(tmp_path):
     path = site_sheet(tmp_path / "t.dxf", buildings=[], elevation=True)
     with pytest.raises(ConversionError, match="--sito"):
         convert(path, tmp_path / "t.obj", Config(auto=True, images=False, site="yes"))
+
+
+# --- the heights from the elevations -----------------------------------------------------------
+
+TAN = math.tan(math.radians(PITCH))
+HIP_ROOFS = ((1200, 600, 600 + 400 * TAN * 100 / 100), (800, 600, 600 + 400 * TAN * 100 / 100))  # the hip roof 12 x 8 m seen from two sides: eaves 6 m, 4 m of run
+
+
+def test_the_eaves_and_the_pitch_come_from_the_roofs_the_elevations_draw(tmp_path):
+    report, obj = converted(tmp_path, Config(auto=True, images=False, origin="drawing"), roofs=HIP_ROOFS)
+    hip, gable = report.site.buildings
+    (body,) = hip.bodies
+    assert (body.eave_height, body.eave_source) == (pytest.approx(6.0, abs=0.02), "prospetto")
+    assert body.measured_pitch == pytest.approx(PITCH, abs=1.0) and body.pitch == pytest.approx(PITCH, abs=1.0)
+    assert (report.site.pitch_source, report.site.pitch) == ("prospetto", pytest.approx(PITCH, abs=1.0))
+    (_, y0, _), (_, y1, _) = obj.bbox("E1_Muri")
+    assert (y0, y1) == pytest.approx((0.0, 6.0), abs=0.02)
+    (_, _, _), (_, ry1, _) = obj.bbox("E1_Tetto")
+    assert ry1 == pytest.approx(6.0 + 4.0 * TAN, abs=0.1)  # the ridge is where the elevations draw it
+    assert any("misurati sui prospetti" in w and "PROSPETTO 1" in w for w in report.warnings)
+
+
+def test_a_building_no_elevation_shows_keeps_the_default_and_the_report_says_so(tmp_path):
+    report, obj = converted(tmp_path, roofs=HIP_ROOFS)
+    gable = report.site.buildings[1]
+    assert [(b.eave_height, b.eave_source) for b in gable.bodies] == [(3.0, "predefinita")]  # 30 m2: one storey of 3 m
+    assert any("Altezze di gronda presunte per edificio 2" in w for w in report.warnings)
+    assert report.site.buildings[0].bodies[0].eave_source == "prospetto"
+
+
+def test_a_roof_one_elevation_draws_is_not_taken_for_the_building_of_the_same_length(tmp_path):
+    only_one = ((1200, 600, 600 + 400 * TAN),)  # the 12 m side of the hip roof, seen once: the roof of the elevation could be any 12 m roof
+    report, _ = converted(tmp_path, roofs=only_one, buildings=hip_planes(0, 0) + gable_planes(1800, 100, w=1200, d=500))
+    assert all(b.eave_source == "predefinita" for building in report.site.buildings for b in building.bodies)
+
+
+def test_the_pitch_written_in_the_sheet_beats_the_one_the_elevations_give(tmp_path):
+    report, _ = converted(tmp_path, roofs=HIP_ROOFS, pendenza="Pendenza 30 %")
+    assert report.site.pitch_source == "scritta" and report.site.pitch == pytest.approx(math.degrees(math.atan(0.3)), abs=0.05)
+    assert report.site.buildings[0].bodies[0].pitch == pytest.approx(16.7, abs=0.1)
+    assert report.site.buildings[0].bodies[0].eave_height == pytest.approx(6.0, abs=0.02)  # the heights are still the elevations'
+
+
+def test_the_pitch_and_the_height_the_user_gives_beat_the_elevations(tmp_path):
+    report, obj = converted(tmp_path, Config(auto=True, images=False, origin="drawing", roof_pitch=35.0, wall_height=4.0), roofs=HIP_ROOFS)
+    body = report.site.buildings[0].bodies[0]
+    assert (body.pitch, body.eave_height, body.eave_source) == (35.0, 4.0, "indicata") and report.site.pitch_source == "indicata"
+    (_, _, _), (_, ry1, _) = obj.bbox("E1_Tetto")
+    assert ry1 == pytest.approx(4.0 + 4.0 * math.tan(math.radians(35.0)), abs=0.1)

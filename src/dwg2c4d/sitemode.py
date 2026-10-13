@@ -63,6 +63,7 @@ EDGE_MATCH = 0.25  # m: a roof edge with another plane this close along it is sh
 STEP_TOLERANCE = 0.2  # m: ... if the two planes are as high as one another there, within this
 GROUND_TOLERANCE = 0.05  # m: eaves this close in height are one height
 SMALL_BODY = 40.0  # m2: a body of this footprint or less, with no elevation to say, is one storey high; a bigger one two
+PITCH_VIEWS = ("site", "roof", "section", "elevation")  # the views where a slope written in the sheet ("Pendenza 25 %") tells about the roofs
 
 
 @dataclass
@@ -470,10 +471,11 @@ def resolve_pitch(buildings: list[Building], cfg, analysis) -> tuple[float, str]
     """(the pitch of the site, where it comes from), and the pitch of every body set. The slope the user gave, else the one
     written in the sheet, both for every body; else what the elevations measure (each body that has a measure keeps its own,
     the others the middle one); else the default."""
-    from .roofview import written_pitch
+    from .roofview import pitch_from_texts
 
     bodies = [body for b in buildings for body in b.bodies]
-    written = written_pitch(analysis)
+    boxes = [v for v in analysis.views if v.kind in PITCH_VIEWS]
+    written = pitch_from_texts([t["text"] for t in analysis.soup.texts if any(v.contains(t["x"], t["y"]) for v in boxes)])
     if cfg.roof_pitch is not None:
         pitch, source = cfg.roof_pitch, "indicata"
     elif written is not None:
