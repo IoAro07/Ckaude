@@ -220,6 +220,49 @@ def test_the_pitch_and_the_height_the_user_gives_beat_the_elevations(tmp_path):
     assert ry1 == pytest.approx(4.0 + 4.0 * math.tan(math.radians(35.0)), abs=0.1)
 
 
+# --- a lean-to no elevation measures leans on the eaves of its neighbour -----------------------------
+
+LEAN_TO = ([(0, -250), (1200, -250), (1200, 0), (0, 0)], (0, -1))  # 12 x 2.5 m against the south eaves of the hip roof, falling the same way
+
+
+def test_a_lean_to_no_elevation_measures_meets_the_wall_under_the_eaves_it_leans_on(tmp_path):
+    report, obj = converted(tmp_path, Config(auto=True, images=False, origin="drawing"), buildings=hip_planes(0, 0) + [LEAN_TO])
+    (building,) = report.site.buildings
+    hip, lean = building.bodies
+    assert (hip.eave_height, hip.eave_source) == (6.0, "predefinita")  # 96 m2: two storeys
+    expected = 6.0 - sm.LEAN_BELOW - 2.5 * math.tan(math.radians(25.0))  # 30 cm under the hip's eaves, less the rise of its own roof
+    assert lean.eave_height == pytest.approx(expected, abs=0.05) and lean.eave_source == "addossato"
+    assert any(w.startswith("Tetti addossati: edificio 1, corpo 2: gronda a 4.5") for w in report.warnings)
+    (_, y0, _), (_, y1, _) = obj.bbox("E1_Tetto")
+    assert y1 == pytest.approx(6.0 + 4.0 * math.tan(math.radians(25.0)), abs=0.15)  # the ridge of the hip is where it was
+
+
+def test_a_lean_to_is_never_lower_at_its_eaves_than_the_minimum(tmp_path):
+    small = ([(0, -250), (600, -250), (600, 0), (0, 0)], (0, -1))  # against the eaves of a gable roof of one storey (30 m2)
+    report, _ = converted(tmp_path, buildings=gable_planes(0, 0, w=600, d=500) + [small])
+    gable, lean = report.site.buildings[0].bodies
+    assert gable.eave_height == 3.0
+    assert lean.eave_source == "addossato" and lean.eave_height == pytest.approx(sm.LEAN_MIN)  # 3 m - 30 cm - 1.2 m is 1.5 m: too low for a door
+
+
+def test_a_roof_that_touches_no_eave_keeps_the_height_of_its_storeys(tmp_path):
+    apart = ([(0, -650), (1200, -650), (1200, -300), (0, -300)], (0, -1))  # 3 m from the eaves: no lean-to
+    report, _ = converted(tmp_path, buildings=hip_planes(0, 0) + [apart])
+    assert all(b.eave_source == "predefinita" for building in report.site.buildings for b in building.bodies)
+
+
+def test_the_height_the_user_gives_is_the_one_of_a_lean_to_too(tmp_path):
+    report, _ = converted(tmp_path, Config(auto=True, images=False, wall_height=4.0), buildings=hip_planes(0, 0) + [LEAN_TO])
+    assert [(b.eave_height, b.eave_source) for b in report.site.buildings[0].bodies] == [(4.0, "indicata")] * 2
+
+
+def test_a_lean_to_a_measured_roof_has_over_it_takes_its_eaves_from_the_measure(tmp_path):
+    report, _ = converted(tmp_path, buildings=hip_planes(0, 0) + [LEAN_TO], roofs=HIP_ROOFS)
+    hip, lean = report.site.buildings[0].bodies
+    assert (hip.eave_height, hip.eave_source) == (pytest.approx(6.0, abs=0.02), "prospetto")
+    assert lean.eave_source == "addossato" and lean.eave_height == pytest.approx(6.0 - sm.LEAN_BELOW - 2.5 * TAN, abs=0.1)
+
+
 # --- the doors and windows of the elevations, put on the facades they show ----------------------
 
 def two_bodies():

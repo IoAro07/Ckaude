@@ -64,6 +64,11 @@ EDGE_MATCH = 0.25  # m: a roof edge with another plane this close along it is sh
 STEP_TOLERANCE = 0.2  # m: ... if the two planes are as high as one another there, within this
 GROUND_TOLERANCE = 0.05  # m: eaves this close in height are one height
 SMALL_BODY = 40.0  # m2: a body of this footprint or less, with no elevation to say, is one storey high; a bigger one two
+LEAN_TOL = 0.6  # m: the high edge of a lean-to is this close to the eave of the roof it leans on, at most
+LEAN_EDGE = 0.3  # m: the edge of a plane is its vertices this close to its lowest (or highest) point along the fall
+LEAN_BELOW = 0.3  # m: a lean-to meets the wall of the building it leans on this far below the eaves of that one
+LEAN_MIN = 2.2  # m: a lean-to is never lower at its eaves than this
+LEAN_REACH = 1.0  # m: the high edge of a lean-to runs along the eave of the roof it leans on for this long, at least
 PITCH_VIEWS = ("site", "roof", "section", "elevation")  # the views where a slope written in the sheet ("Pendenza 25 %") tells about the roofs
 
 
@@ -87,7 +92,7 @@ class Body:
 
     planes: list[int]
     eave_height: float | None = None  # m above the ground floor, where its roof starts
-    eave_source: str = ""  # where it came from: "prospetto" | "indicata" | "predefinita"
+    eave_source: str = ""  # where it came from: "prospetto" | "indicata" | "addossato" (a lean-to under the eaves of its neighbour) | "predefinita"
     storeys: int = 0
     pitch: float = 0.0  # degrees: its slope (the one of the site, or its own when the elevations measure it: see resolve_pitch)
     measured_pitch: float | None = None  # degrees, from the rise of its roof in the elevations over its half span
@@ -524,6 +529,58 @@ def default_heights(building: Building, cfg) -> None:
             body.eave_height, body.eave_source = body.storeys * cfg.storey_height, "predefinita"
         else:
             body.storeys = max(1, round(body.eave_height / cfg.storey_height))
+    if cfg.wall_height_auto:
+        lean_to_heights(building, cfg)
+
+
+def _edge(plane: Plane, high: bool) -> LineString | None:
+    """The lowest (``high`` False: the eave) or highest edge of a plane along its fall: the line through its vertices that lie within
+    ``LEAN_EDGE`` of that extreme; None when they are not two."""
+    coords = list(plane.shape.exterior.coords)[:-1]
+    runs = [plane.run(x, y) for x, y in coords]
+    extreme = max(runs) if high else min(runs)
+    pts = [c for c, r in zip(coords, runs) if abs(r - extreme) <= LEAN_EDGE]
+    return LineString(pts) if len(pts) >= 2 else None
+
+
+def leans_on(building: Building, body: Body, host: Body) -> float | None:
+    """The rise of the roof of ``body`` (m of run) if it is a lean-to against the eaves of ``host``: a plane that falls the way a plane
+    of the host falls and whose high edge runs along that plane's eave (``LEAN_TOL`` apart, ``LEAN_REACH`` long). None if it is not."""
+    for i in body.planes:
+        q = building.planes[i]
+        high = _edge(q, True)
+        if high is None:
+            continue
+        for j in host.planes:
+            p = building.planes[j]
+            low = _edge(p, False)
+            if low is None or q.fall[0] * p.fall[0] + q.fall[1] * p.fall[1] < SAME_FALL:
+                continue
+            if high.buffer(LEAN_TOL).intersection(low).length >= LEAN_REACH:
+                return max(q.run(x, y) for x, y in q.shape.exterior.coords)
+    return None
+
+
+def lean_to_heights(building: Building, cfg) -> None:
+    """The eaves of the bodies no elevation measures that are lean-tos: a roof of one plane (or more) leaning on the eaves of another
+    body meets its wall ``LEAN_BELOW`` under those eaves, so its own eaves are lower by that and by the rise of its roof; never lower
+    than ``LEAN_MIN``. Without this a lean-to would get the height of a storey, and its roof would cut the roof it leans on."""
+    for _ in building.bodies:  # a lean-to may lean on another one: until nothing changes
+        changed = False
+        for body in building.bodies:
+            if body.eave_source != "predefinita":
+                continue
+            for host in building.bodies:
+                run = leans_on(building, body, host) if host is not body else None
+                if run is None or host.eave_height is None:
+                    continue
+                height = max(host.eave_height - LEAN_BELOW - run * _tan(body), LEAN_MIN)
+                if abs(height - body.eave_height) > 1e-9:
+                    body.eave_height, body.eave_source, body.storeys = height, "addossato", 1
+                    changed = True
+                break
+        if not changed:
+            break
 
 
 def read_levels(doc, cfg, analysis, buildings: list[Building], warnings: list[str]) -> tuple[list, list]:
@@ -619,6 +676,11 @@ def site_notes(site: Site, cfg, analysis) -> list[str]:
         notes.append(f"Altezze di gronda presunte per {', '.join(guessed)}: nessun prospetto le misura; "
                      f"{cfg.storey_height:g} m a piano, un piano per i corpi piccoli (fino a {SMALL_BODY:.0f} m2), due per gli altri. "
                      "Per darle tu usa --altezza-muri.")
+    leaning = [(b, k, body) for b in site.buildings for k, body in enumerate(b.bodies) if body.eave_source == "addossato"]
+    if leaning:
+        notes.append("Tetti addossati: " + "; ".join(f"edificio {b.id}, corpo {k + 1}: gronda a {body.eave_height:.2f} m" for b, k, body in leaning)
+                     + f". Sono tetti a una falda appoggiati alla gronda di un altro corpo: li ho messi {LEAN_BELOW:g} m sotto quella gronda (meno il "
+                     "rialzo del loro tetto) invece di dare loro l'altezza di un piano. Controlla nell'anteprima 3D.")
     if not cfg.wall_height_auto:
         notes.append(f"Altezza di gronda: {cfg.wall_height:g} m per tutti i corpi, quella che hai indicato (--altezza-muri).")
     how = {"predefinita": f"nessuna pendenza scritta ne' ricavabile dai prospetti: uso {site.pitch:.0f} gradi (--pendenza per cambiarla)",
