@@ -35,6 +35,7 @@ from .geom import fix, nest_polygons, polygons_of, union
 from .mesh import SITE_PREFIX, Mesh, Slab
 from .reader import _entity_prims, _Reader, _rough_bounds
 from .sitefit import Placement, register
+from .sitebands import BandStair, add_band_stairs, find_band_stairs, notes as bands_notes
 from .sitewalls import SiteWall, add_site_walls, find_walls, notes as walls_notes
 from .terrainmesh import add_draped
 from .texts import read_texts
@@ -47,6 +48,8 @@ MIN_CHAIN = 6.0  # m: lines that touch one another and are not this long togethe
 MIN_SPAN = 3.0  # m: rock, a chair, a stroke of a hatch), not the edge of a surface
 CLOSE = 0.30  # m: lines closer than twice this (an end to another line, two lines) are joined: gaps this narrow are closed
 REGION_MARGIN = 1.0  # m: the site plan's frame is grown by this: a region that touches it is the outside, not a face
+
+DASHED_SHARE = 0.6  # a face with this share of its edge drawn dashed is ground, not paving
 
 # --- what is kept ---
 MIN_FACE = 4.0  # m2: a smaller face is no surface (a gap between two things)
@@ -89,7 +92,7 @@ class SiteDrawing:
     """What the site plan draws, in metres in the frame of the converted plan."""
 
     region: Polygon  # the frame of the site plan, grown by REGION_MARGIN
-    lines: list[tuple[str, LineString]] = field(default_factory=list)  # (layer, line): the lines of the big drawings (chains)
+    lines: list[tuple[str, LineString, bool]] = field(default_factory=list)  # (layer, line, dashed): the lines of the big drawings
     fills: list[_Fill] = field(default_factory=list)  # hatches, in the order they are drawn
     words: list[tuple[str, float, float]] = field(default_factory=list)  # (text, x, y)
 
@@ -113,6 +116,7 @@ class Surface:
 class SiteSurfaces:
     surfaces: list[Surface] = field(default_factory=list)
     walls: list[SiteWall] = field(default_factory=list)  # the curbs and the walls of the site (sitewalls)
+    stairs: list[BandStair] = field(default_factory=list)  # the stairs drawn as rows of hatched bands (sitebands)
     view: int = 0  # the number of the site plan the surfaces were read in
     shift: tuple[float, float] = (0.0, 0.0)
     common: float = 0.0  # m of line the plan and the site plan share (the registration)
@@ -121,12 +125,13 @@ class SiteSurfaces:
 
     @property
     def empty(self) -> bool:
-        return not self.surfaces and not self.walls
+        return not self.surfaces and not self.walls and not self.stairs
 
     @property
     def reach(self) -> BaseGeometry:
         """Where the surfaces are: the terrain must cover it."""
-        return union([*(s.geom for s in self.surfaces if s.keep), *(w.geom for w in self.walls if w.keep)])
+        return union([*(s.geom for s in self.surfaces if s.keep), *(w.geom for w in self.walls if w.keep),
+                      *(s.geom for s in self.stairs if s.keep)])
 
 
 # --- finding the site plan ---------------------------------------------------------------------
@@ -167,13 +172,13 @@ def _fill_of(doc, e, order: int, layer: str, rules, dist: float) -> _Fill | None
     return _Fill(order, layer, rules.garden_kind(layer), e.dxf.get("pattern_name", "") or "", _rgb_of(doc, e), shape)
 
 
-def _chains(pieces: list[tuple[str, LineString]]) -> list[tuple[str, LineString]]:
+def _chains(pieces: list[tuple[str, LineString, bool]]) -> list[tuple[str, LineString, bool]]:
     """The lines that belong to a drawing of something big: pieces that touch one another (within ``CLOSE``) make a chain, and a
     chain that is long enough (``MIN_CHAIN``) and spans enough (``MIN_SPAN``) stays. A road edge drawn in many pieces stays whole,
     a tree, a rock, a chair do not."""
     if not pieces:
         return []
-    geoms = [g for _, g in pieces]
+    geoms = [g for _, g, _ in pieces]
     parent = list(range(len(geoms)))
 
     def find(i: int) -> int:
@@ -195,6 +200,25 @@ def _chains(pieces: list[tuple[str, LineString]]) -> list[tuple[str, LineString]
         if sum(geoms[i].length for i in members) >= MIN_CHAIN and span >= MIN_SPAN:
             out.extend(pieces[i] for i in members)
     return out
+
+
+def _bounds(e) -> list[tuple[float, float]] | None:
+    """Points that bound an entity, in drawing units: None for a kind of entity that has none."""
+    if e.dxftype() == "POLYLINE":
+        return [(v.dxf.location.x, v.dxf.location.y) for v in e.vertices] or None
+    return _rough_bounds(e)
+
+
+def _has_height(e) -> bool:
+    """Is the entity drawn at a height (a contour line: a polyline at its elevation)? The terrain reads those, not the surfaces."""
+    t = e.dxftype()
+    if t == "LWPOLYLINE":
+        return bool(e.dxf.get("elevation", 0.0))
+    if t == "POLYLINE":
+        return any(v.dxf.location.z for v in e.vertices) or bool(e.dxf.get("elevation", (0.0, 0.0, 0.0))[2])
+    if t == "LINE":
+        return bool(e.dxf.start.z or e.dxf.end.z)
+    return False
 
 
 def _straight(e) -> bool:
@@ -219,7 +243,7 @@ def read_site(doc, cfg: Config, frame: SiteFrame, scale: float) -> SiteDrawing:
     reader = _Reader(doc, cfg, dist)
     region = _to_plan(box(x0, y0, x1, y1), frame, scale).buffer(REGION_MARGIN, join_style="mitre")
     drawing = SiteDrawing(region)
-    pieces: list[tuple[str, LineString]] = []
+    pieces: list[tuple[str, LineString, bool]] = []
     min_units = MIN_PIECE / scale
     for order, e in enumerate(_ordered(doc.modelspace())):
         t = e.dxftype()
@@ -237,21 +261,23 @@ def read_site(doc, cfg: Config, frame: SiteFrame, scale: float) -> SiteDrawing:
                 continue
             if t == "LINE" and ((e.dxf.start.x - e.dxf.end.x) ** 2 + (e.dxf.start.y - e.dxf.end.y) ** 2) ** 0.5 < min_units:
                 continue
-            bounds = _rough_bounds(e)
-            if bounds is not None:
-                xs, ys = zip(*bounds)
-                if max(xs) < x0 or min(xs) > x1 or max(ys) < y0 or min(ys) > y1:
-                    continue
+            bounds = _bounds(e)
+            if bounds is None:
+                continue
+            xs, ys = zip(*bounds)
+            if max(xs) < x0 or min(xs) > x1 or max(ys) < y0 or min(ys) > y1 or _has_height(e):
+                continue  # (a line with a height is a contour line: the terrain's business)
             if rules.vetoed(layer) and rules.garden_kind(layer) is None:
                 continue
-            if _straight(e) and reader._is_broken(e, layer):
+            dashed = reader._is_broken(e, layer)
+            if dashed and _straight(e):
                 continue  # a dashed straight line is an axis or a hidden edge; a dashed curve or a dashed outline draws a boundary
             for prim in _entity_prims(e, dist):
                 geom = prim.geom.boundary if prim.kind == "ring" else prim.geom if prim.kind == "line" else None
                 if geom is None or geom.length < min_units:
                     continue
                 for line in getattr(geom, "geoms", [geom]):
-                    pieces.append((layer, _to_plan(line, frame, scale)))
+                    pieces.append((layer, _to_plan(line, frame, scale), dashed))
         except Exception:  # a damaged entity is not worth stopping for
             continue
     drawing.lines = _chains(pieces)
@@ -309,14 +335,19 @@ def _kind_of_layer(layer: str, rules) -> str | None:
     return KIND_FROM_GARDEN.get(rules.garden_kind(layer) or "")
 
 
-def _face_kind(face: Polygon, lines: list[tuple[str, LineString]], words: list, rules) -> tuple[str, str, str]:
+def _face_kind(face: Polygon, lines: list[tuple[str, LineString, bool]], words: list, rules) -> tuple[str, str, str]:
     """(kind, layer, why) of a face of the net: a word written in it; else the layer name of the lines that bound it (the
-    one with most length along the edge); else paving, the kind of anything the drawing does not say."""
+    one with most length along the edge); else ground when dashed lines bound it for the most part (``DASHED_SHARE``: the limit
+    of a field, a slope, a contour), else paving, the kind of anything the drawing does not say."""
     word = _word_in(face, words)
     edge = face.boundary.buffer(CLOSE * 1.5)
     by_layer: dict[str, float] = {}
-    for layer, ln in lines:
-        by_layer[layer] = by_layer.get(layer, 0.0) + ln.intersection(edge).length
+    dashed = total = 0.0
+    for layer, ln, broken in lines:
+        along = ln.intersection(edge).length
+        by_layer[layer] = by_layer.get(layer, 0.0) + along
+        total += along
+        dashed += along if broken else 0.0
     layer = max(by_layer, key=by_layer.get) if by_layer else ""
     if word is not None:
         return word[0], layer, f"scritta '{word[1]}'"
@@ -324,6 +355,8 @@ def _face_kind(face: Polygon, lines: list[tuple[str, LineString]], words: list, 
         kind = _kind_of_layer(name, rules)
         if kind is not None and by_layer[name] > 0:
             return kind, name, f"layer {name}"
+    if total > 0 and dashed >= DASHED_SHARE * total:
+        return "terreno", layer, "bordata da linee tratteggiate"
     return "pavimentazione", layer, "predefinita"
 
 
@@ -360,7 +393,7 @@ def make_surfaces(drawing: SiteDrawing, building: BaseGeometry, taken: BaseGeome
             label = f.pattern if f.pattern and f.pattern.upper() != "SOLID" else ""
             pieces.append(Surface("", kind[0], piece, "campitura", f.layer, label, why=kind[1]))
             covered = covered.union(piece)
-    for face in faces_of([ln for _, ln in drawing.lines], drawing.region):
+    for face in faces_of([ln for _, ln, _ in drawing.lines], drawing.region):
         rest = face.difference(zone)
         if rest.area < (1.0 - INSIDE) * face.area:
             continue  # a room of the building, or the garden's own ground
@@ -396,15 +429,18 @@ def build_site_surfaces(doc, cfg: Config, analysis, plan, scale: float, building
     if frame is None:
         return None
     drawing = read_site(doc, cfg, frame, scale)
+    stairs, drawing.fills = find_band_stairs(drawing.fills, building)  # the hatches of steps are no lawn and no paving
     surfaces, left = make_surfaces(drawing, building, taken, cfg.layers)
-    walls = find_walls(drawing.lines, building, taken, union(f.geom for f in drawing.fills), drawing.words, cfg)
-    if not surfaces and not walls:
+    walls = find_walls([(layer, ln) for layer, ln, broken in drawing.lines if not broken], building, taken, union(f.geom for f in drawing.fills), drawing.words, cfg)
+    if not surfaces and not walls and not stairs:
         return None
-    site = SiteSurfaces(surfaces, walls, frame.view.id, tuple(float(v) for v in frame.placement.shift), frame.placement.common, left)
+    site = SiteSurfaces(surfaces, walls, stairs, frame.view.id, tuple(float(v) for v in frame.placement.shift),
+                        frame.placement.common, left)
     site.base = _base(site.reach)
     if surfaces:
         notes(site, warnings)
     walls_notes(walls, warnings)
+    bands_notes(stairs, warnings)
     return site
 
 
@@ -421,6 +457,7 @@ def add_site_surfaces(mesh: Mesh, site: SiteSurfaces, cfg: Config, ground=None) 
         else:
             add_draped(mesh, ground, s.id, s.geom, s.top)
     add_site_walls(mesh, site.walls, ground)
+    add_band_stairs(mesh, site.stairs, ground)
     if ground is None and not site.base.is_empty:  # a terrain is the ground itself; a flat model has none under the surfaces
         mesh.add_extrusion(BASE_NAME, [Slab(BASE_TOP - cfg.terrain_thickness, BASE_TOP, site.base)], bottom=True)
 

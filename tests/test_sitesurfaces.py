@@ -35,7 +35,7 @@ def add_room(msp, x0, y0, x1, y1, gap=0, layer="0", closed=True):
         msp.add_line((a[0] + ux * gap, a[1] + uy * gap), (b[0] - ux * gap, b[1] - uy * gap), dxfattribs={"layer": layer})
 
 
-def add_pair(msp, x0, x1, y0, y1, length_only=False):
+def add_pair(msp, x0, x1, y0, y1):
     """Two long lines (m, from the corner of the lot) at ``y0`` and ``y1``, from ``x0`` to ``x1``: a strip of curb or wall."""
     for y in (y0, y1):
         msp.add_line((OX + x0 * 100, y * 100), (OX + x1 * 100, y * 100))
@@ -51,7 +51,7 @@ def add_word(msp, text, x, y):
     msp.add_text(text, height=40, dxfattribs={"insert": (OX + x * 100, y * 100)})
 
 
-def site_sheet(path, turn=0, ground=True):
+def site_sheet(path, turn=0, ground=True, bands=0, band_width=3.0):
     """The plan (view A) and the site plan (view B): the lot, a copy of the plan (turned ``turn`` quarters about its corner)
     and, when ``ground``: a lawn drawn with gaps at its corners and written PRATO, a paving that is a grey hatch, a road
     between two long lines written STRADA, a room with nothing to say what it is, and a tree (a small circle) in the lawn."""
@@ -79,16 +79,18 @@ def site_sheet(path, turn=0, ground=True):
         add_word(msp, "STRADA", 20, 6)
         add_pair(msp, 25, 37, 42.0, 42.2)  # a curb: two lines 20 cm apart, 12 m long
         add_pair(msp, 25, 35, 36.0, 36.45)  # a wall: 45 cm thick, 10 m long
-        add_pair(msp, 40, 47, 38.0, 38.2, length_only=True)  # 7 m, 20 cm: a curb, with a height written beside it
+        add_pair(msp, 40, 47, 38.0, 38.2)  # 7 m, 20 cm: a curb, with a height written beside it
         add_word(msp, "MURO DI CONTENIMENTO H= 120 cm", 43, 39)
         add_pair(msp, 50, 53, 5.0, 5.2)  # 3 m: the joint of a paving, no curb
+    for k in range(bands):  # a flight of steps: green hatches ``band_width`` m long and 40 cm deep, 50 cm apart, in a row
+        add_hatch(msp, 44, 32 + 0.5 * k, 44 + band_width, 32.4 + 0.5 * k, 3)
     add_title(msp, "PLANIMETRIA GENERALE", OX + 100, -150)
     doc.saveas(path)
     return path
 
 
-def converted(tmp_path, turn=0, **cfg):
-    path = site_sheet(tmp_path / "s.dxf", turn=turn)
+def converted(tmp_path, turn=0, bands=0, band_width=3.0, **cfg):
+    path = site_sheet(tmp_path / "s.dxf", turn=turn, bands=bands, band_width=band_width)
     config = dict(auto=True, site_surfaces=True, images=False, floors_to_outer_face=False)
     config.update(cfg)
     return convert(path, tmp_path / "s.obj", Config(**config))
@@ -361,3 +363,37 @@ def test_a_flat_model_has_a_slab_of_ground_under_the_surfaces_that_closes_the_ga
     assert obj.open_edges("Sito_Terreno_00") == 0 and obj.winding_matches_normals("Sito_Terreno_00")
     objects = {o["name"]: o for o in json.loads((tmp_path / "s_model.json").read_text())["objects"]}
     assert objects["Sito_Terreno_00"]["material"] == "site_soil"
+
+
+# --- steps drawn as hatched bands ---------------------------------------------------------------
+
+def test_a_row_of_long_thin_hatches_is_a_flight_of_steps_not_a_lawn(tmp_path):
+    report = converted(tmp_path, bands=5)
+    site = report.site_surfaces
+    assert len(site.stairs) == 1 and site.stairs[0].id == "Sito_Gradinata_01" and site.stairs[0].count == 5
+    assert not any(s.source == "campitura" and s.geom.intersection(site.stairs[0].geom).area > 0.5 for s in site.surfaces)  # no lawn from their green
+    foot, top = site.stairs[0].bands[0].centroid, site.stairs[0].bands[-1].centroid
+    assert foot.y > top.y  # the top is the end nearer to the house (the bands run away from it, towards the north)
+    assert any("Gradinate:" in w and "Sito_Gradinata_NN" in w for w in report.warnings)
+
+
+def test_each_band_is_one_riser_higher_than_the_one_before_and_a_prism_of_its_own(tmp_path):
+    report = converted(tmp_path, bands=5)
+    obj = Obj(tmp_path / "s.obj")
+    lo, hi = obj.bbox("Sito_Gradinata_01")
+    assert hi[1] == pytest.approx(5 * 0.17) and lo[1] == pytest.approx(-0.20)
+    heights = sorted({round(obj.v[i][1], 4) for f, _ in obj.faces("Sito_Gradinata_01") for i in f if obj.v[i][1] > 0})
+    assert heights == [round(0.17 * k, 4) for k in range(1, 6)]
+    assert obj.open_edges("Sito_Gradinata_01") == 0 and obj.winding_matches_normals("Sito_Gradinata_01")
+    assert "newmtl Sito_Gradinata" in (tmp_path / "s.mtl").read_text()
+
+
+def test_two_bands_are_no_flight_and_squares_in_a_row_are_no_steps(tmp_path):
+    assert converted(tmp_path, bands=2).site_surfaces.stairs == []  # a row of two: a deck, a table
+    assert converted(tmp_path, bands=5, band_width=0.5).site_surfaces.stairs == []  # 50 x 40 cm: tiles, not treads
+
+
+def test_the_json_has_the_flight_in_the_null_of_the_site(tmp_path):
+    converted(tmp_path, bands=5, c4d_json=True)
+    objects = {o["name"]: o for o in json.loads((tmp_path / "s_model.json").read_text())["objects"]}
+    assert objects["Sito_Gradinata_01"]["group"] == "Superfici_sito" and objects["Sito_Gradinata_01"]["material"] == "site_steps"

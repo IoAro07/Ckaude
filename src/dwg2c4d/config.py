@@ -265,6 +265,8 @@ class Config:
     # The surfaces of the site (sitesurfaces.py): the ground round the building read from the site plan the sheet draws a copy of the
     # plan in (paving, lawn, road, steps, retaining walls), each an object of its own. The library leaves it off (the command line turns it on).
     site_surfaces: bool = False
+    write_site_table: bool = True  # write <name>_sito.csv: every surface, curb, wall and stair of the site, editable by hand
+    site_table_in: str | None = None  # an edited site table to apply (MODIFICA_* columns)
 
     # Reading a drawing whose layers do not say what things are (the library leaves it off, the command line turns it on):
     # the unit the numbers are really in, which view of the sheet is the plan, which layers hold the walls.

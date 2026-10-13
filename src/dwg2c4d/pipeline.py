@@ -44,6 +44,7 @@ from .terrain import build_terrain
 from .terrainmesh import add_terrain
 from .sitemode import Site, build_site
 from .sitesurfaces import SiteSurfaces, build_site_surfaces
+from .sitetable import apply_site_table, read_site_table, write_site_table
 from .sitesteps import Staircase, build_stairs, notes as stairs_notes
 
 
@@ -87,6 +88,7 @@ class ConversionReport:
     site_surfaces: SiteSurfaces | None = None  # the ground round the building read from the site plan (sitesurfaces): paving, lawn, road...
     stairs: list[Staircase] = field(default_factory=list)  # the stairs outside the building, built from their rows of step lines (sitesteps)
     garden_table_path: Path | None = None
+    site_table_path: Path | None = None  # the table of the surfaces, curbs, walls and stairs of the site, written next to the model
     site: Site | None = None  # the buildings of a site, read from the roofs of its site plan (sitemode): a sheet with no plan of a building
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
     views_path: Path | None = None
@@ -693,6 +695,11 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         plan.garden = garden
     plan.stairs = _stairs(cfg, false, solid, floors, warnings)
     plan.site_surfaces = _site_surfaces(doc, cfg, result, solid, garden, lot, warnings)
+    if cfg.site_table_in:
+        if plan.site_surfaces is None and not plan.stairs:
+            warnings.append("Tabella del sito indicata, ma non ho trovato nessuna superficie, muro o scala del sito a cui applicarla.")
+        elif not apply_site_table(plan.site_surfaces, plan.stairs, read_site_table(cfg.site_table_in), cfg, warnings):
+            warnings.append("Tabella del sito: nessuna riga con celle MODIFICA_* compilate da applicare.")
     if cfg.terrain or cfg.terrain_auto:
         plan.terrain = _build_terrain(doc, cfg, result, solid, columns, garden, warnings, plan.site_surfaces)
     mesh = build_mesh(plan, cfg, warnings, roof=not floors)
@@ -726,6 +733,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             garden_table_path = output_path.with_name(output_path.stem + "_giardino_nuova.csv")  # never overwrite the input
         write_garden_table(garden_table_path, garden, result.unit_scale)
 
+    site_table_path = None
+    if cfg.write_site_table and (plan.stairs or plan.site_surfaces is not None):
+        site_table_path = output_path.with_name(output_path.stem + "_sito.csv")
+        if cfg.site_table_in and Path(cfg.site_table_in).resolve() == site_table_path.resolve():
+            site_table_path = output_path.with_name(output_path.stem + "_sito_nuova.csv")  # never overwrite the input
+        write_site_table(site_table_path, plan.site_surfaces, plan.stairs)
+
     report = ConversionReport(
         output=output_path,
         unit=result.unit,
@@ -755,12 +769,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         site_surfaces=plan.site_surfaces,
         stairs=plan.stairs,
         garden_table_path=garden_table_path,
+        site_table_path=site_table_path,
         analysis=cfg.analysis,
         floors=floors,
         cfg=cfg,
     )
     created = [output_path.name, output_path.with_suffix(".mtl").name]
-    created += [p.name for p in (json_path, table_path, garden_table_path) if p]
+    created += [p.name for p in (json_path, table_path, garden_table_path, site_table_path) if p]
     if cfg.images and cfg.analysis is not None and len(cfg.analysis.views) > 1:
         try:
             report.views_path = write_views_image(cfg.analysis, output_path.with_name(output_path.stem + "_viste.png"))

@@ -57,7 +57,7 @@ GROUPS = {
     "Sito": ("Superfici_sito", "site_paving"),
 }
 SITE_MATERIALS = {"Strada": "site_road", "Pavimentazione": "site_paving", "Prato": "site_lawn", "Acqua": "site_water",
-                  "Terreno": "site_soil", "Gradini": "site_steps", "Muro": "site_wall", "Cordolo": "site_curb"}
+                  "Terreno": "site_soil", "Gradini": "site_steps", "Gradinata": "site_steps", "Muro": "site_wall", "Cordolo": "site_curb"}
 SITE_NULLS = ("Giardino", "Piscina", "Alberi", "Siepi", "Cespugli", "Arredi_esterni", "Recinzione", "Superfici_sito")  # what belongs to the lot, not to a storey
 TERRAIN_GROUP = ("Terreno", "terrain")  # the ground of the site (the soil of the garden, when the sheet has no terrain, is "soil")
 FIXTURE_PARTS = ("Telai", "Ante", "Vetri", "Maniglie")

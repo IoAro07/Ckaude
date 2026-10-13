@@ -161,6 +161,10 @@ def _tail_lines(report) -> list[str]:
 
         if report.site_surfaces.surfaces:
             out.append(f"  Superfici del sito : {site_summary(report.site_surfaces)}")
+        if report.site_surfaces.stairs:
+            from .sitebands import summary as bands_summary
+
+            out.append(f"  Gradinate          : {bands_summary(report.site_surfaces.stairs)}")
         if report.site_surfaces.walls:
             from .sitewalls import summary as walls_summary
 

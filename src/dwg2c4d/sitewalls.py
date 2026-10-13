@@ -131,7 +131,7 @@ def add_site_walls(mesh: Mesh, walls: list[SiteWall], ground=None) -> None:
     for w in walls:
         if not w.keep:
             continue
-        if ground is not None and w.kind == "muro" and w.height_source != "testo":
+        if ground is not None and w.kind == "muro" and w.height_source not in ("testo", "tabella"):
             step = step_across(w, ground)
             if step is not None:
                 w.height, w.height_source = step, "dislivello"
