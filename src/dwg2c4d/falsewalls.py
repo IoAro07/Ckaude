@@ -113,7 +113,8 @@ class FalseWalls:
         if self.stairs:
             steps = sum(o.steps for o in self.stairs)
             out.append(f"Muri: {len(self.stairs)} scale ({steps} gradini disegnati come linee parallele) non sono state estruse "
-                       "come blocchi pieni alti come i muri: la scala non e' modellata, restano i muri che la fiancheggiano. "
+                       "come blocchi pieni alti come i muri: restano i muri che le fiancheggiano (le scale fuori dalla casa si costruiscono a "
+                       "gradini, vedi 'Gradini'; le altre non sono modellate). "
                        "Posizioni nel file *_report.txt. Se sono muri usa --muri-tutti.")
         if self.lowered:
             area = sum(o.area for o in self.lowered)

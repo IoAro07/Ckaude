@@ -44,6 +44,7 @@ from .terrain import build_terrain
 from .terrainmesh import add_terrain
 from .sitemode import Site, build_site
 from .sitesurfaces import SiteSurfaces, build_site_surfaces
+from .sitesteps import Staircase, build_stairs, notes as stairs_notes
 
 
 @dataclass
@@ -84,6 +85,7 @@ class ConversionReport:
     lot: object | None = None  # the lotfence.LotFence: wall, pillars, railing and wire fence round the lot
     terrain: dict | None = None  # the terrain from the contour lines: layer, levels, step, floor level, size...
     site_surfaces: SiteSurfaces | None = None  # the ground round the building read from the site plan (sitesurfaces): paving, lawn, road...
+    stairs: list[Staircase] = field(default_factory=list)  # the stairs outside the building, built from their rows of step lines (sitesteps)
     garden_table_path: Path | None = None
     site: Site | None = None  # the buildings of a site, read from the roofs of its site plan (sitemode): a sheet with no plan of a building
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
@@ -296,6 +298,21 @@ def _stack_storeys(doc, input_path: Path, output_path: Path, cfg: Config, stack:
     return floors
 
 
+def _stairs(cfg: Config, false: FalseWalls, solid: BaseGeometry, floors: list, warnings: list[str]) -> list[Staircase]:
+    """The stairs outside the building, from the rows of step lines the walls left out (sitesteps), or []. A stair climbs to the
+    level of a storey above when the sheet has one. It is a help: whatever goes wrong in it is never the reason a conversion fails."""
+    if not cfg.site_surfaces or not false.stairs:
+        return []
+    try:
+        stairs = build_stairs(false.stairs, union([building_footprint(solid), floor_footprint(solid)]), [fl.level for fl in floors[1:]])
+    except Exception as exc:
+        warnings.append(f"Gradini non costruiti: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; per "
+                        "escluderli usa --no-superfici-sito.")
+        return []
+    stairs_notes(stairs, warnings)
+    return stairs
+
+
 def _site_surfaces(doc, cfg: Config, result, solid: BaseGeometry, garden, lot, warnings: list[str]) -> SiteSurfaces | None:
     """The surfaces of the site plan that draws a copy of the plan (sitesurfaces), or None. What the garden and the fence of the lot
     already cover is left to them. It is a help: whatever goes wrong in it is never the reason a conversion fails."""
@@ -313,7 +330,7 @@ def _site_surfaces(doc, cfg: Config, result, solid: BaseGeometry, garden, lot, w
 
 
 def _build_terrain(doc, cfg: Config, result, solid: BaseGeometry, columns: BaseGeometry, garden,
-                   warnings: list[str]):
+                   warnings: list[str], site: SiteSurfaces | None = None):
     """The terrain from the contour lines of the sheet (terrain.py), or None. None as well when the plan converted is a site
     plan the user asked for (--vista on it): all its linework would be taken for a building and flattened, unless --terreno.
     It is a help: whatever goes wrong in it is never the reason a conversion fails."""
@@ -323,7 +340,8 @@ def _build_terrain(doc, cfg: Config, result, solid: BaseGeometry, columns: BaseG
     parts = union([footprint, floor_footprint(solid), columns])
     pools = union(garden.shells) if garden is not None else Polygon()
     try:
-        ground = build_terrain(doc, cfg, cfg.analysis, result.unit_scale, footprint, parts, pools, warnings)
+        ground = build_terrain(doc, cfg, cfg.analysis, result.unit_scale, footprint, parts, pools, warnings,
+                               site.reach if site is not None else None)
         if ground is not None:
             add_terrain(Mesh(), ground)  # the mesh must work out before the walls are built to stand on it
     except Exception as exc:
@@ -673,9 +691,10 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             elif not apply_garden_table(garden, read_garden_table(cfg.garden_table_in), cfg, warnings):
                 warnings.append("Tabella del giardino: nessuna riga con celle MODIFICA_* compilate da applicare.")
         plan.garden = garden
+    plan.stairs = _stairs(cfg, false, solid, floors, warnings)
     plan.site_surfaces = _site_surfaces(doc, cfg, result, solid, garden, lot, warnings)
     if cfg.terrain or cfg.terrain_auto:
-        plan.terrain = _build_terrain(doc, cfg, result, solid, columns, garden, warnings)
+        plan.terrain = _build_terrain(doc, cfg, result, solid, columns, garden, warnings, plan.site_surfaces)
     mesh = build_mesh(plan, cfg, warnings, roof=not floors)
     garden = plan.garden  # (None when its mesh could not be built)
     if floors:
@@ -734,6 +753,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         lot=plan.lot,
         terrain=plan.terrain.info if plan.terrain is not None else None,
         site_surfaces=plan.site_surfaces,
+        stairs=plan.stairs,
         garden_table_path=garden_table_path,
         analysis=cfg.analysis,
         floors=floors,

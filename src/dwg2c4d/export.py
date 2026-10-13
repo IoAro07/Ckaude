@@ -57,7 +57,7 @@ GROUPS = {
     "Sito": ("Superfici_sito", "site_paving"),
 }
 SITE_MATERIALS = {"Strada": "site_road", "Pavimentazione": "site_paving", "Prato": "site_lawn", "Acqua": "site_water",
-                  "Terreno": "site_soil"}
+                  "Terreno": "site_soil", "Gradini": "site_steps", "Muro": "site_wall", "Cordolo": "site_curb"}
 SITE_NULLS = ("Giardino", "Piscina", "Alberi", "Siepi", "Cespugli", "Arredi_esterni", "Recinzione", "Superfici_sito")  # what belongs to the lot, not to a storey
 TERRAIN_GROUP = ("Terreno", "terrain")  # the ground of the site (the soil of the garden, when the sheet has no terrain, is "soil")
 FIXTURE_PARTS = ("Telai", "Ante", "Vetri", "Maniglie")
@@ -111,6 +111,9 @@ MATERIALS = {
     "site_lawn": {"name": "Prato del sito", "color": [0.36, 0.55, 0.26], "rough": 0.95},
     "site_water": {"name": "Acqua del sito", "color": [0.30, 0.60, 0.78], "rough": 0.02},
     "site_soil": {"name": "Terreno del sito (superficie)", "color": [0.45, 0.37, 0.29], "rough": 0.95},
+    "site_steps": {"name": "Gradini", "color": [0.70, 0.67, 0.62], "rough": 0.85},
+    "site_wall": {"name": "Muro di contenimento", "color": [0.40, 0.40, 0.42], "rough": 0.9},
+    "site_curb": {"name": "Cordolo del sito", "color": [0.52, 0.51, 0.50], "rough": 0.9},
 }
 
 

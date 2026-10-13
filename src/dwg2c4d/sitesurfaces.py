@@ -35,6 +35,7 @@ from .geom import fix, nest_polygons, polygons_of, union
 from .mesh import SITE_PREFIX, Mesh, Slab
 from .reader import _entity_prims, _Reader, _rough_bounds
 from .sitefit import Placement, register
+from .sitewalls import SiteWall, add_site_walls, find_walls, notes as walls_notes
 from .terrainmesh import add_draped
 from .texts import read_texts
 
@@ -54,6 +55,11 @@ MIN_WIDTH = EDGE_WIDTH + 0.25  # m: a face thinner than this (2 * area / perimet
 INSIDE = 0.5  # a face with more than this share inside the building (or in the garden) is a room, or the garden's
 MAX_FACES = 80  # more faces than this is a drawing the net does not read: the biggest are kept, the rest said
 BUILDING_MARGIN = 0.10  # m: what lies this close to the building is its wall
+
+# --- the ground under it all, when the sheet has no terrain ---
+BASE_CLOSE = 4.0  # m: gaps between the surfaces up to twice this are ground too
+BASE_TOP = -0.20  # m: the top of the ground the surfaces lie on, below the lowest of them
+BASE_NAME = SITE_PREFIX + "Terreno_00"
 
 # --- levels, metres above the platform (the level of the paving round the house) ---
 TOP = {"strada": -0.02, "pavimentazione": 0.0, "prato": -0.05, "acqua": -0.15, "terreno": -0.05}
@@ -106,19 +112,21 @@ class Surface:
 @dataclass
 class SiteSurfaces:
     surfaces: list[Surface] = field(default_factory=list)
+    walls: list[SiteWall] = field(default_factory=list)  # the curbs and the walls of the site (sitewalls)
     view: int = 0  # the number of the site plan the surfaces were read in
     shift: tuple[float, float] = (0.0, 0.0)
     common: float = 0.0  # m of line the plan and the site plan share (the registration)
     left_out: int = 0  # faces left out because there were too many
+    base: BaseGeometry = field(default_factory=Polygon)  # the ground under the surfaces, gaps between them closed (flat models only)
 
     @property
     def empty(self) -> bool:
-        return not self.surfaces
+        return not self.surfaces and not self.walls
 
     @property
     def reach(self) -> BaseGeometry:
         """Where the surfaces are: the terrain must cover it."""
-        return union(s.geom for s in self.surfaces if s.keep)
+        return union([*(s.geom for s in self.surfaces if s.keep), *(w.geom for w in self.walls if w.keep)])
 
 
 # --- finding the site plan ---------------------------------------------------------------------
@@ -374,6 +382,12 @@ def make_surfaces(drawing: SiteDrawing, building: BaseGeometry, taken: BaseGeome
     return pieces, left
 
 
+def _base(reach: BaseGeometry) -> BaseGeometry:
+    """The ground under the surfaces: where they are, the gaps between them (up to ``2 * BASE_CLOSE``) and the holes in them filled."""
+    closed = reach.buffer(BASE_CLOSE, join_style="mitre").buffer(-BASE_CLOSE, join_style="mitre")
+    return union(Polygon(p.exterior) for p in polygons_of(closed))
+
+
 def build_site_surfaces(doc, cfg: Config, analysis, plan, scale: float, building: BaseGeometry, taken: BaseGeometry,
                         warnings: list[str]) -> SiteSurfaces | None:
     """The surfaces of the site plan that holds a copy of the converted plan, or None. ``building``: the footprint of the
@@ -383,10 +397,14 @@ def build_site_surfaces(doc, cfg: Config, analysis, plan, scale: float, building
         return None
     drawing = read_site(doc, cfg, frame, scale)
     surfaces, left = make_surfaces(drawing, building, taken, cfg.layers)
-    if not surfaces:
+    walls = find_walls(drawing.lines, building, taken, union(f.geom for f in drawing.fills), drawing.words, cfg)
+    if not surfaces and not walls:
         return None
-    site = SiteSurfaces(surfaces, frame.view.id, tuple(float(v) for v in frame.placement.shift), frame.placement.common, left)
-    notes(site, warnings)
+    site = SiteSurfaces(surfaces, walls, frame.view.id, tuple(float(v) for v in frame.placement.shift), frame.placement.common, left)
+    site.base = _base(site.reach)
+    if surfaces:
+        notes(site, warnings)
+    walls_notes(walls, warnings)
     return site
 
 
@@ -402,6 +420,9 @@ def add_site_surfaces(mesh: Mesh, site: SiteSurfaces, cfg: Config, ground=None) 
             mesh.add_extrusion(s.id, [Slab(s.top - cfg.garden_thickness, s.top, s.geom)])
         else:
             add_draped(mesh, ground, s.id, s.geom, s.top)
+    add_site_walls(mesh, site.walls, ground)
+    if ground is None and not site.base.is_empty:  # a terrain is the ground itself; a flat model has none under the surfaces
+        mesh.add_extrusion(BASE_NAME, [Slab(BASE_TOP - cfg.terrain_thickness, BASE_TOP, site.base)], bottom=True)
 
 
 # --- the report ----------------------------------------------------------------------------------

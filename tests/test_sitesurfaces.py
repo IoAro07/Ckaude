@@ -35,6 +35,12 @@ def add_room(msp, x0, y0, x1, y1, gap=0, layer="0", closed=True):
         msp.add_line((a[0] + ux * gap, a[1] + uy * gap), (b[0] - ux * gap, b[1] - uy * gap), dxfattribs={"layer": layer})
 
 
+def add_pair(msp, x0, x1, y0, y1, length_only=False):
+    """Two long lines (m, from the corner of the lot) at ``y0`` and ``y1``, from ``x0`` to ``x1``: a strip of curb or wall."""
+    for y in (y0, y1):
+        msp.add_line((OX + x0 * 100, y * 100), (OX + x1 * 100, y * 100))
+
+
 def add_hatch(msp, x0, y0, x1, y1, color):
     h = msp.add_hatch(color=color)
     h.paths.add_polyline_path([(OX + x * 100, y * 100) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))], is_closed=True)
@@ -59,7 +65,7 @@ def site_sheet(path, turn=0, ground=True):
     turned = Matrix44.chain(Matrix44.translate(-hx, -hy, 0), Matrix44.z_rotate(math.radians(90 * turn)), Matrix44.translate(hx, hy, 0))
     for e in list(msp)[before:]:
         e.transform(turned)
-    for dx in (500, 560) if turn == 0 else (-300, -240):  # a drive from the road to the house wall, wherever the house stands now
+    for dx in (500, 700) if turn == 0 else (-300, -100):  # a drive from the road to the house wall, wherever the house stands now
         msp.add_line((hx + dx, 900), (hx + dx, hy))
     if ground:
         add_room(msp, 8, 30, 19, 44, gap=10)  # the lawn: the corners are open by 10 cm
@@ -71,6 +77,11 @@ def site_sheet(path, turn=0, ground=True):
         for y in (300, 900):  # the road: two long lines from side to side of the lot
             msp.add_line((OX, y), (OX + 6200, y))
         add_word(msp, "STRADA", 20, 6)
+        add_pair(msp, 25, 37, 42.0, 42.2)  # a curb: two lines 20 cm apart, 12 m long
+        add_pair(msp, 25, 35, 36.0, 36.45)  # a wall: 45 cm thick, 10 m long
+        add_pair(msp, 40, 47, 38.0, 38.2, length_only=True)  # 7 m, 20 cm: a curb, with a height written beside it
+        add_word(msp, "MURO DI CONTENIMENTO H= 120 cm", 43, 39)
+        add_pair(msp, 50, 53, 5.0, 5.2)  # 3 m: the joint of a paving, no curb
     add_title(msp, "PLANIMETRIA GENERALE", OX + 100, -150)
     doc.saveas(path)
     return path
@@ -233,3 +244,120 @@ def test_the_report_line_counts_the_surfaces_by_kind(tmp_path):
 
     line = next(l for l in summary_lines(report) if "Superfici del sito" in l)
     assert "superfici dal disegno del sito" in line and "prato" in line and "strada" in line
+
+
+# --- the curbs and the walls ----------------------------------------------------------------------
+
+def wall_at(report, x, y):
+    from shapely.geometry import Point
+
+    px, py = to_plan(x, y)
+    found = [w for w in report.site_surfaces.walls if w.geom.contains(Point(px, py))]
+    assert found, f"no curb or wall at {(x, y)}: {[(w.id, w.geom.bounds) for w in report.site_surfaces.walls]}"
+    return found[0]
+
+
+def test_two_long_lines_a_few_centimetres_apart_are_a_curb_and_a_thick_pair_is_a_wall(tmp_path):
+    report = converted(tmp_path)
+    curb = wall_at(report, 31, 42.1)
+    assert curb.kind == "cordolo" and curb.id.startswith("Sito_Cordolo_") and curb.height == pytest.approx(0.15)
+    assert curb.axis.length == pytest.approx(12.0, abs=0.3) and curb.thickness == pytest.approx(0.2, abs=0.03)
+    wall = wall_at(report, 30, 36.2)
+    assert wall.kind == "muro" and wall.id == "Sito_Muro_01" and wall.height == pytest.approx(0.5) and "spessore 45 cm" in wall.why
+
+
+def test_a_height_written_beside_a_strip_makes_it_a_wall_of_that_height(tmp_path):
+    report = converted(tmp_path)
+    wall = wall_at(report, 43, 38.1)
+    assert wall.kind == "muro" and wall.height == pytest.approx(1.2) and wall.height_source == "testo"
+    assert "H= 120 cm" in wall.why
+
+
+def test_a_short_pair_of_lines_and_the_walls_of_the_house_are_no_curbs(tmp_path):
+    report = converted(tmp_path)
+    from shapely.geometry import Point
+
+    px, py = to_plan(51.5, 5.1)
+    assert not any(w.geom.contains(Point(px, py)) for w in report.site_surfaces.walls)  # 3 m only
+    house = building_footprint(report.plan.solid_walls)
+    assert all(w.geom.intersection(house).area < 0.3 for w in report.site_surfaces.walls)
+    assert len(report.site_surfaces.walls) == 3
+
+
+def test_the_heights_the_user_gives_to_the_low_walls_are_the_ones_of_the_site_walls(tmp_path):
+    report = converted(tmp_path, low_wall_height=0.8, curb_height=0.1)
+    assert wall_at(report, 30, 36.2).height == pytest.approx(0.8) and wall_at(report, 31, 42.1).height == pytest.approx(0.1)
+
+
+def test_curbs_and_walls_are_closed_slabs_of_their_own_from_zero_to_their_height(tmp_path):
+    report = converted(tmp_path)
+    obj = Obj(tmp_path / "s.obj")
+    for w in report.site_surfaces.walls:
+        lo, hi = obj.bbox(w.id)
+        assert lo[1] == pytest.approx(0.0, abs=1e-6) and hi[1] == pytest.approx(w.height, abs=1e-6), w.id
+        assert obj.open_edges(w.id) == 0 and obj.winding_matches_normals(w.id)
+    mtl = (tmp_path / "s.mtl").read_text()
+    assert "newmtl Sito_Muro" in mtl and "newmtl Sito_Cordolo" in mtl
+
+
+def test_the_json_for_cinema_4d_has_the_walls_and_curbs_in_the_null_of_the_site(tmp_path):
+    report = converted(tmp_path, c4d_json=True)
+    objects = {o["name"]: o for o in json.loads((tmp_path / "s_model.json").read_text())["objects"]}
+    assert objects["Sito_Muro_01"]["material"] == "site_wall" and objects["Sito_Muro_01"]["group"] == "Superfici_sito"
+    assert objects[wall_at(report, 31, 42.1).id]["material"] == "site_curb"
+
+
+def test_the_report_counts_the_walls_and_the_curbs_and_says_what_it_guessed(tmp_path):
+    report = converted(tmp_path)
+    from dwg2c4d.qa import summary_lines
+
+    line = next(l for l in summary_lines(report) if "Muri del sito" in l)
+    assert "2 muri" in line and "1 cordoli" in line
+    assert any("Muri del sito:" in w and "Sito_Cordolo_NN" in w and "--altezza-muretti" in w for w in report.warnings)
+
+
+def test_a_wall_is_as_high_as_the_ground_is_higher_on_one_side_of_it_than_on_the_other():
+    import numpy as np
+    from shapely.geometry import LineString, Polygon
+
+    from dwg2c4d.mesh import Mesh
+    from dwg2c4d.sitewalls import SiteWall, add_site_walls
+    from dwg2c4d.terrain import Terrain
+
+    xs, ys = np.meshgrid(np.arange(-5.0, 16.0), np.arange(-5.0, 16.0))
+    ground = Terrain(-5.0, -5.0, 1.0, 0.5 * xs, 0.0, -1.0, Polygon(), Polygon())  # rises 0.5 m per metre eastwards
+    axis = LineString([(5.0, 0.0), (5.0, 10.0)])  # a wall that runs north: the ground differs by 1.0 m across it
+    free = SiteWall("Sito_Muro_01", "muro", axis.buffer(0.2, cap_style="flat"), axis, 0.4, "0", 0.5)
+    written = SiteWall("Sito_Muro_02", "muro", axis.buffer(0.2, cap_style="flat"), axis, 0.4, "0", 0.9, "testo")
+    add_site_walls(Mesh(), [free, written], ground)
+    assert free.height == pytest.approx(1.0) and free.height_source == "dislivello"
+    assert written.height == pytest.approx(0.9) and written.height_source == "testo"  # what is written beats the ground
+    flat = SiteWall("Sito_Muro_03", "muro", axis.buffer(0.2, cap_style="flat"), axis, 0.4, "0", 0.5)
+    add_site_walls(Mesh(), [flat], Terrain(-5.0, -5.0, 1.0, 0.0 * xs, 0.0, -1.0, Polygon(), Polygon()))
+    assert flat.height == 0.5 and flat.height_source == "predefinita"  # no step: the default
+
+
+def test_the_terrain_clipping_falls_back_to_the_plain_intersection_when_geos_gives_up(monkeypatch):
+    import shapely
+    from shapely.geometry import box
+
+    from dwg2c4d import terrainmesh
+
+    def give_up(*args, **kwargs):
+        raise shapely.errors.GEOSException("Invalid number of points in LinearRing found 3 - must be 0 or >= 4")
+
+    monkeypatch.setattr(terrainmesh.shapely, "clip_by_rect", give_up)
+    got = terrainmesh._clipped(box(0, 0, 4, 4), (1, 1, 6, 3))
+    assert got.equals(box(1, 1, 4, 3))
+
+
+def test_a_flat_model_has_a_slab_of_ground_under_the_surfaces_that_closes_the_gaps_between_them(tmp_path):
+    report = converted(tmp_path, c4d_json=True)
+    obj = Obj(tmp_path / "s.obj")
+    lo, hi = obj.bbox("Sito_Terreno_00")
+    assert hi[1] == pytest.approx(-0.20) and lo[1] == pytest.approx(-0.20 - 1.0)  # below the lowest surface, the terrain's thickness
+    base = report.site_surfaces.base
+    assert all(base.buffer(0.01).contains(s.geom) for s in report.site_surfaces.surfaces)
+    assert obj.open_edges("Sito_Terreno_00") == 0 and obj.winding_matches_normals("Sito_Terreno_00")
+    objects = {o["name"]: o for o in json.loads((tmp_path / "s_model.json").read_text())["objects"]}
+    assert objects["Sito_Terreno_00"]["material"] == "site_soil"

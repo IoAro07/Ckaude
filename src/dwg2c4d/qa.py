@@ -159,7 +159,16 @@ def _tail_lines(report) -> list[str]:
     if getattr(report, "site_surfaces", None) is not None:
         from .sitesurfaces import summary as site_summary
 
-        out.append(f"  Superfici del sito : {site_summary(report.site_surfaces)}")
+        if report.site_surfaces.surfaces:
+            out.append(f"  Superfici del sito : {site_summary(report.site_surfaces)}")
+        if report.site_surfaces.walls:
+            from .sitewalls import summary as walls_summary
+
+            out.append(f"  Muri del sito      : {walls_summary(report.site_surfaces.walls)}")
+    if getattr(report, "stairs", None):
+        from .sitesteps import summary as stairs_summary
+
+        out.append(f"  Gradini            : {stairs_summary(report.stairs)}")
     if report.terrain:
         t = report.terrain
         out.append(f"  Terreno            : {t['levels']} curve di livello (layer {t['layer']}, ogni {t['step']:g} m, da {t['low']:.1f} "

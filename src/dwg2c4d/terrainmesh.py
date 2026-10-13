@@ -14,7 +14,7 @@ import math
 
 import numpy as np
 import shapely
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.geometry.polygon import orient
 from shapely.strtree import STRtree
@@ -56,6 +56,15 @@ def _triangles(t: Terrain) -> tuple[STRtree, np.ndarray]:
     return cached
 
 
+def _clipped(region: BaseGeometry, bounds: tuple[float, float, float, float]) -> BaseGeometry:
+    """``region`` cut to a rectangle. The fast cut of GEOS gives up on some outlines (a ring of three points comes out of it):
+    the plain intersection with the rectangle does not."""
+    try:
+        return shapely.clip_by_rect(region, *bounds)
+    except shapely.errors.GEOSException:
+        return shapely.make_valid(region).intersection(box(*bounds))
+
+
 def _pieces(t: Terrain, region: BaseGeometry | None, keep: str) -> list[tuple[Polygon, np.ndarray]]:
     """The parts of the top as (polygon, plane): all of it (``region`` None), what lies in ``region`` (``keep`` "in") or
     outside it ("out"). A triangle wholly in or out is itself, the ones the outline of ``region`` crosses are cut."""
@@ -70,7 +79,7 @@ def _pieces(t: Terrain, region: BaseGeometry | None, keep: str) -> list[tuple[Po
     whole = hit[covered] if keep == "in" else np.setdiff1d(np.arange(len(shapes)), hit)
     out = [(shapes[k], plane[k]) for k in whole]
     for k in cut:
-        near = shapely.clip_by_rect(region, *shapes[k].bounds)
+        near = _clipped(region, shapes[k].bounds)
         part = shapes[k].intersection(near) if keep == "in" else shapes[k].difference(near)
         out.extend((p, plane[k]) for p in polygons_of(part))
     return out
