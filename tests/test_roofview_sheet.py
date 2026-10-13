@@ -176,3 +176,23 @@ def test_a_roof_asked_for_with_no_roof_layer_is_taken_from_the_roof_view_without
     report, _ = converted(tmp_path, Config(auto=True, roof=True, roof_auto=True, images=False))
     assert report.roof is not None and report.roof["view"] is not None
     assert not any("nessuna linea trovata" in w for w in report.warnings)
+
+
+def add_offcentre_gable(msp, w=1400, d=900, layer="0", **kw):
+    """A gable roof whose ridge is not in the middle: the outline fits the plan turned by half a turn as well, the ridge
+    would not be where it is drawn."""
+    x0, y0, x1, y1 = -OVER, -OVER, w + OVER, d + OVER
+    msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
+    ridge = y0 + 0.3 * (y1 - y0)
+    msp.add_line((x0, ridge), (x1, ridge), dxfattribs={"layer": layer})
+
+
+def test_a_roof_whose_ridge_would_change_place_if_the_outline_is_turned_by_half_a_turn_says_so(tmp_path):
+    report, _ = converted(tmp_path, roof=add_offcentre_gable, turns=0)
+    assert report.roof is not None
+    assert any("quasi altrettanto bene" in w and "180 gradi" in w and "non ruotata" in w for w in report.warnings)
+
+
+def test_a_symmetric_roof_is_not_said_to_fit_in_two_places(tmp_path):
+    report, _ = converted(tmp_path)  # a hip roof: turned by half a turn it is the same roof
+    assert report.roof is not None and not any("quasi altrettanto bene" in w for w in report.warnings)

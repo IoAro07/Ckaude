@@ -113,17 +113,8 @@ def test_the_outline_and_the_ridge_are_what_is_left_of_a_plain_roof_view():
     assert total_length(clean) == pytest.approx(ROOF.length + 13.2, abs=0.01)
 
 
-def test_dimensions_texts_and_section_marks_are_not_roof_lines():
-    extra = [item("Quote", LineString([(-0.6, -2.0), (12.6, -2.0)])), item("Testi", LineString([(3, 3), (3, 4)])),
-             item("sezioni", LineString([(6.0, 1.0), (6.0, 6.0)])), item("SEZIONI-A", LineString([(2.0, 1.0), (2.0, 6.0)]))]
-    clean = rv.clean_roof(roof_view(extra))
-    assert total_length(clean) == pytest.approx(ROOF.length + 13.2, abs=0.01)
 
 
-def test_a_layer_of_hundreds_of_short_lines_is_a_hatch_drawn_with_lines_and_goes():
-    tiles = [item("tegole", LineString([(x * 0.1, y), (x * 0.1 + 0.08, y + 0.3)])) for x in range(30) for y in (1.0, 2.0, 3.0)]
-    clean = rv.clean_roof(roof_view(tiles))
-    assert len(lines_of(clean)) == len(lines_of(rv.clean_roof(roof_view())))
 
 
 def test_a_few_short_lines_of_a_layer_are_kept_when_they_are_no_pattern():
@@ -131,23 +122,10 @@ def test_a_few_short_lines_of_a_layer_are_kept_when_they_are_no_pattern():
     assert len(lines_of(rv.clean_roof(roof_view(hip)))) > len(lines_of(rv.clean_roof(roof_view())))
 
 
-def test_a_pattern_layer_names_itself():
-    """A layer called after a hatch is dropped by its name, however few lines it holds."""
-    clean = rv.clean_roof(roof_view([item("TRATTEGGIO_tetto", LineString([(1, 1), (1, 3)]))]))
-    assert total_length(clean) == pytest.approx(ROOF.length + 13.2, abs=0.01)
 
 
-def test_the_gutter_strips_along_the_eaves_are_not_planes():
-    strips = [item("0", Polygon([(-0.6, -0.6), (12.6, -0.6), (12.6, -0.45), (-0.6, -0.45)]), "ring")]
-    clean = rv.clean_roof(roof_view(strips))
-    assert total_length(clean) == pytest.approx(ROOF.length + 13.2, abs=0.01)
 
 
-def test_skylights_chimneys_and_panels_are_no_planes():
-    small = [item("0", box(2, 1, 2.5, 1.5), "ring"), item("0", box(8, 5, 9, 6), "ring"),
-             item("0", LineString([(3, 2), (3.3, 2), (3.3, 2.3), (3, 2.3), (3, 2)]))]  # the last one an open polyline closed on itself
-    clean = rv.clean_roof(roof_view(small))
-    assert total_length(clean) == pytest.approx(ROOF.length + 13.2, abs=0.01)
 
 
 def test_an_array_of_panels_standing_in_a_plane_is_not_a_plane_of_the_roof():
@@ -409,3 +387,54 @@ def test_an_eave_drawn_in_pieces_by_stray_lines_is_still_the_whole_eave():
         it.category = "roof"
     roof = build_roof(items, Config(units="m", roof=True, roof_offset=(0.0, 0.0)), 1.0, (0, 0, 12, 6), [], [])
     assert roof.ridge_height == pytest.approx(3.0 * math.tan(math.radians(25.0)), abs=0.01)
+
+
+
+@pytest.mark.parametrize("layer", ["Quote", "Testi", "sezioni", "SEZIONI-A", "Dimensioni", "Campiture", "Pannelli_solari",
+                                   "Legenda", "TRATTEGGIO_tetto", "Fotovoltaico", "Tabellina", "Coppi"])
+def test_a_layer_named_for_dimensions_texts_sections_hatches_or_panels_holds_no_roof_lines(layer):
+    chord = item(layer, LineString([(2.0, -0.6), (2.0, 4.0)]))  # from the eaves to the ridge: it would cut a plane in two
+    clean = rv.clean_roof(roof_view([chord]))
+    assert total_length(clean) == pytest.approx(ROOF.length + 13.2, abs=0.01)
+
+
+def test_a_layer_with_many_short_pieces_has_a_hatch_drawn_with_lines_and_they_go_whatever_the_layer_is_called():
+    """Tiles drawn on the very layer of the roof: eighty strokes of 6 cm end to end from the eaves to the ridge."""
+    chain = [item("0", LineString([(8.0, -0.6 + k * 0.0575), (8.0, -0.6 + (k + 1) * 0.0575)])) for k in range(80)]
+    clean = rv.clean_roof(roof_view(chain))
+    assert total_length(clean) == pytest.approx(ROOF.length + 13.2, abs=0.01)
+
+
+def test_a_few_short_pieces_of_the_roof_layer_stay_roof_lines():
+    chain = [item("0", LineString([(8.0, -0.6 + k * 0.0575), (8.0, -0.6 + (k + 1) * 0.0575)])) for k in range(80)]
+    few = chain[:8] + [item("0", LineString([(8.0, -0.6 + 8 * 0.0575), (8.0, 4.0)]))]  # a stroke of 8 pieces and the rest in one
+    assert total_length(rv.clean_roof(roof_view(few))) == pytest.approx(ROOF.length + 13.2 + 4.6, abs=0.01)
+
+
+def test_the_gutter_strips_along_the_eaves_are_not_planes():
+    """A 40 x 10 m roof with a gutter of 15 cm along its south side (6 m2: more than a skylight, thinner than a plane)."""
+    roof = box(0, 0, 40, 10)
+    gutter = item("0", Polygon([(0, 0), (40, 0), (40, 0.15), (0, 0.15)]), "ring")
+    clean = rv.clean_roof([*outline_lines(roof), gutter])
+    assert total_length(clean) == pytest.approx(roof.length, abs=0.01)
+
+
+def test_skylights_chimneys_and_panels_are_no_planes():
+    """Two stand alone and one attached to the ridge, a skylight of 1 m2 that would cut the plane under it."""
+    small = [item("0", box(2, 1, 2.5, 1.5), "ring"), item("0", box(8, 5, 9, 6), "ring"),
+             item("0", LineString([(3, 2), (3.3, 2), (3.3, 2.3), (3, 2.3), (3, 2)])),
+             item("0", box(2, 4.0, 3, 5.0), "ring")]
+    clean = rv.clean_roof(roof_view(small))
+    assert total_length(clean) == pytest.approx(ROOF.length + 13.2, abs=0.01)
+
+
+def test_a_roof_that_stands_on_less_than_the_cover_share_of_the_building_is_not_placed_even_if_it_overlaps_enough():
+    """A roof 14 x 18 m over a house 10 x 6 m: the house grown by the eaves is the most of it (46 % of the roof)."""
+    reg = rv.fit_roof(box(-2, -6, 12, 12), box(0, 0, 10, 6))
+    assert reg.iou >= rv.MIN_IOU and reg.cover < rv.MIN_COVER and not reg.sound
+    assert rv.register_roof(box(-2, -6, 12, 12), box(0, 0, 10, 6)) is None
+
+
+def test_a_roof_that_fits_in_many_places_over_the_house_is_put_in_the_middle_even_when_the_overlap_is_poor():
+    reg = rv.fit_roof(box(100, 50, 106, 54), box(0, 0, 14, 4))  # 6 m of roof over 14 m of house: any of 8 m of shifts
+    assert rv.place(box(100, 50, 106, 54), reg).centroid.x == pytest.approx(7.0, abs=0.3)

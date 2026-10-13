@@ -45,8 +45,8 @@ FASCIA = 0.30  # m: a closed outline thinner than this is a gutter or a fascia b
 OUT_TOLERANCE = 0.30  # m: a line that goes further than this beyond the outline is a dimension or a section mark
 CLOSE_GAP = 0.10  # m: roof lines that stop this short of each other are joined
 GRID = 1e-6  # m: input snapping, as in roof.py
-PATTERN_PARTS = 60  # a layer with this many pieces in the view, all short, is a hatch drawn with lines (tiles)
-PATTERN_LENGTH = 1.0  # m: ... "short" is a median length under this
+PATTERN_PARTS = 60  # a layer with this many short pieces in the view has a hatch drawn with lines (tiles): they are not roof
+PATTERN_LENGTH = 1.0  # m: ... "short" is a piece under this
 JUNK_LAYERS = ("sezion", "section", "quot", "dimens", "text", "testi", "tratteg", "hatch", "campit", "pattern",
                "pannell", "fotovolt", "photovolt", "solar", "panel", "tabell", "legend", "cartigl")  # prefixes of the words a layer name is made of
 INSIDE_SHARE = 0.5  # a closed shape that fills at most this share of a plane it stands in, and touches nothing, is no plane
@@ -172,19 +172,13 @@ def _loop(part: _Part) -> Polygon | None:
     return None
 
 
-def _junk_layers(parts: list[_Part]) -> set[str]:
-    """Layers that hold no roof structure: dimensions, texts, section marks, hatches and what is drawn with lines in
-    their place (a layer of many short pieces: tiles), panels."""
-    junk: set[str] = set()
-    lengths: dict[str, list[float]] = {}
-    for p in parts:
-        lengths.setdefault(p.layer, []).append(p.line.length)
+def _junk(parts: list[_Part]) -> list[_Part]:
+    """The parts that are no roof structure: those on layers of dimensions, texts, section marks, hatches, panels; and the
+    short pieces of a layer that has many of them (a hatch of tiles drawn with lines), whatever the layer is called."""
     rules = LayerRules()
-    for layer, ls in lengths.items():
-        if any(t.startswith(JUNK_LAYERS) for t in rules.tokens(layer)) or rules.is_surface(layer) \
-                or (len(ls) >= PATTERN_PARTS and float(np.median(ls)) < PATTERN_LENGTH):
-            junk.add(layer)
-    return junk
+    named = {p.layer for p in parts if any(t.startswith(JUNK_LAYERS) for t in rules.tokens(p.layer)) or rules.is_surface(p.layer)}
+    short = Counter(p.layer for p in parts if p.line.length < PATTERN_LENGTH)
+    return [p for p in parts if p.layer in named or (short[p.layer] >= PATTERN_PARTS and p.line.length < PATTERN_LENGTH)]
 
 
 def _pieces(geom: BaseGeometry) -> list[LineString]:
@@ -261,8 +255,8 @@ def clean_roof(items: list[Item], tiles: list[tuple[float, float]] = ()) -> Clea
     parts = _parts(items)
     if not parts:
         return None
-    junk = _junk_layers(parts)
-    parts = [p for p in parts if p.layer not in junk]
+    junk = {id(p) for p in _junk(parts)}
+    parts = [p for p in parts if id(p) not in junk]
     outline = _outline(parts)
     if outline.is_empty:
         return None
