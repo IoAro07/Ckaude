@@ -20,12 +20,12 @@ pianta.dwg  ──►  dwg2c4d  ──►  pianta.obj + .mtl  (+ _model.json)  �
 
 ### 1. Avere il progetto in locale
 
-Il codice sta nel repository pubblico <https://github.com/IoAro07/Ckaude> (il ramo predefinito è
+Il codice sta nel repository pubblico <https://github.com/IoAro07/DXF23D> (il ramo predefinito è
 `claude/dwg-to-3d-cinema4d-0c0if5`: non serve alcun login). Due modi:
 
 - **Scaricarlo come ZIP**: nella pagina del repository *Code → Download ZIP*, poi decomprimi in una cartella
   qualsiasi (per esempio `C:\dwg2c4d`).
-- **Con git**: `git clone https://github.com/IoAro07/Ckaude.git`
+- **Con git**: `git clone https://github.com/IoAro07/DXF23D.git`
 
 In alternativa il file `dwg2c4d-0.7.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
 dwg2c4d-0.7.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
