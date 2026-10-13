@@ -4,6 +4,16 @@ La versione in uso la dice `python -m dwg2c4d --version` (e la prima riga di `co
 deve coincidere con quella di `pyproject.toml` e con la riga in testa al [README](README.md). Dopo ogni aggiornamento
 decomprimi il progetto in una **cartella nuova** e controlla che la versione sia quella attesa.
 
+## [0.8.0] — 2026-10-13
+
+- **Superfici del sito** (`sitesurfaces`, `sitebands`, `sitefit`): dalla planimetria generale che disegna una copia della pianta,
+  superfici da campiture e da regioni chiuse dalle linee, gradinate e scale all'aperto a gradini, cordoli e muri di
+  contenimento (`sitecurbs`), ognuno un oggetto; `NOME_sito.csv` e `NOME_controllo_sito.png`; `--no-superfici-sito`,
+  `--tabella-sito`.
+- **Modalita' sito, il contorno** (`siteground`, `siteterrain`, `sitewalls`): giardino con la piscina dal layer, terreno con una
+  piattaforma per edificio, muri liberi con l'altezza scritta; tetti a una falda addossati alla gronda di un altro corpo;
+  `--no-vegetazione`.
+
 ## [0.7.1] — 2026-10-13
 
 - **Recinzione del lotto** (`lotfence`): muretto con copertina, pilastri con cappello, ringhiera a montanti, cancello

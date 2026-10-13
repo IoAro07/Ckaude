@@ -1,6 +1,6 @@
 # dwg2c4d — da planimetria 2D (DWG/DXF) a modello 3D per Cinema 4D
 
-**Versione 0.7.1** (13 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
+**Versione 0.8.0** (13 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
 
 Legge una pianta 2D, ne **estrude i muri** (con i tramezzi a parte), **apre porte, finestre e vani** con le
 quote che trova (scritte del disegno, prospetti), costruisce **infissi dettagliati** (imbotto, cornice, telai, ante,
@@ -27,14 +27,14 @@ Il codice sta nel repository pubblico <https://github.com/IoAro07/DXF23D> (il ra
   qualsiasi (per esempio `C:\dwg2c4d`).
 - **Con git**: `git clone https://github.com/IoAro07/DXF23D.git`
 
-In alternativa il file `dwg2c4d-0.7.1-py3-none-any.whl` (se te l'hanno consegnato): `pip install
-dwg2c4d-0.7.1-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+In alternativa il file `dwg2c4d-0.8.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.8.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
 script di Cinema 4D, che stanno nella cartella del progetto.
 
 **Per aggiornare** a una versione nuova: scarica di nuovo il progetto in una **cartella nuova** (o `git pull`) e rifai
 `installa.bat`. I file `converti.bat` ed `elenca_layer.bat` usano comunque sempre il codice della cartella in cui stanno
 (`src`), anche se in Python è rimasta installata una copia vecchia. Quando parte, `converti.bat` stampa la riga
-`dwg2c4d 0.7.1  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
+`dwg2c4d 0.8.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
 usando una cartella vecchia. `python -m dwg2c4d --version` fa lo stesso da terminale.
 
 *Perché la cartella nuova*: pip lascia dentro il progetto una cartella `build`; uno ZIP non porta il fuso orario, quindi
@@ -611,6 +611,31 @@ prospetti** sono messe sulle facciate degli edifici che i prospetti mostrano, se
 non si sono potute mettere (loggiati, pensiline, aperture sotto la quota zero) e che la facciata è dedotta dal confronto dei
 tetti: controllale. Il risultato non è una ricostruzione: sono volumi con il tetto e le aperture dei prospetti, non
 ambienti.
+
+**Il sito intorno alla casa: superfici, gradini, cordoli e muri** (`--no-superfici-sito`, `--tabella-sito`). Molti
+fogli disegnano il progetto due volte: la pianta dell'edificio (quella che si converte) e una **planimetria generale**
+che ne contiene una copia in mezzo al lotto, ai vialetti, alle strade. La planimetria è disegnata a linee, non a campiture:
+un prato, un vialetto, una strada sono regioni chiuse da linee. Il programma mette la pianta sulla planimetria (facendo
+combaciare le linee che hanno in comune; se non combaciano non indovina) e costruisce: 1) le **superfici**: ogni campitura
+fuori dall'edificio (di che cosa è fatta lo dicono il layer, il retino, il colore, una parola scritta sopra) e ogni regione
+chiusa dalle linee lunghe (PRATO, STRADA... se c'è scritto, altrimenti il layer, altrimenti pavimentazione), ognuna un
+oggetto a sé (`Sito_Prato_01`...) per cambiarne il materiale in Cinema 4D; 2) le **gradinate** e le **scale all'aperto**
+(file di campiture lunghe e strette, righe di linee parallele): gradini con alzata e pedata, dall'altezza scritta o
+dal dislivello del terreno, altrimenti 17-18 cm con un avviso; 3) i **cordoli** e i **muri di contenimento**: due linee
+parallele a 6-60 cm una dall'altra, fuori dalla casa e che non siano la recinzione del lotto: muro se una parola lo dice
+(muro, contenimento, sostegno...), se c'è scritta l'altezza (`Hmuro= 1,00 ml.`) o se è spesso come un muro, altrimenti
+cordolo alto 0,15 m; i muri prendono l'altezza scritta, o il dislivello del terreno, o `--altezza-muretti`. Tutto è
+elencato nel riepilogo, nell'immagine `NOME_controllo_sito.png` e nella tabella `NOME_sito.csv` (colonne `MODIFICA_*`:
+tipo, quota, altezza, alzata, tieni) che si corregge a mano e si applica con `--tabella-sito`. Il terreno dalle curve di
+livello (sopra) c'è già e le superfici stanno sopra.
+
+**Modalità sito, il contorno** (`--no-vegetazione`). In modalità sito il giardino, il terreno e i muri liberi si costruiscono
+anche intorno agli edifici: i tetti di tutti gli edifici sono "l'interno" (sotto un tetto non c'è terreno), una piscina è
+il layer che si chiama così (un'campitura azzurra su un altro layer, i pannelli di una tettoia, non è acqua), il layer
+`Pavimenti` è la pavimentazione all'aperto, ogni edificio e ogni piscina sta a una piattaforma piana alla quota del
+terreno sotto di sé (la mediana delle curve di livello sulla sua impronta, contata dal pavimento dell'edificio più grande,
+che è lo zero) e i muri liberi sono i contorni chiusi sottili con l'altezza scritta accanto. `--no-vegetazione` non costruisce
+alberi, siepi e cespugli (centinaia in certi fogli).
 
 **Finestre a nastro.** Una finestra disegnata solo dal suo vetro (due o più linee parallele a meno di 6 cm, lunghe
 almeno 60 cm, nel muro esterno, su un layer che si chiama `Linee`) è riconosciuta come finestra: le campate vicine
