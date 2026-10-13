@@ -426,8 +426,9 @@ def build_terrain(doc, cfg: Config, analysis, unit_scale: float, building: BaseG
     floor = written_floor_level(sheet_texts(doc), c.levels[0], c.levels[-1]) or (_ground_under(points, building), FLOOR_FROM_GROUND)
     level = -cfg.floor_thickness
     t = build_ground(points, window, platform, pools, floor[0], level, cfg.terrain_thickness)
+    x0, y0, x1, y1 = t.window  # (whole cells: a little bigger than the window asked for)
     t.info = {"layer": c.layer, "levels": len(c.levels), "step": c.step, "low": c.levels[0], "high": c.levels[-1],
-              "floor": floor[0], "floor_source": floor[1], "level": level, "size": (window[2] - window[0], window[3] - window[1]),
+              "floor": floor[0], "floor_source": floor[1], "level": level, "size": (x1 - x0, y1 - y0),
               "thickness": cfg.terrain_thickness, "view": view_id, "registered": registered, "shift": placement.shift,
               "common": placement.common, "views": placement.views}
     _notes(t, warnings)
