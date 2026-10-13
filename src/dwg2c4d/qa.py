@@ -137,10 +137,11 @@ def write_report(report, path: str | Path, created: list[str]) -> Path:
 
 # --- pictures ---------------------------------------------------------------------------------
 
-def preview_3d(mesh, path: str | Path) -> Path:
-    """Three views of the model (needs only numpy)."""
+def preview_3d(mesh, path: str | Path, focus: tuple[float, float, float, float] | None = None) -> Path:
+    """Three views of the model (needs only numpy). ``focus`` (xmin, xmax, ymin, ymax, metres): only what lies there is
+    drawn (a terrain is far bigger than the house on it)."""
     return save_views(mesh, path, views=((-58, 38), (-128, 38), (-90, 86)), size=(620, 470),
-                      hide=("Soffitto",))
+                      hide=("Soffitto",), clip=focus)
 
 
 def plan_overlay(report, path: str | Path) -> Path:

@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 from builders import building
 from helpers import Obj
-from test_garden import GREEN, GREY, block, garden_plan, hatch, rect
-from test_terrain import FLOOR, add_contours
+from test_garden import GREEN, garden_plan, hatch, rect
+from test_terrain import add_contours
 
 from dwg2c4d import Config, convert
 from dwg2c4d.terrainmesh import EMBED
@@ -17,6 +17,8 @@ from dwg2c4d.terrainmesh import EMBED
 def sloping_garden(tmp_path, with_pool=False, with_objects=True, **cfg):
     doc, msp = garden_plan(tmp_path, with_pool=with_pool, with_objects=with_objects)
     hatch(msp, rect(1220, -500, 1500, 0), GREEN)  # 20 cm of nothing between this and the paving: soil
+    if with_objects:
+        msp.add_blockref("Albero", (550, -450), dxfattribs={"layer": "Verde"})  # a second tree, where the ground has left the platform
     doc.layers.add("CURVE-LIV")
     add_contours(msp)
     msp.add_text("+0.00 (100.50)", height=20, dxfattribs={"insert": (1200, 300), "layer": "0"})
@@ -51,6 +53,21 @@ def test_the_garden_surfaces_follow_the_ground_and_stay_a_fixed_distance_from_it
     assert z.max() - z.min() > 0.5  # it is not flat: the ground rises under it
 
 
+def test_a_garden_surface_has_vertical_sides_only_along_its_own_outline_not_along_the_triangles_of_the_ground(tmp_path):
+    from shapely.geometry import Point
+
+    report, obj = sloping_garden(tmp_path)
+    outline = report.garden.surfaces["paving"].boundary
+    sides = 0
+    for ids, n in obj.faces("Pavimentazione"):
+        if abs(obj.n[n][1]) < 0.1:  # a vertical face
+            x, y, _ = world(obj, ids)
+            sides += 1
+            assert outline.distance(Point(x.mean(), y.mean())) < 1e-4
+    assert sides >= 4
+    assert obj.open_edges("Pavimentazione") == 0 and obj.winding_matches_normals("Pavimentazione")
+
+
 def test_on_the_platform_the_garden_is_flat_at_the_height_the_flat_model_gives_it(tmp_path):
     report, obj = sloping_garden(tmp_path)
     ids = sorted({i for f, _ in obj.faces("Pavimentazione") for i in f})
@@ -71,10 +88,12 @@ def test_the_soil_of_the_garden_is_the_terrain_itself(tmp_path):
 def test_plants_and_furniture_stand_on_the_ground_they_are_in(tmp_path):
     report, obj = sloping_garden(tmp_path)
     t = report.plan.terrain
-    tree = next(o for o in report.garden.objects if o.kind == "tree")
-    lawn_top = t.height(tree.cx, tree.cy) + 0.15
-    assert tree.z0 == pytest.approx(lawn_top)
-    assert min(obj.v[i][1] for f, _ in obj.faces("Tronco_" + tree.id) for i in f) == pytest.approx(lawn_top)
+    trees = [o for o in report.garden.objects if o.kind == "tree"]
+    assert len(trees) == 2 and max(float(t.lift(o.cx, o.cy)) for o in trees) > 0.2  # one of them stands well above the platform
+    for tree in trees:
+        lawn_top = t.height(tree.cx, tree.cy) + 0.15
+        assert tree.z0 == pytest.approx(lawn_top)
+        assert min(obj.v[i][1] for f, _ in obj.faces("Tronco_" + tree.id) for i in f) == pytest.approx(lawn_top)
 
 
 def test_the_garden_without_a_terrain_is_what_it_was(tmp_path):

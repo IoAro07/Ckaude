@@ -101,6 +101,7 @@ def _better_unit(span_m: float, declared: str) -> str | None:
 
 
 GARDEN_SKIPPED_KINDS = ("elevation", "section", "roof", "detail")  # views whose contents are never garden, even with --area
+PREVIEW_MARGIN = 15.0  # m: the 3D preview shows the terrain this far round the building
 GROUP_GAP = 3.0  # m: wall pieces closer than this are one building
 MIN_GROUP_AREA = 1.0  # m2 of wall: smaller pieces are not worth a remark
 
@@ -543,7 +544,10 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         except Exception as exc:  # a picture must never stop the conversion
             report.images_note = f"immagine delle viste non creata: {exc}"
     if cfg.images:
-        report.preview_path = preview_3d(mesh, output_path.with_name(output_path.stem + "_anteprima_3d.png"))
+        x0, y0, x1, y1 = solid.bounds  # (a terrain is shown only round the house)
+        focus = (x0 + offset[0] - PREVIEW_MARGIN, x1 + offset[0] + PREVIEW_MARGIN, y0 + offset[1] - PREVIEW_MARGIN,
+                 y1 + offset[1] + PREVIEW_MARGIN) if plan.terrain is not None else None
+        report.preview_path = preview_3d(mesh, output_path.with_name(output_path.stem + "_anteprima_3d.png"), focus)
         created.append(report.preview_path.name)
         try:
             report.overlay_path = plan_overlay(report, output_path.with_name(output_path.stem + "_controllo_pianta.png"))
