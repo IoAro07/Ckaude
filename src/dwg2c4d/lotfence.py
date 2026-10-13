@@ -33,7 +33,7 @@ from shapely.strtree import STRtree
 from .config import Config
 from .geom import polygons_of, union
 from .mesh import Mesh, Slab
-from .reader import _entity_prims, layer_used
+from .reader import _entity_prims, layer_used, read_items
 
 LINE_ENTITIES = {"LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE"}  # what a boundary is drawn with
 NAME_WORDS = ("murett", "recinz", "ringhier", "cancell", "inferriat", "fence", "railing", "gate", "confin", "boundary")  # layer names that say it
@@ -520,6 +520,150 @@ def _wires(chains: list[tuple[str, LineString]], footprint: BaseGeometry, fence:
     return out
 
 
+# --- the elevation ---------------------------------------------------------------------------
+
+LEVEL_TOL = 0.001  # m: a line is horizontal (vertical) if its ends differ by less than this
+JOIN = 0.05  # m: pieces of a line this close are one line (the blocks of a row of railing have a hair between them)
+COVER = 0.7  # a line that covers this share of a run of wall runs along it
+WALL_RANGE = (0.3, 2.5)  # m: a wall of the lot is this high
+CAP_RANGE = 0.08  # m: a line this close above the top edge of the wall is the top of its cap
+RAIL_RANGE = (0.2, 2.0)  # m: a railing is this high over the wall
+BAR_SPACING = (0.03, 0.5)  # m: the bars of a railing are this far apart
+BAR_WIDTH = (0.004, 0.04)  # m: the two edges of a bar are this far apart
+MIN_BARS = 5  # fewer bars than this do not tell the spacing
+
+
+def _segments(items: list) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
+    """The horizontal ((y, x0, x1)) and the vertical ((x, y0, y1)) pieces of every line, outline and fill of ``items`` (metres)."""
+    horizontal, vertical = [], []
+    for it in items:
+        for p in it.prims:
+            rings = []
+            for g in getattr(p.geom, "geoms", [p.geom]):
+                if g.geom_type == "Polygon":
+                    rings.extend([g.exterior, *g.interiors])
+                elif g.geom_type == "LineString":
+                    rings.append(g)
+            for ring in rings:
+                c = list(ring.coords)
+                for (ax, ay), (bx, by) in zip(c, c[1:]):
+                    if abs(ay - by) <= LEVEL_TOL and abs(bx - ax) >= 0.01:
+                        horizontal.append((round((ay + by) / 2.0, 3), min(ax, bx), max(ax, bx)))
+                    elif abs(ax - bx) <= LEVEL_TOL and abs(by - ay) >= 0.01:
+                        vertical.append((round((ax + bx) / 2.0, 3), min(ay, by), max(ay, by)))
+    return horizontal, vertical
+
+
+def _joined(pieces: list[tuple[float, float, float]]) -> list[tuple[float, float, float]]:
+    """Pieces (level, from, to) with the ones on one level (within a millimetre) that touch or overlap joined into one."""
+    by_level: list[list[tuple[float, float, float]]] = []
+    for piece in sorted(pieces):
+        if by_level and piece[0] - by_level[-1][-1][0] <= LEVEL_TOL:
+            by_level[-1].append(piece)
+        else:
+            by_level.append([piece])
+    out: list[tuple[float, float, float]] = []
+    for group in by_level:
+        level = group[0][0]
+        start = len(out)
+        for _, a, b in sorted(group, key=lambda p: p[1]):
+            if len(out) > start and a <= out[-1][2] + JOIN:
+                out[-1] = (level, out[-1][1], max(out[-1][2], b))
+            else:
+                out.append((level, a, b))
+    return out
+
+
+def _grouped(levels: list[float], tol: float) -> list[tuple[float, float]]:
+    """(lowest, highest) of every set of levels that follow each other within ``tol``."""
+    out: list[list[float]] = []
+    for v in sorted(levels):
+        if out and v - out[-1][1] <= tol:
+            out[-1][1] = v
+        else:
+            out.append([v, v])
+    return [(a, b) for a, b in out]
+
+
+def _median(values: list[float]) -> float | None:
+    return float(np.median(values)) if values else None
+
+
+def read_profile(fence: LotFence, elevations: list[list]) -> None:
+    """Fill ``fence.profile`` with what an elevation drawn in line with the plan says: the ground line, the top of the wall and
+    its cap, the top of the pillars and their caps, the rails and the bars of the railing. ``elevations``: the items (hatches
+    included) of each elevation, in metres. What it does not say stays as it was (the defaults)."""
+    prof = fence.profile
+    runs = [p.bounds for p in polygons_of(fence.walls) if p.bounds[2] - p.bounds[0] >= p.bounds[3] - p.bounds[1]]  # along x: seen in a front view
+    pillars = [p.bounds for p in fence.pillars]
+    spans = runs + pillars
+    if not spans:
+        return
+    x_lo, x_hi = min(b[0] for b in spans), max(b[2] for b in spans)
+    for items in elevations:
+        horizontal, vertical = _segments(items)
+        lines = _joined([h for h in horizontal if h[2] >= x_lo - 0.1 and h[1] <= x_hi + 0.1])
+        ground = min((y for y, a, b in lines if b - a >= 0.5 * (x_hi - x_lo)), default=None)
+        if ground is None:
+            continue
+        found = _read_heights(prof, lines, vertical, ground, runs, pillars, bool(fence.railings))
+        if found:
+            return
+
+
+def _read_heights(prof: Profile, lines: list, vertical: list, ground: float, runs: list, pillars: list, railing: bool) -> bool:
+    """The part of ``read_profile`` that works on the pieces of one elevation: True when it gave the wall or the pillars."""
+    tops, caps = [], []
+    for x0, _, x1, _ in pillars:
+        shafts = [y1 for x, y0, y1 in vertical if x0 - 0.05 <= x <= x1 + 0.05 and y0 <= ground + 0.1 and y1 - y0 >= 0.5]
+        if not shafts:
+            continue
+        shaft = max(shafts)
+        above = [y for y, a, b in lines if shaft < y <= shaft + 0.15 and a >= x0 - 0.1 and b <= x1 + 0.1 and b - a >= 0.5 * (x1 - x0)]
+        tops.append(max(above, default=shaft) - ground)
+        caps.append(max(above, default=shaft) - shaft)
+    if tops:
+        prof.pillar = _median(tops)
+        prof.sources["pilastri"] = "prospetto"
+        if _median(caps) >= 0.01:
+            prof.pillar_cap = _median(caps)
+    tops_of_runs = []
+    for x0, _, x1, _ in runs:
+        covering = sorted(y for y, a, b in lines if WALL_RANGE[0] <= y - ground <= WALL_RANGE[1] and a <= x0 + 0.1 and b >= x0 + COVER * (x1 - x0))
+        if covering:
+            capped = next((y for y in covering if covering[0] < y <= covering[0] + CAP_RANGE), None)
+            tops_of_runs.append((capped or covering[0], capped - covering[0] if capped else 0.0))
+    wall_top = max(tops_of_runs, default=None)  # the highest run: a run whose cap the drawing leaves out is not lower for it
+    if wall_top is not None:
+        prof.wall, prof.sources["muretto"] = wall_top[0] - ground, "prospetto"
+        if wall_top[1]:
+            prof.cap = wall_top[1]
+        if railing:
+            _read_railing(prof, lines, vertical, wall_top[0], runs)
+    return bool(tops) or wall_top is not None
+
+
+def _read_railing(prof: Profile, lines: list, vertical: list, top: float, runs: list) -> None:
+    """The rails and the bars of the railing over the wall whose top is at ``top`` (drawing y), in the span of the runs."""
+    x0, x1 = min(r[0] for r in runs), max(r[2] for r in runs)
+    band = [y for y, a, b in lines if top + 0.02 < y <= top + RAIL_RANGE[1] and b - a >= COVER * min(r[2] - r[0] for r in runs)]
+    rails = [Rail(a - top, b - top) for a, b in _grouped(band, 0.03)]
+    if not rails or not RAIL_RANGE[0] <= rails[-1].z1 <= RAIL_RANGE[1]:
+        return
+    prof.rails = rails[:4]
+    prof.rail = rails[-1].z1
+    prof.sources["ringhiera"] = "prospetto"
+    edges = sorted(x for x, y0, y1 in vertical if x0 <= x <= x1 and y0 >= top - 0.01 and y1 <= top + prof.rail + 0.01 and y1 - y0 >= 0.05)
+    bars = _grouped(edges, BAR_WIDTH[1])  # the two edges of a bar are one bar
+    centres = [(a + b) / 2.0 for a, b in bars]
+    gaps = [d for d in np.diff(centres) if BAR_SPACING[0] <= d <= BAR_SPACING[1]]
+    if len(centres) >= MIN_BARS and gaps:
+        prof.pitch = float(np.median(gaps))
+        widths = [b - a for a, b in bars if BAR_WIDTH[0] <= b - a <= BAR_WIDTH[1]]
+        if widths:
+            prof.bar = float(np.median(widths))
+
+
 # --- building --------------------------------------------------------------------------------
 
 def _lift(ground, x: float, y: float) -> float:
@@ -555,13 +699,12 @@ def _laid(mesh: Mesh, ground, group: str, geom: BaseGeometry, z0: float, z1: flo
         add_draped(mesh, ground, group, geom, z1, embed=-(z0 - ground.level))
 
 
-def add_lot_fence(mesh: Mesh, fence: LotFence, cfg: Config, ground=None, height: float | None = None) -> None:
+def add_lot_fence(mesh: Mesh, fence: LotFence, cfg: Config, ground=None) -> None:
     """The wall, its cap, the pillars, the railing and the wire fences as groups of their own. They stand on the ground
     of the flat model (zero) from the depth of the ground slabs up to the heights of ``fence.profile``; on a terrain
-    (``ground``) the wall and the pillars are laid on it and the railing follows it, stepping from piece to piece.
-    ``height``: the top of the wall as the user gave it (it beats the profile)."""
+    (``ground``) the wall and the pillars are laid on it and the railing follows it, stepping from piece to piece."""
     prof = fence.profile
-    top = height if height is not None else prof.wall
+    top = prof.wall
     cap = min(prof.cap, top / 2.0)
     base = -cfg.garden_thickness
 
@@ -623,15 +766,19 @@ def summary(fence: LotFence) -> str:
     return ", ".join(parts)
 
 
-def build_lot_fence(doc, cfg: Config, unit_scale: float, footprint: BaseGeometry, elevations: list, skip: list,
+def build_lot_fence(doc, cfg: Config, unit: str, unit_scale: float, footprint: BaseGeometry, zones: list, skip: list,
                     warnings: list[str]) -> LotFence | None:
-    """The fence of the lot of the plan, or None. ``elevations``: [(Elevation, its items in metres)] of the elevations drawn
-    in line with the plan, where the heights are read; ``skip``: boxes (drawing units) of the other views of the sheet. It is a
-    help: whatever goes wrong in it is never the reason a conversion fails."""
+    """The fence of the lot of the plan, or None. ``zones``: the boxes (drawing units) of the elevations drawn in line with the
+    plan, where the heights are read; ``skip``: boxes of the other views of the sheet. It is a help: whatever goes wrong in it is
+    never the reason a conversion fails."""
     try:
         fence = find(read_linework(doc, cfg, unit_scale, cfg.area, skip), footprint, cfg)
         if fence is None:
             return None
+        read_profile(fence, [read_items(doc, cfg, area=z, ignore_veto=True, keep_other=True, keep_fills=True, unit=unit).items
+                             for z in zones])
+        if cfg.lot_wall_height is not None:
+            fence.profile.wall, fence.profile.sources["muretto"] = cfg.lot_wall_height, "indicata"
     except Exception as exc:
         warnings.append(f"Recinzione del lotto non costruita: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; "
                         "per escluderla usa --no-recinzioni.")

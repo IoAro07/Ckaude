@@ -238,7 +238,7 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str], roof: bool = True) 
     if plan.lot is not None:
         before = set(mesh.groups)
         try:
-            add_lot_fence(mesh, plan.lot, cfg, ground, cfg.lot_wall_height)
+            add_lot_fence(mesh, plan.lot, cfg, ground)
         except Exception as exc:  # the fence is a help: what it had made is taken out again, the house stays
             for name in set(mesh.groups) - before:
                 del mesh.groups[name]

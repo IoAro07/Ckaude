@@ -485,7 +485,6 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         specs = [(zone, layers) for layers, zone, _ in found_zones]
         garden_zones = [core for _, _, core in found_zones]
     read_zones: list[tuple[float, float, float, float]] = []  # the zones that gave an elevation, read in line with the plan
-    elevation_items: list[list] = []  # what each of them holds: the fence of the lot is read there too
     for i, (spec, found_on) in enumerate(specs):
         er = read_items(doc, cfg, area=tuple(spec[:4]), ignore_veto=True, keep_other=True,
                         unit=result.unit)
@@ -493,7 +492,6 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         if ev is None:
             continue
         read_zones.append(tuple(spec[:4]))
-        elevation_items.append(er.items)
         elevations.append(ev)
         matched, total = apply_elevation(ev, openings, solid, cfg, warnings)
         elevation_report.append({"side": ev.side, "matched": matched, "total": total,
@@ -571,7 +569,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     lot = None
     if cfg.fences:
         skip = [*garden_zones, *(other_view_boxes(cfg.analysis) if cfg.analysis is not None else [])]
-        lot = build_lot_fence(doc, cfg, result.unit_scale, footprint, list(zip(elevations, elevation_items)), skip, warnings)
+        lot = build_lot_fence(doc, cfg, result.unit, result.unit_scale, footprint, read_zones, skip, warnings)
     plan.lot = lot
     garden = None
     if cfg.garden:
