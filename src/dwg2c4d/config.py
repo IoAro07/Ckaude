@@ -234,6 +234,7 @@ class Config:
     # The garden: the ground outside the building (paving, lawn, water, soil), a dug pool, and the plants and
     # outdoor furniture drawn as blocks. Heights in metres; the library leaves it off (the command line turns it on).
     garden: bool = False
+    garden_plants: bool = True  # build the trees, hedges and shrubs (the command line: --no-vegetazione leaves them out, the ground stays)
     garden_area: tuple[float, float, float, float] | None = None  # drawing units: where the garden is (default: found)
     garden_reach: tuple[float, float, float, float] | None = None  # internal, drawing units: nothing outside it is garden
     garden_thickness: float = 0.20  # thickness of the ground slabs, below their top
