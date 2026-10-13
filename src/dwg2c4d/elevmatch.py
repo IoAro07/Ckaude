@@ -717,17 +717,31 @@ def _report_entry(match: ElevationMatch, rd: _Read, side_name: str, done: int, n
             "north_known": north_known, "extent": match.extent,
             "levels": [round(lv - rd.vs.levels[0], 3) for lv in rd.vs.levels],
             "slabs": [_slab_under(rd.vs, i, match.facade.span + 1.0) for i in range(len(rd.vs.levels))],
-            "normal": match.facade.normal, "shift": match.shift, "storey_height": height}
+            "normal": match.facade.normal, "shift": match.shift, "storey_height": height,
+            "anchor": (sum(p.opening.center[0] for p in match.pairs) / len(match.pairs),
+                       sum(p.opening.center[1] for p in match.pairs) / len(match.pairs))}
+
+
+def known_shift(entry: dict, run: tuple[float, float], offset: tuple[float, float]) -> float:
+    """The shift along a facade (``run``: its direction) of the plan above that places an elevation like the plan below placed it
+    (``entry``: its report line, ``offset``: from the plan above to the plan below). A facade is as slanted as the walls that
+    make it and the drawing is far from its origin, so the same point has other ``t`` coordinates along the two: the shift moves
+    by the difference between them at the ``anchor`` of the match."""
+    nx, ny = entry["normal"]
+    ax, ay = entry["anchor"]
+    return (entry["shift"] + run[0] * (ax - offset[0]) + run[1] * (ay - offset[1]) - (-ny) * ax - nx * ay)
 
 
 def match_known(doc, cfg: Config, analysis, openings: list[Opening], walls: BaseGeometry, unit: str, unit_scale: float,
                 known: list[dict], offset: tuple[float, float], warnings: list[str]) -> list[dict]:
     """The elevations that the storey below has already placed on its plan, placed on this one without searching for them: an
     elevation shows the same facade whatever the floor, and this plan is the one below moved by ``offset`` (metres, from this
-    plan's frame to the other's), so along the facade the shift is the one found below less the part of ``offset`` along
-    it. ``known``: their report lines (``_report_entry``). Only elevations this plan has not matched are looked at, and an
-    opening already set is never reset; returns the report lines of those that paired at least ``KNOWN_PAIRS`` symbols with
-    openings (and half of the symbols of the storey's band)."""
+    plan's frame to the other's): a point of the facade that lies at ``t`` along the facade below lies at ``t'`` along the one
+    here, measured with its own direction (a facade is as slanted as the walls that make it, and the drawing is far from its
+    origin, so the two directions differ by metres at the openings), and the shift moves by the difference between the two at
+    ``anchor`` (the middle of the openings the elevation was placed by). ``known``: their report lines (``_report_entry``).
+    Only elevations this plan has not matched are looked at, and an opening already set is never reset; returns the report
+    lines of those that paired at least ``KNOWN_PAIRS`` symbols with openings (and half of the symbols of the storey's band)."""
     facades = facades_of(openings, walls)
     by_id = {v.id: v for v in analysis.views}
     stated = storey_stated(" ".join(analysis.plan.titles))
@@ -747,8 +761,7 @@ def match_known(doc, cfg: Config, analysis, openings: list[Opening], walls: Base
         band, floor, source = _storey_band(vs, storey)
         if not band or floor is None:
             continue
-        run = facade.run
-        shift = entry["shift"] - (run[0] * offset[0] + run[1] * offset[1])
+        shift = known_shift(entry, facade.run, offset)
         pairs = _pair_up(band, facade, shift)
         if len(pairs) < KNOWN_PAIRS or len(pairs) < 0.5 * len(band):
             continue

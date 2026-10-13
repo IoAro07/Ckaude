@@ -471,3 +471,14 @@ def test_a_failure_in_the_matching_never_stops_the_conversion(tmp_path, monkeypa
     report = convert(path, tmp_path / "boom.obj", Config(auto=True))
     assert report.wall_pieces > 0 and not any(o.from_elevation for o in report.openings)
     assert any("non usati" in w and "boom" in w for w in report.warnings)
+
+
+def test_an_elevation_placed_below_is_placed_above_by_the_same_point_of_the_facade_whatever_the_slant():
+    from dwg2c4d.elevmatch import known_shift
+
+    # a facade 2.4 degrees off the axis, 500 m up the drawing: the plan above, moved 28 m, has walls 0.4 degrees off
+    entry = {"normal": (0.042, 0.999), "shift": -752.26, "anchor": (350.0, -503.0)}
+    run_above = (-1.0, 0.007)
+    assert known_shift(entry, run_above, (-28.26, -0.03)) == pytest.approx(-763.3, abs=0.1)  # (the first floor of a real sheet fits at -763.3); not -752.26 - 28.26 = -780.5
+    assert known_shift({**entry, "normal": (0.0, 1.0)}, (-1.0, 0.0), (0.0, 0.0)) == pytest.approx(-752.26)  # the same plan: the same shift
+    assert known_shift({**entry, "normal": (0.0, 1.0)}, (-1.0, 0.0), (-28.0, 0.0)) == pytest.approx(-752.26 - 28.0)

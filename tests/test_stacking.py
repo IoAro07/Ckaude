@@ -176,6 +176,18 @@ def test_a_sheet_with_a_single_plan_is_converted_as_before(tmp_path):
     assert not any(split_storey(g)[0] for g in Obj(out).groups)
 
 
+def test_there_is_a_picture_to_check_for_every_storey_and_the_sheet_shows_which_views_were_stacked(tmp_path):
+    report = convert(two_floor_sheet(tmp_path / "s.dxf"), tmp_path / "p.obj", Config(auto=True, images=True))
+    assert [v.storey for v in report.analysis.views] == [None, 1]
+    assert report.overlay_path.name == "p_controllo_pianta.png" and report.overlay_path.exists()
+    assert [p.name for p in report.overlay_paths] == ["p_controllo_pianta_P1.png"] and report.overlay_paths[0].exists()
+    assert report.views_path.exists() and report.preview_path.exists()
+    # the picture of the ground floor shows its own openings, the one of the storey above shows its own
+    assert {o.key for o in report.openings if o.storey == 1} == {o.key for o in report.floors[1].openings}
+    created = report.report_path.read_text(encoding="utf-8")
+    assert "Creato p_controllo_pianta_P1.png" in created
+
+
 # --- the pieces -----------------------------------------------------------------------------------------------
 
 def analysis_of(tmp_path, **kw):

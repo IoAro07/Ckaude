@@ -448,6 +448,7 @@ class View:
     inserts: int = 0
     named: int = 0  # segments, hatches and blocks on layers the names call walls, doors or windows
     matched: str = ""  # an elevation: which facade of the plan it was matched to (written by elevmatch.match_views)
+    storey: int | None = None  # a plan: the storey it was stacked as with the converted plan (written by the pipeline)
     levels: int = 0  # level marks written in it (+3,20  -0,40): what an elevation or a section has
     areas: int = 0  # areas written in it (MQ 12,5): what the rooms of a plan have
     rooms: int = 0  # different room names written in it
@@ -1702,10 +1703,13 @@ def write_views_image(analysis: Analysis, path) -> "Path":
         ax.add_collection(LineCollection([[(a, b), (c, d)] for a, b, c, d in s], colors="#bbbbbb", linewidths=0.25))
     for v in analysis.views:
         x0, y0, x1, y1 = (c * scale for c in v.bbox)
-        colour = "#d62728" if v is analysis.plan else {"elevation": "#1f77b4", "section": "#9467bd", "roof": "#ff7f0e",
-                                                        "site": "#2ca02c"}.get(v.kind, "#555555")
-        ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec=colour, lw=1.8 if v is analysis.plan else 1.0))
+        stacked = v.storey is not None and v is not analysis.plan  # a floor put over the converted plan: its own colour
+        colour = "#d62728" if v is analysis.plan else "#e6007e" if stacked else {
+            "elevation": "#1f77b4", "section": "#9467bd", "roof": "#ff7f0e", "site": "#2ca02c"}.get(v.kind, "#555555")
+        ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, ec=colour, lw=1.8 if v is analysis.plan or stacked else 1.0))
         label = f"{v.id}: {_KIND_IT.get(v.kind, v.kind)}" + (f"  \"{v.titles[0][:40]}\"" if v.titles else "")
+        if stacked:
+            label += f"  [piano {v.storey}, impilato]"
         if v.copy_of:
             label += f" (copia di {v.copy_of})"
         if v.parent:
@@ -1718,7 +1722,9 @@ def write_views_image(analysis: Analysis, path) -> "Path":
     ax.set_aspect("equal")
     ax.set_title(f"Il foglio letto dal programma: unita' {analysis.unit.unit}"
                  + (f" (il file dichiara {analysis.unit.declared})" if analysis.unit.differs else "")
-                 + " - in rosso la vista che viene convertita", fontsize=9)
+                 + " - in rosso la vista che viene convertita"
+                 + (", in magenta i piani sopra, impilati" if any(v.storey is not None for v in analysis.views
+                                                                 if v is not analysis.plan) else ""), fontsize=9)
     path = Path(path)
     fig.savefig(path, dpi=80, bbox_inches="tight")
     plt.close(fig)

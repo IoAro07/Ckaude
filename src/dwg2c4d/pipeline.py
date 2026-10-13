@@ -260,6 +260,7 @@ def _stack_storeys(doc, input_path: Path, output_path: Path, cfg: Config, stack:
         up.elevations.extend(_known_elevations(doc, up, cand.view, cfg, [e for e in elevation_report if e.get("normal")], reg.shift))
         floors.append(Floor(cand.index, cand.view.id, cand.how, up.plan, up.cfg, up.openings, reg.shift, reg.iou,
                             height_source=up.wall_height_source, report=up))
+        cand.view.storey = cand.index  # the picture of the sheet shows which views are floors of the model
         warnings.extend(f"Piano {cand.index}: {w}" for w in up.warnings if w not in warnings)
         below, below_walls = moved(outline(up.plan.solid_walls), reg.shift), moved(up.plan.solid_walls, reg.shift)
         for v in cfg.analysis.views:  # the elevations the base matched say so; what this storey matched is told after it
