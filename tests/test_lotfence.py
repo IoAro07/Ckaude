@@ -115,7 +115,8 @@ def only_lines(tmp_path, build, layer="Esterno", **cfg):
     """The fence found in a drawing of nothing but what ``build(msp, layer)`` draws."""
     doc = ezdxf.new("R2018", setup=True)
     doc.units = 5
-    doc.layers.add(layer)
+    if not doc.layers.has_entry(layer):
+        doc.layers.add(layer)
     build(doc.modelspace(), layer)
     return lf.detect_lot_fence(doc, Config(fences=True, **cfg), 0.01, [])
 
@@ -141,6 +142,27 @@ def test_a_pair_of_lines_alone_is_not_a_fence(tmp_path):
         line(msp, (0, 20), (1000, 20), layer)
 
     assert only_lines(tmp_path, pair) is None
+
+
+@pytest.mark.parametrize("layer", ["MURI", "Porte", "Pilastri", "Arredo esterno", "Verde", "Prospetto Sud", "Tetto", "Quote"])
+def test_the_layers_of_the_building_the_furniture_and_the_elevations_are_not_looked_at(tmp_path, layer):
+    """The walls of the house are drawn as pairs of lines and its columns as squares too: they are the building, not the lot."""
+    def wall(msp, name):
+        line(msp, (0, 0), (1000, 0), name)
+        line(msp, (0, 20), (1000, 20), name)
+        square(msp, 1012, 10, name)
+
+    assert only_lines(tmp_path, wall, layer=layer) is None
+
+
+@pytest.mark.parametrize("layer", ["Esterno", "0", "Recinzione", "Confine lotto"])
+def test_a_wall_with_a_pillar_is_a_fence_on_any_other_layer(tmp_path, layer):
+    def wall(msp, name):
+        line(msp, (0, 0), (1000, 0), name)
+        line(msp, (0, 20), (1000, 20), name)
+        square(msp, 1012, 10, name)
+
+    assert only_lines(tmp_path, wall, layer=layer) is not None
 
 
 def test_a_pair_of_lines_with_a_pillar_at_one_end_is_a_wall(tmp_path):
@@ -326,6 +348,16 @@ def test_the_cap_is_wider_than_the_wall_and_the_pillars_are_square_and_taller(tm
     (x0, _), (x1, _) = obj.bbox("Copertina")[0][[0, 2]], obj.bbox("Copertina")[1][[0, 2]]
     (a0, _), (a1, _) = obj.bbox("Muretto")[0][[0, 2]], obj.bbox("Muretto")[1][[0, 2]]
     assert x0 < a0 - 0.01 and x1 > a1 + 0.01  # the pillar caps and the wall caps reach beyond the wall
+
+    def across(group):  # the plan y of the top face of a group's front wall, left of the gate (its middle is near x = 0)
+        for ids, n in obj.faces(group):
+            p = obj.v[ids]
+            if obj.n[n][1] > 0.9 and abs(p[:, 0].mean()) < 1.0 and 7.8 < p[:, 2].mean() < 8.2 and p[:, 1].min() > 0.7:
+                return -p[:, 2].max(), -p[:, 2].min()
+        raise AssertionError(group)
+
+    (c0, c1), (w0, w1) = across("Copertina"), across("Muretto")
+    assert w1 - w0 == pytest.approx(0.20, abs=1e-6) and c1 - c0 == pytest.approx(0.23, abs=1e-6)  # 1.5 cm more at each side
     assert walls.area == pytest.approx(0.2 * (9.52 + 8.42 + 2 * 14.76), abs=0.05)
 
 
@@ -335,6 +367,14 @@ def test_the_railing_has_the_bars_of_the_elevation_and_stays_light(tmp_path):
     bars = round((9.52 + 8.42 + 2 * 14.76) / 0.10)
     assert bars * 5 <= faces <= bars * 6 + 100  # a bar is a box: five faces seen from outside, the rails come on top
     assert obj.face_count if False else sum(len(f) for f in obj.groups.values()) < 30_000
+
+
+def test_a_long_railing_has_fewer_bars_when_there_would_be_too_many(tmp_path, monkeypatch):
+    path = lot_sheet(tmp_path)
+    full = len(run(tmp_path, path)[1].faces("Ringhiera"))
+    monkeypatch.setattr(lf, "MAX_BARS", 200)
+    light = len(run(tmp_path, path)[1].faces("Ringhiera"))
+    assert light < 0.4 * full  # (the pitch doubles until the bars are few enough)
 
 
 def test_the_gate_is_left_open(tmp_path):

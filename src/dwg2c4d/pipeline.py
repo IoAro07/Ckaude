@@ -110,7 +110,7 @@ def _better_unit(span_m: float, declared: str) -> str | None:
 
 
 SURE_PAIRS = 3  # an elevation that pairs this many symbols with openings of the top storey is sure enough of its facade to give its eaves
-STOREY_OFF = dict(garden=False, fences=False, roof=False, roof_auto=False, images=False, c4d_json=False, write_table=False,
+STOREY_OFF = dict(garden=False, roof=False, roof_auto=False, images=False, c4d_json=False, write_table=False,
                   write_garden_table=False, garden_table_in=None, area=None, roof_area=None, roof_offset=None)  # what an upper storey leaves to the base
 GARDEN_SKIPPED_KINDS = ("elevation", "section", "roof", "detail")  # views whose contents are never garden, even with --area
 PREVIEW_MARGIN = 15.0  # m: the 3D preview shows the terrain this far round the building
