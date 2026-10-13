@@ -16,7 +16,7 @@ def _rect(msp, x0, y0, x1, y1, layer):
     msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
 
 
-def house_sheet(path, first_floor_windows=(0, 1, 2, 3), eaves=620, marks=True, soffit=None, dormer=False):
+def house_sheet(path, first_floor_windows=(0, 1, 2, 3), eaves=620, marks=True, soffit=None, upper_width=1000, title_on_copy=False):
     """The ground floor and the first floor of a 10 x 6 m house (cm), each with its title, and the south elevation drawn 40 m
     to the right: the windows of the ground floor (90 to 220 above the floor), those of the first floor (100 to 230 above its
     floor, which is 3.2 m up), the ground line, the slab line, the level marks and the line of the eaves."""
@@ -26,20 +26,26 @@ def house_sheet(path, first_floor_windows=(0, 1, 2, 3), eaves=620, marks=True, s
         doc.layers.add(name)
     msp = doc.modelspace()
 
-    def plan(dx, windows, door, title):
-        _rect(msp, dx, 0, dx + 1000, 600, "MURI")
-        _rect(msp, dx + 30, 30, dx + 970, 570, "MURI")
+    def plan(dx, windows, door, title, dy=0, width=1000):
+        _rect(msp, dx, dy, dx + width, dy + 600, "MURI")
+        _rect(msp, dx + 30, dy + 30, dx + width - 30, dy + 570, "MURI")
         for k in windows:
             c, w = S_ROW[k]
-            _rect(msp, dx + c - w / 2, 0, dx + c + w / 2, 30, "FINESTRE")
+            _rect(msp, dx + c - w / 2, dy, dx + c + w / 2, dy + 30, "FINESTRE")
         if door:
-            _rect(msp, dx + S_DOOR[0] - 45, 0, dx + S_DOOR[0] + 45, 30, "PORTE")
+            _rect(msp, dx + S_DOOR[0] - 45, dy, dx + S_DOOR[0] + 45, dy + 30, "PORTE")
         for c, w in N_ROW:
-            _rect(msp, dx + c - w / 2, 570, dx + c + w / 2, 600, "FINESTRE")
-        msp.add_text(title, height=20, dxfattribs={"layer": "TESTI", "insert": (dx + 350, -150)})
+            if c + w / 2 < width:
+                _rect(msp, dx + c - w / 2, dy + 570, dx + c + w / 2, dy + 600, "FINESTRE")
+        if title:
+            msp.add_text(title, height=20, dxfattribs={"layer": "TESTI", "insert": (dx + 350, dy - 150)})
 
     plan(0, range(4), True, "PIANTA PIANO TERRA")
-    plan(2500, first_floor_windows, False, "PIANTA PIANO PRIMO")
+    if title_on_copy:  # the first floor is drawn twice: the title is on the copy, far from the plan the elevations are for
+        plan(2500, first_floor_windows, False, "", width=upper_width)
+        plan(2500, first_floor_windows, False, "PIANTA PIANO PRIMO", dy=1800, width=upper_width)
+    else:
+        plan(2500, first_floor_windows, False, "PIANTA PIANO PRIMO", width=upper_width)
     ground = -3000
     for c, w in S_ROW:  # the south elevation: x as in the plan plus 4000
         _rect(msp, c + 4000 - w / 2, ground + 90, c + 4000 + w / 2, ground + 220, "FINESTRE")
@@ -50,8 +56,6 @@ def house_sheet(path, first_floor_windows=(0, 1, 2, 3), eaves=620, marks=True, s
     msp.add_line((3900, ground), (5100, ground), dxfattribs={"layer": "0"})
     msp.add_line((3970, ground + 320), (5030, ground + 320), dxfattribs={"layer": "0"})  # the slab
     msp.add_line((3970, ground + eaves), (5030, ground + eaves), dxfattribs={"layer": "0"})  # the eaves
-    if dormer:  # a window of the roof, over the line of the eaves: it is not a window of the walls
-        _rect(msp, 4400, ground + eaves + 40, 4560, ground + eaves + 160, "FINESTRE")
     if soffit is not None:  # the slab seen from outside: a second line under the one of the floor
         msp.add_line((3970, ground + soffit), (5030, ground + soffit), dxfattribs={"layer": "0"})
     if marks:
@@ -125,13 +129,6 @@ def test_a_slab_the_user_gives_beats_the_one_drawn(tmp_path):
     assert not any("letto nei prospetti" in w for w in report.warnings)
 
 
-def test_a_window_of_the_roof_over_the_eaves_does_not_hide_the_eaves_of_the_top_storey(tmp_path):
-    report, _ = run(house_sheet(tmp_path / "h.dxf", dormer=True), tmp_path)
-    first = report.floors[1]
-    assert first.height == pytest.approx(3.0, abs=0.01) and first.height_source == "prospetto"
-    assert len(windows_of(first)) == 4  # (the dormer is not a window of the plan: it matches nothing)
-
-
 def test_no_opening_stands_higher_than_the_walls_of_its_storey_once_they_end_under_the_slab():
     from dwg2c4d.config import Config
     from dwg2c4d.openings import Opening
@@ -143,3 +140,10 @@ def test_no_opening_stands_higher_than_the_walls_of_its_storey_once_they_end_und
     floor = Floor(0, 1, "t", None, Config(wall_height=2.9), [tall, low])
     fit_openings([floor])
     assert (tall.z1, low.z1) == (2.9, 2.2)
+
+
+def test_a_first_floor_titled_through_its_copy_takes_the_elevation_row_of_the_first_floor(tmp_path):
+    report, _ = run(house_sheet(tmp_path / "h.dxf", title_on_copy=True, upper_width=900, first_floor_windows=(0, 1, 2)), tmp_path)
+    first = report.floors[1]
+    assert "PIANTA PIANO PRIMO" in first.how and first.view != report.analysis.plan.id
+    assert all(o.from_elevation and (o.z0, o.z1) == pytest.approx((1.0, 2.3)) for o in windows_of(first))  # not the ground floor's row

@@ -21,14 +21,15 @@ def run(path, tmp_path, name="m", **kw):
     return convert(path, tmp_path / f"{name}.obj", cfg), tmp_path / f"{name}.obj"
 
 
-def with_roof_view(path, at=(1800, 1500)):
-    """``house_sheet`` and, far from both floors, the roof plan of the house: a hip roof with 60 cm of eaves round the 10 x 6 m walls."""
+def with_roof_view(path, at=(1800, 1500), roof_width=1000):
+    """``house_sheet`` and, far from both floors, the roof plan of the house: a hip roof with 60 cm of eaves round the 6 m deep
+    walls, ``roof_width`` wide."""
     doc = ezdxf.readfile(path)
     for name in ("TRATTEGGIO", "QUOTE", "sezioni"):
         doc.layers.add(name)
     msp = doc.modelspace()
     before = len(msp)
-    add_hip_roof(msp, w=1000, d=600)
+    add_hip_roof(msp, w=roof_width, d=600)
     add_title(msp, "PIANTA COPERTURA", 100, -250)
     for e in list(msp)[before:]:
         e.transform(Matrix44.translate(*at, 0))
@@ -43,7 +44,8 @@ def test_the_roof_of_the_sheet_stands_on_the_walls_of_the_top_storey(tmp_path):
     top = report.floors[-1]
     eaves = top.level + top.height
     obj = Obj(out)
-    assert eaves == pytest.approx(6.2, abs=0.01) and "P1_Tetto" in obj.groups and "Tetto" not in obj.groups
+    assert eaves == pytest.approx(6.2, abs=0.01) and "P1_Tetto" in obj.groups
+    assert [g for g in obj.groups if g.endswith("Tetto")] == ["P1_Tetto"]  # one roof, on the top storey
     (rx0, ry0, rz0), (rx1, ry1, rz1) = obj.bbox("P1_Tetto")
     assert ry0 == pytest.approx(eaves - 0.15, abs=0.02)  # the roof is 15 cm thick under the eaves
     assert ry1 > eaves + 1.0
@@ -54,19 +56,13 @@ def test_the_roof_of_the_sheet_stands_on_the_walls_of_the_top_storey(tmp_path):
 
 
 def test_the_roof_is_registered_on_the_top_storey_not_on_the_converted_plan(tmp_path):
-    path = with_roof_view(house_sheet(tmp_path / "r.dxf"), at=(1800, 1500))
-    doc = ezdxf.readfile(path)
-    msp = doc.modelspace()
-    for e in msp:  # the first floor is a little to the side of the ground floor: 3 m east, 1 m north of where it would stand
-        if e.dxf.layer in ("MURI", "FINESTRE", "PORTE") and e.dxftype() == "LWPOLYLINE" and min(p[0] for p in e.get_points()) >= 2490:
-            e.translate(300, 100, 0)
-    doc.saveas(path)
-    report, out = run(path, tmp_path, roof_auto=True)
-    assert len(report.floors) == 2 and report.floors[1].shift == pytest.approx((-28.0, -1.0), abs=0.05)
+    path = with_roof_view(house_sheet(tmp_path / "r.dxf", upper_width=700, first_floor_windows=(0, 1)), roof_width=700)
+    report, out = run(path, tmp_path, roof_auto=True)  # the first floor is 7 m wide on a ground floor 10 m wide: a roof for 7 m
+    assert len(report.floors) == 2 and report.roof is not None
     obj = Obj(out)
     (rx0, _, rz0), (rx1, _, rz1) = obj.bbox("P1_Tetto")
     (wx0, _, wz0), (wx1, _, wz1) = obj.bbox("P1_Muri")
-    assert (rx0, rx1) == pytest.approx((wx0 - 0.6, wx1 + 0.6), abs=0.1)
+    assert (rx0, rx1) == pytest.approx((wx0 - 0.6, wx1 + 0.6), abs=0.1)  # over the walls of the first floor, not over those of the ground
     assert (rz0, rz1) == pytest.approx((wz0 - 0.6, wz1 + 0.6), abs=0.1)
 
 

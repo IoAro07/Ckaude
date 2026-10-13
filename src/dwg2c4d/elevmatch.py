@@ -480,24 +480,17 @@ def _roof_elevation(match: ElevationMatch, vs: ViewSymbols, floor: float) -> Ele
     return Elevation("south" if south else "north", floor, vs.floor_source, [], hlines)
 
 
-def _eaves(vs: ViewSymbols, floor: float, band: list[Symbol], span: float, under_roof: bool = False) -> float | None:
+def _eaves(vs: ViewSymbols, floor: float, band: list[Symbol], span: float) -> float | None:
     """Height of the wall above the floor, from the line that closes it at the top: the lowest horizontal line above the
     highest door or window that runs along most of the facade (the roof stands on it, or the parapet ends there). None
-    when the view has no such line. ``under_roof``: the storey has the roof over it (the top one of a stack): a symbol that
-    starts above such a line is of the roof (a dormer, a skylight), not of the wall, and the first line the openings below
-    it do not reach is the eaves."""
+    when the view has no such line."""
     top = max(s.y1 for s in band) - floor + EAVES_ABOVE
     wide = [y - floor for y, x0, x1 in vs.hlines if x1 - x0 >= EAVES_SHARE * span and y - floor > top]
     height = min(wide) if wide else None
-    if height is None and under_roof:
-        lines = sorted(y - floor for y, x0, x1 in vs.hlines if x1 - x0 >= EAVES_SHARE * span)
-        height = next((h for h in lines if all(s.y1 - floor <= h + EAVES_ABOVE for s in band if s.y0 - floor < h)
-                       and any(s.y1 - floor <= h for s in band)), None)
     return height if height is not None and EAVES_RANGE[0] <= height <= EAVES_RANGE[1] else None
 
 
-def _storey_height(vs: ViewSymbols, floor: float, storey: int, band: list[Symbol], span: float,
-                   under_roof: bool = False) -> float | None:
+def _storey_height(vs: ViewSymbols, floor: float, storey: int, band: list[Symbol], span: float) -> float | None:
     """Height of the walls of the storey of the plan: from its floor to the next one when the elevation shows the next
     one, else to the line that closes the wall at the top."""
     if storey < 0:
@@ -505,7 +498,7 @@ def _storey_height(vs: ViewSymbols, floor: float, storey: int, band: list[Symbol
     if vs.levels and storey + 1 < len(vs.levels):
         height = vs.levels[storey + 1] - vs.levels[storey]
         return height if EAVES_RANGE[0] <= height <= EAVES_RANGE[1] else None
-    return _eaves(vs, floor, band, span, under_roof)
+    return _eaves(vs, floor, band, span)
 
 
 def _slab_under(vs: ViewSymbols, index: int, span: float) -> float | None:
@@ -684,7 +677,7 @@ def match_views(doc, cfg: Config, analysis, openings: list[Opening], walls: Base
             if rd.stacked or not pairs:
                 continue
             reached = reached or max(p.symbol.y1 for p in pairs) - rd.floor > cfg.wall_height - 0.1
-            h = _storey_height(rd.vs, rd.floor, storey, [p.symbol for p in pairs], match.facade.span + 1.0, cfg.storey is not None)
+            h = _storey_height(rd.vs, rd.floor, storey, [p.symbol for p in pairs], match.facade.span + 1.0)
             if h is not None and h > 0.0:
                 heights.append((match.confidence == "alta", h))
         new_height = agreed_height(heights) if reached else None
@@ -709,16 +702,15 @@ def match_views(doc, cfg: Config, analysis, openings: list[Opening], walls: Base
         roof = _roof_elevation(match, rd.vs, rd.floor)
         if roof is not None:
             elevations.append(roof)
-        report.append(_report_entry(match, rd, side_name, done, rotation is not None, storey, cfg.storey is not None))
+        report.append(_report_entry(match, rd, side_name, done, rotation is not None, storey))
     return elevations, report, new_height
 
 
-def _report_entry(match: ElevationMatch, rd: _Read, side_name: str, done: int, north_known: bool, storey: int,
-                  under_roof: bool) -> dict:
+def _report_entry(match: ElevationMatch, rd: _Read, side_name: str, done: int, north_known: bool, storey: int) -> dict:
     """The report line of a matched elevation, with what a stack of storeys needs of it: the facade (its outward normal and the
     shift along it, to place the same elevation on the plan of another storey), the floors it marks, the height of the storey."""
     height = None if rd.stacked else _storey_height(rd.vs, rd.floor, storey, [p.symbol for p in match.settable],
-                                                    match.facade.span + 1.0, under_roof)
+                                                    match.facade.span + 1.0)
     return {"side": side_name, "label": side_name, "view": rd.view.id, "matched": done,
             "total": match.symbols, "zero_source": rd.source or "indicata",
             "confidence": match.confidence, "residual": match.residual, "title_hint": match.by_title,
@@ -768,5 +760,5 @@ def match_known(doc, cfg: Config, analysis, openings: list[Opening], walls: Base
         rd = _Read(view, "", vs, band, floor, source)
         side = entry["side"]
         view.matched = f"facciata {side}, {match.matched} di {match.symbols}"
-        out.append(_report_entry(match, rd, side, done, entry["north_known"], storey, cfg.storey is not None))
+        out.append(_report_entry(match, rd, side, done, entry["north_known"], storey))
     return out

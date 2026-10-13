@@ -316,3 +316,7 @@ def test_the_command_line_takes_piani_no_piani_and_the_slab(tmp_path, capsys):
     assert main([str(path), "-o", str(tmp_path / "d.obj"), "--no-piani", "--no-immagini"]) == 0
     assert "Muri" in Obj(tmp_path / "d.obj").groups
     assert main([str(path), "-o", str(tmp_path / "e.obj"), "--piani", "--no-piani"]) == 1
+    assert main([str(path), "-o", str(tmp_path / "f.obj"), "--vista", "1", "--no-immagini"]) == 0
+    assert "Muri" in Obj(tmp_path / "f.obj").groups  # --vista alone: that view only
+    assert main([str(path), "-o", str(tmp_path / "g.obj"), "--vista", "1", "--piani", "--no-immagini"]) == 0
+    assert any(g.startswith("P1_Muri") for g in Obj(tmp_path / "g.obj").groups)  # ... and --piani: the floors above it too
