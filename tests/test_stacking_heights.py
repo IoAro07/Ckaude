@@ -16,7 +16,7 @@ def _rect(msp, x0, y0, x1, y1, layer):
     msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
 
 
-def house_sheet(path, first_floor_windows=(0, 1, 2, 3), eaves=620, marks=True):
+def house_sheet(path, first_floor_windows=(0, 1, 2, 3), eaves=620, marks=True, soffit=None):
     """The ground floor and the first floor of a 10 x 6 m house (cm), each with its title, and the south elevation drawn 40 m
     to the right: the windows of the ground floor (90 to 220 above the floor), those of the first floor (100 to 230 above its
     floor, which is 3.2 m up), the ground line, the slab line, the level marks and the line of the eaves."""
@@ -50,6 +50,8 @@ def house_sheet(path, first_floor_windows=(0, 1, 2, 3), eaves=620, marks=True):
     msp.add_line((3900, ground), (5100, ground), dxfattribs={"layer": "0"})
     msp.add_line((3970, ground + 320), (5030, ground + 320), dxfattribs={"layer": "0"})  # the slab
     msp.add_line((3970, ground + eaves), (5030, ground + eaves), dxfattribs={"layer": "0"})  # the eaves
+    if soffit is not None:  # the slab seen from outside: a second line under the one of the floor
+        msp.add_line((3970, ground + soffit), (5030, ground + soffit), dxfattribs={"layer": "0"})
     if marks:
         msp.add_text("±0,00", height=12, dxfattribs={"layer": "TESTI", "insert": (5050, ground + 5)})
         msp.add_text("+3,20", height=12, dxfattribs={"layer": "TESTI", "insert": (5050, ground + 325)})
@@ -99,3 +101,23 @@ def test_without_level_marks_in_the_elevations_the_storeys_stand_on_their_walls_
     report, _ = run(house_sheet(tmp_path / "h.dxf", marks=False, eaves=2000), tmp_path)
     ground, first = report.floors
     assert first.level == pytest.approx(ground.height + DEFAULT_SLAB)
+
+
+def test_a_slab_drawn_in_the_elevation_with_two_lines_gives_its_thickness(tmp_path):
+    report, out = run(house_sheet(tmp_path / "h.dxf", soffit=280), tmp_path)
+    ground, first = report.floors
+    assert first.slab == pytest.approx(0.40, abs=0.005) and first.level == pytest.approx(3.2, abs=0.01)
+    assert ground.height == pytest.approx(2.8, abs=0.01)  # the walls end under the slab: 3.2 less 40 cm
+    assert any("solaio di 40 cm" in w and "letto nei prospetti" in w for w in report.warnings)
+    from helpers import Obj
+
+    obj = Obj(out)
+    (_, s0, _), (_, s1, _) = obj.bbox("P1_Solaio")
+    assert (s0, s1) == pytest.approx((2.8, 3.0), abs=0.01)  # the floors of the rooms (20 cm) take the top of it
+    assert min(obj.bbox(g)[0][1] for g in obj.groups if g.startswith("P1_Pavimento")) == pytest.approx(3.0, abs=0.01)
+
+
+def test_a_slab_the_user_gives_beats_the_one_drawn(tmp_path):
+    report, _ = run(house_sheet(tmp_path / "h.dxf", soffit=280), tmp_path, slab_thickness=0.25)
+    assert report.floors[1].slab == pytest.approx(0.25) and report.floors[0].height == pytest.approx(2.95, abs=0.01)
+    assert not any("letto nei prospetti" in w for w in report.warnings)

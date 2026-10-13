@@ -44,6 +44,7 @@ MAX_STOREYS = 6  # no more floors than this are stacked
 RISE_RANGE = (2.0, 5.0)  # m: a height from one floor to the next that makes sense (the elevations may say otherwise: ignored)
 MIN_WALL = 1.8  # m: the walls of a storey are not lower than this once the slab is taken off the rise
 LEVEL_TOLERANCE = 0.05  # m: two readings of a floor level this close are the same one
+SLAB_TOLERANCE = 0.03  # m: two elevations draw the same slab if its thickness differs by less than this
 WALL_STEP = 0.05  # m: cell of the grid on which the walls of a floor are laid over the walls below
 WALL_GROW = 0.03  # m: the walls below are grown by this when the overlay is counted (the drawing is not exact)
 SNAP_RADIUS = 5.0  # m: the walls move a floor this far from the shift of the outlines, at most...
@@ -302,31 +303,47 @@ def consensus_levels(readings: list[list[float]]) -> list[float]:
     return levels if len(levels) > 1 else []
 
 
-def place_storeys(floors: list[Floor], marks: list[float], slab: float, stated_height: bool) -> list[str]:
+def consensus_slabs(readings: list[list[float | None]]) -> list[float | None]:
+    """The thickness of the slab under every floor above the ground (indexed by the storey) that most of the elevations that
+    show that floor draw alike (within ``SLAB_TOLERANCE``); None where they do not say or disagree."""
+    out: list[float | None] = []
+    for i in range(max((len(r) for r in readings), default=0)):
+        shown = [r[i] for r in readings if len(r) > i]
+        values = [v for v in shown if v is not None]
+        groups = [[v for v in values if abs(v - c) <= SLAB_TOLERANCE] for c in values]
+        best = max(groups, key=len, default=[])
+        out.append(statistics.median(best) if best and len(best) * 2 > len(shown) else None)
+    return out
+
+
+def place_storeys(floors: list[Floor], marks: list[float], slab: float, stated_height: bool,
+                  slabs: list[float | None] = ()) -> list[str]:
     """Set the level, the walls' height and the slab of every floor (``floors``: lowest first, ``height`` holding what its
     own conversion gave); returns the notes for the report. ``marks``: the heights of the floors of the storeys above the
     ground floor, from the elevations (indexed by the number of the storey). A storey's walls reach the underside of the slab
     under the next one: the rise to the next floor less the slab when the elevations give the floors, else the walls it
-    was converted with, and the slab on top of them. The top storey keeps its own height. ``stated_height``: the user gave
-    the height of the walls (--altezza-muri): then the elevations do not decide it."""
+    was converted with, and the slab on top of them. The top storey keeps its own height. ``slab``: the thickness of the slabs
+    (the user's, or the default); ``slabs``: what the elevations draw (indexed by the storey), used where ``slab`` is the
+    default; ``stated_height``: the user gave the height of the walls (--altezza-muri): then the elevations do not decide it."""
     notes: list[str] = []
-    level = 0.0
     for k, fl in enumerate(floors):
+        fl.slab = 0.0 if k == 0 else (slabs[fl.index] if fl.index < len(slabs) and slabs[fl.index] else slab)
+        if k and fl.slab != slab:
+            notes.append(f"Piano {fl.index}: solaio di {fl.slab * 100:.0f} cm sotto, letto nei prospetti (le due linee del suo bordo).")
+    level = 0.0
+    for fl, nxt in zip(floors, floors[1:]):
         fl.level = level
-        fl.slab = slab if k else 0.0
-        if k + 1 == len(floors):
-            break
-        nxt = floors[k + 1]
         rise = None
         if not stated_height and fl.index < len(marks) and nxt.index < len(marks):
             rise = marks[nxt.index] - marks[fl.index]
-        if rise is not None and RISE_RANGE[0] <= rise <= RISE_RANGE[1] and rise - slab >= MIN_WALL:
-            fl.height, fl.height_source = rise - slab, "prospetto"
+        if rise is not None and RISE_RANGE[0] <= rise <= RISE_RANGE[1] and rise - nxt.slab >= MIN_WALL:
+            fl.height, fl.height_source = rise - nxt.slab, "prospetto"
             notes.append(f"Piano {fl.index}: i prospetti danno il piano sopra a {rise:.2f} m: i muri arrivano sotto il solaio "
-                         f"({rise - slab:.2f} m, solaio di {slab * 100:.0f} cm).")
+                         f"({rise - nxt.slab:.2f} m, solaio di {nxt.slab * 100:.0f} cm).")
         else:
-            rise = fl.height + slab
+            rise = fl.height + nxt.slab
         level += rise
+    floors[-1].level = level
     return notes
 
 

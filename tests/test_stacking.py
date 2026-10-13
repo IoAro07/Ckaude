@@ -277,6 +277,19 @@ def test_elevations_that_disagree_on_the_floors_give_no_level():
     assert consensus_levels([]) == [] and consensus_levels([[0.0]]) == []
 
 
+def test_the_slab_the_elevations_draw_replaces_the_default_but_not_a_slab_given():
+    from dwg2c4d.stacking import consensus_slabs
+
+    assert consensus_slabs([[None, 0.4], [None, 0.41], [None, None]]) == [None, pytest.approx(0.405, abs=0.01)]
+    assert consensus_slabs([[None, 0.4], [None, None], [None, None]]) == [None, None]  # one of three: not enough
+    assert consensus_slabs([[None, 0.4], [None, 0.2]]) == [None, None] and consensus_slabs([]) == []
+    base, first = (Floor(i, i + 1, "t", None, Config(wall_height=2.7), []) for i in (0, 1))
+    place_storeys([base, first], [], 0.3, False, [None, 0.4])
+    assert (first.slab, first.level) == (0.4, pytest.approx(3.1))
+    place_storeys([base, first], [], 0.25, False, [None, 0.4])  # the default is replaced by what the sheet draws
+    assert first.slab == 0.4
+
+
 def test_the_slab_stops_under_the_floors_of_the_rooms_and_goes_on_where_they_are_not():
     walls = box(0, 0, 10, 6).difference(box(0.3, 0.3, 9.7, 5.7))
     rooms = box(0.3, 0.3, 9.7, 5.7)

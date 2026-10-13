@@ -53,6 +53,9 @@ EXTENT_REJECT = (0.5, 2.5)  # the width of the elevation against the building al
 EXTENT_SURE = (0.75, 1.5)  # ...inside it the match can be 'alta'
 TITLE_BONUS = 1.0  # a title that says the side of the facade (SUD, NORD...) breaks a tie, once the sheet's north is known
 NORTH_TOLERANCE = 25.0  # degrees: the facade a title points to is the one this close to the expected direction
+SLAB_RANGE = (0.12, 0.60)  # m: a slab drawn in an elevation, two lines (the floor and the soffit of its structure), is this thick
+SLAB_LINE_SHARE = 0.4  # ... and both lines run along this share of the facade at least
+SLAB_TOP = 0.03  # m: the upper line is where the floor level is, this close
 KNOWN_PAIRS = 2  # an elevation the storey below placed is placed on the plan above when this many of its symbols meet openings
 
 SIDE_NAMES = ("est", "nord", "ovest", "sud")  # outward normal at 0, 90, 180, 270 degrees (x to the east, y to the north)
@@ -505,6 +508,19 @@ def _storey_height(vs: ViewSymbols, floor: float, storey: int, band: list[Symbol
     return _eaves(vs, floor, band, span, under_roof)
 
 
+def _slab_under(vs: ViewSymbols, index: int, span: float) -> float | None:
+    """Thickness of the slab under the floor ``index`` of an elevation: a long line at the level of the floor and, just under
+    it, another one (the soffit): the edge of the slab seen from outside. None when the view draws no such pair."""
+    if not 1 <= index < len(vs.levels):
+        return None
+    y = vs.levels[index]
+    wide = [yy for yy, a, b in vs.hlines if b - a >= SLAB_LINE_SHARE * span]
+    if not any(abs(yy - y) <= SLAB_TOP for yy in wide):
+        return None
+    under = [y - yy for yy in wide if SLAB_RANGE[0] <= y - yy <= SLAB_RANGE[1]]
+    return min(under) if under else None
+
+
 def agreed_height(heights: list[tuple[bool, float]]) -> float | None:
     """The height of a storey the elevations agree on: the middle one of those from elevations sure of their facade, else of
     two that show the same height (``SAME_STOREY``). ``heights``: (sure of its facade, the height it shows). None otherwise."""
@@ -708,6 +724,7 @@ def _report_entry(match: ElevationMatch, rd: _Read, side_name: str, done: int, n
             "confidence": match.confidence, "residual": match.residual, "title_hint": match.by_title,
             "north_known": north_known, "extent": match.extent,
             "levels": [round(lv - rd.vs.levels[0], 3) for lv in rd.vs.levels],
+            "slabs": [_slab_under(rd.vs, i, match.facade.span + 1.0) for i in range(len(rd.vs.levels))],
             "normal": match.facade.normal, "shift": match.shift, "storey_height": height}
 
 

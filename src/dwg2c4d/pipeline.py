@@ -15,7 +15,7 @@ from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
 from .model import OTHER_FLOOR, Plan, build_mesh, building_footprint, facing_sign, floor_footprint
-from .stacking import (DEFAULT_SLAB, Floor, Stack, consensus_levels, find_storeys, fit_openings, moved, outline,
+from .stacking import (DEFAULT_SLAB, Floor, Stack, consensus_levels, consensus_slabs, find_storeys, fit_openings, moved, outline,
                        place_storeys, register, stack_mesh, stacking_on)
 from .objwriter import write_obj
 from .glazing import ribbon_windows
@@ -277,7 +277,8 @@ def _stack_storeys(doc, input_path: Path, output_path: Path, cfg: Config, stack:
         if agreed is not None:
             top.height, top.height_source = agreed, "prospetto"
     notes = place_storeys(floors, consensus_levels([e["levels"] for e in elevation_report if e.get("levels")]),
-                          cfg.slab_thickness or DEFAULT_SLAB, not cfg.user.wall_height_auto)
+                          cfg.slab_thickness or DEFAULT_SLAB, not cfg.user.wall_height_auto,
+                          [] if cfg.slab_thickness else consensus_slabs([e["slabs"] for e in elevation_report if e.get("slabs")]))
     fit_openings(floors)
     warnings.extend(notes)
     return floors
