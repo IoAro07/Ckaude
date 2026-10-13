@@ -85,8 +85,11 @@ class Body:
 
     planes: list[int]
     eave_height: float | None = None  # m above the ground floor, where its roof starts
-    eave_source: str = ""  # where it came from: "prospetto" | "predefinita"
+    eave_source: str = ""  # where it came from: "prospetto" | "indicata" | "predefinita"
     storeys: int = 0
+    pitch: float = 0.0  # degrees: its slope (the one of the site, or its own when the elevations measure it: see resolve_pitch)
+    measured_pitch: float | None = None  # degrees, from the rise of its roof in the elevations over its half span
+    level: object | None = None  # the siteelev.RoofLevel of the elevations it was measured on
 
 
 @dataclass
@@ -326,9 +329,21 @@ def find_buildings(hatches: list[Polygon], segs: np.ndarray, overhang: float) ->
 # ------------------------------------------------------------------------------------------------
 # the volumes
 
+def body_outline(building: Building, body: Body) -> BaseGeometry:
+    """The roof of a body as drawn: its planes."""
+    return union(building.planes[i].shape for i in body.planes)
+
+
 def body_shape(building: Building, body: Body) -> BaseGeometry:
     """What a body covers, the walls' outer face: its planes, cut back to the footprint of the building."""
-    return union(building.planes[i].shape for i in body.planes).intersection(building.footprint)
+    return body_outline(building, body).intersection(building.footprint)
+
+
+def half_span(building: Building, body: Body) -> float:
+    """How far the roof of a body runs from its eaves to its ridge: the middle one of the runs of its planes (a hip roof has big
+    and small planes; the middle one is a long side's)."""
+    runs = sorted(max(building.planes[i].run(x, y) for x, y in building.planes[i].shape.exterior.coords) for i in body.planes)
+    return runs[len(runs) // 2]
 
 
 def storeys_default(area: float) -> int:
@@ -355,42 +370,49 @@ def wall_ring(shape: BaseGeometry, thickness: float) -> BaseGeometry:
     return shape.difference(shape.buffer(-thickness, join_style="mitre", mitre_limit=MITRE_LIMIT))
 
 
-def _closed_by_neighbour(building: Building, plane: Plane, heights: dict[int, float], tan: float,
+def _tan(body: Body) -> float:
+    return math.tan(math.radians(body.pitch))
+
+
+def _closed_by_neighbour(building: Building, tans: dict[int, float], heights: dict[int, float],
                          a: tuple[float, float], b: tuple[float, float], own: int) -> bool:
-    """Does another plane run along the edge a-b of ``plane`` at the same height, so that nothing is to be closed there?"""
+    """Does another plane run along the edge a-b of plane ``own`` at the same height, so that nothing is to be closed there?
+    (``tans``: the slope of every plane; ``heights``: where the eaves of its body are.)"""
     edge = LineString([a, b])
+    plane = building.planes[own]
     for j, other in enumerate(building.planes):
         if j == own or not other.shape.buffer(EDGE_MATCH).covers(edge):
             continue
         m = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
-        if all(abs((heights[own] + tan * max(plane.run(*p), 0.0)) - (heights[j] + tan * max(other.run(*p), 0.0))) <= STEP_TOLERANCE
-               for p in (a, m, b)):
+        if all(abs((heights[own] + tans[own] * max(plane.run(*p), 0.0)) - (heights[j] + tans[j] * max(other.run(*p), 0.0)))
+               <= STEP_TOLERANCE for p in (a, m, b)):
             return True
     return False
 
 
-def body_roof(building: Building, body: Body, tan_pitch: float, pitch: tuple[float, str]) -> Roof:
+def body_roof(building: Building, body: Body, source: str) -> Roof:
     """The roof of a body as roof.Roof: heights above its eaves; the sides of the solid along every edge no plane of the
-    same height closes (the eaves, the gables, a lean-to against a higher wall)."""
+    same height closes (the eaves, the gables, a lean-to against a higher wall). ``source``: where the pitch comes from."""
     heights = {i: (b.eave_height or 0.0) for b in building.bodies for i in b.planes}
+    tans = {i: _tan(b) for b in building.bodies for i in b.planes}
     triangles, edges = [], []
     for i in body.planes:
-        plane = building.planes[i]
+        plane, tan = building.planes[i], tans[i]
         for tri in shapely.constrained_delaunay_triangles(plane.shape).geoms:
-            p = [(x, y, tan_pitch * max(plane.run(x, y), 0.0)) for x, y in list(tri.exterior.coords)[:3]]
+            p = [(x, y, tan * max(plane.run(x, y), 0.0)) for x, y in list(tri.exterior.coords)[:3]]
             nz = (p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1])
             if abs(nz) > 1e-12:
                 triangles.append((p[0], p[1], p[2]) if nz > 0 else (p[0], p[2], p[1]))
         for a, b in _edges(plane.shape):
-            if math.dist(a, b) > 1e-6 and not _closed_by_neighbour(building, plane, heights, tan_pitch, a, b, i):
-                edges.append(((a[0], a[1], tan_pitch * max(plane.run(*a), 0.0)), (b[0], b[1], tan_pitch * max(plane.run(*b), 0.0))))
+            if math.dist(a, b) > 1e-6 and not _closed_by_neighbour(building, tans, heights, a, b, i):
+                edges.append(((a[0], a[1], tan * max(plane.run(*a), 0.0)), (b[0], b[1], tan * max(plane.run(*b), 0.0))))
     top = max((p[2] for t in triangles for p in t), default=0.0)
-    return Roof(triangles, edges, [], pitch_deg=math.degrees(math.atan(tan_pitch)), pitch_range=(math.degrees(math.atan(tan_pitch)),) * 2,
-                pitch_source=pitch[1], ridge_height=top, faces=len(body.planes), offset=(0.0, 0.0), ridges_from_elevation=0)
+    return Roof(triangles, edges, [], pitch_deg=body.pitch, pitch_range=(body.pitch, body.pitch), pitch_source=source, ridge_height=top,
+                faces=len(body.planes), offset=(0.0, 0.0), ridges_from_elevation=0)
 
 
-def building_mesh(building: Building, tan_pitch: float, pitch: tuple[float, str], floor_thickness: float,
-                  roof_thickness: float, wall: float, openings: list | None = None) -> Mesh:
+def building_mesh(building: Building, pitch_source: str, floor_thickness: float, roof_thickness: float, wall: float,
+                  openings: list | None = None) -> Mesh:
     """The volumes of one building: the floor slab, the walls of every eaves height (a ring ``wall`` thick round each
     volume: hollow inside, closed by the floor and the roof) and the roof of every body at its own eaves."""
     from .model import wall_slabs
@@ -402,7 +424,7 @@ def building_mesh(building: Building, tan_pitch: float, pitch: tuple[float, str]
     for height, shape in eave_groups(building):
         mesh.add_extrusion("Muri", wall_slabs(wall_ring(shape, wall), cutting, height), bottom=True)
     for body in building.bodies:
-        mesh.add_roof_solid("Tetto", body_roof(building, body, tan_pitch, pitch), z_base=body.eave_height or 0.0, thickness=roof_thickness)
+        mesh.add_roof_solid("Tetto", body_roof(building, body, pitch_source), z_base=body.eave_height or 0.0, thickness=roof_thickness)
     return mesh
 
 
@@ -421,6 +443,7 @@ class Site:
     plan: object | None = None  # a model.Plan of all the walls and openings, for the check picture
     openings: list = field(default_factory=list)
     notes: list[str] = field(default_factory=list)  # what the report says: every guess is one of them
+    matched: list = field(default_factory=list)  # [(building, body, siteelev.RoofLevel, the bands that fit)]: the roofs the elevations show
 
     @property
     def bounds(self) -> tuple[float, float, float, float]:
@@ -443,29 +466,52 @@ def read_buildings(doc, cfg, analysis) -> tuple[list[Building], list]:
     return find_buildings(hatches, analysis.soup.seg * scale, cfg.site_overhang), views
 
 
-def site_pitch(cfg, analysis) -> tuple[float, str]:
-    """(degrees, where it comes from): the slope the user gave, else the one written in the sheet, else the default."""
+def resolve_pitch(buildings: list[Building], cfg, analysis) -> tuple[float, str]:
+    """(the pitch of the site, where it comes from), and the pitch of every body set. The slope the user gave, else the one
+    written in the sheet, both for every body; else what the elevations measure (each body that has a measure keeps its own,
+    the others the middle one); else the default."""
     from .roofview import written_pitch
 
-    if cfg.roof_pitch is not None:
-        return cfg.roof_pitch, "indicata"
+    bodies = [body for b in buildings for body in b.bodies]
     written = written_pitch(analysis)
-    if written is not None:
-        return written[0], "scritta"
-    return cfg.roof_default_pitch, "predefinita"
+    if cfg.roof_pitch is not None:
+        pitch, source = cfg.roof_pitch, "indicata"
+    elif written is not None:
+        pitch, source = written[0], "scritta"
+    elif any(body.measured_pitch is not None for body in bodies):
+        measured = sorted(body.measured_pitch for body in bodies if body.measured_pitch is not None)
+        pitch, source = measured[len(measured) // 2], "prospetto"
+    else:
+        pitch, source = cfg.roof_default_pitch, "predefinita"
+    for body in bodies:
+        body.pitch = body.measured_pitch if source == "prospetto" and body.measured_pitch is not None else pitch
+    return pitch, source
 
 
 def default_heights(building: Building, cfg) -> None:
-    """The eaves height of every body that has none: the one the user gave (--altezza-muri) for all of them, else
-    ``storey_height`` for every storey ``storeys_default`` says."""
+    """The eaves height of every body: the one the user gave (--altezza-muri) for all of them; else the one the elevations
+    measured; else ``storey_height`` for every storey ``storeys_default`` says."""
     for body in building.bodies:
-        if body.eave_height is not None:
-            continue
         if not cfg.wall_height_auto:
             body.eave_height, body.eave_source, body.storeys = cfg.wall_height, "indicata", 0
-            continue
-        body.storeys = storeys_default(body_shape(building, body).area)
-        body.eave_height, body.eave_source = body.storeys * cfg.storey_height, "predefinita"
+        elif body.eave_height is None:
+            body.storeys = storeys_default(body_shape(building, body).area)
+            body.eave_height, body.eave_source = body.storeys * cfg.storey_height, "predefinita"
+        else:
+            body.storeys = max(1, round(body.eave_height / cfg.storey_height))
+
+
+def read_levels(doc, cfg, analysis, buildings: list[Building], warnings: list[str]) -> list:
+    """What the elevations of the sheet say of the buildings (siteelev): the matched bodies have their eaves height and their
+    pitch. An elevation that cannot be read is never the reason the conversion fails. [(building, body, level, bands)]."""
+    from .siteelev import match_levels, read_elevations, roof_bands, roof_levels
+
+    try:
+        levels = roof_levels(roof_bands(analysis, read_elevations(doc, cfg, analysis)))
+        return match_levels(buildings, levels) if levels else []
+    except Exception as exc:
+        warnings.append(f"Altezze dai prospetti non lette ({type(exc).__name__}: {exc}): le gronde sono presunte.")
+        return []
 
 
 def build_site(doc, cfg, analysis, warnings: list[str]) -> Site | None:
@@ -476,22 +522,23 @@ def build_site(doc, cfg, analysis, warnings: list[str]) -> Site | None:
     buildings, views = read_buildings(doc, cfg, analysis)
     if not buildings:
         return None
-    pitch, source = site_pitch(cfg, analysis)
-    site = Site(buildings, [v.id for v in views], pitch, source)
-    tan = math.tan(math.radians(pitch))
+    matched = read_levels(doc, cfg, analysis, buildings, warnings)
+    pitch, source = resolve_pitch(buildings, cfg, analysis)
+    site = Site(buildings, [v.id for v in views], pitch, source, matched=matched)
     for b in buildings:
         default_heights(b, cfg)
-        mesh = building_mesh(b, tan, (pitch, source), cfg.floor_thickness, cfg.roof_thickness, cfg.site_wall, site.openings)
+        mesh = building_mesh(b, source, cfg.floor_thickness, cfg.roof_thickness, cfg.site_wall, site.openings)
         site.mesh.add_mesh(mesh, rename=lambda name, b=b: f"{building_tag(b.id)}_{name}")
     walls = union(wall_ring(shape, cfg.site_wall) for b in buildings for _, shape in eave_groups(b))
     site.plan = Plan(walls=walls, columns=Polygon(), openings=site.openings, merge_tolerance=cfg.merge_tolerance)
-    site.notes.extend(site_notes(site, cfg))
+    site.notes.extend(site_notes(site, cfg, analysis))
     warnings.extend(site.notes)
     return site
 
 
-def site_notes(site: Site, cfg) -> list[str]:
+def site_notes(site: Site, cfg, analysis) -> list[str]:
     """What the report says of the site: how it was read, and every guess, so that it can be checked."""
+    titles = {v.id: (v.titles[0] if v.titles else f"vista {v.id}") for v in analysis.views}
     n = len(site.buildings)
     where = ", ".join(str(v) for v in site.views)
     notes = [f"Modalita' sito: il foglio non ha la pianta di nessun edificio ma la planimetria generale (vista {where}) disegna "
@@ -500,27 +547,31 @@ def site_notes(site: Site, cfg) -> list[str]:
              f"spessi {cfg.site_wall * 100:.0f} cm, chiusi dal pavimento e dal tetto."]
     for b in site.buildings:
         w, h = b.size
-        eaves = sorted({(body.eave_height, body.eave_source, body.storeys) for body in b.bodies})
-        heights = ", ".join(f"{e:g} m" for e, _, _ in eaves)
-        notes.append(f"Edificio {b.id}: tetto {w:.1f} x {h:.1f} m, {len(b.planes)} falde in {len(b.bodies)} corp{'o' if len(b.bodies) == 1 else 'i'}, "
-                     f"gronda a {heights} ({_sources(eaves)}), sporto {b.overhang:.2f} m (presunto: i muri sono il contorno del tetto "
-                     "meno lo sporto).")
-    guessed = [b for b in site.buildings if any(body.eave_source == "predefinita" for body in b.bodies)]
+        notes.append(f"Edificio {b.id}: tetto {w:.1f} x {h:.1f} m, {len(b.planes)} falde in {len(b.bodies)} corp{'o' if len(b.bodies) == 1 else 'i'}; "
+                     f"sporto {b.overhang:.2f} m (presunto: i muri sono il contorno del tetto meno lo sporto).")
+    for b, body, level, bands in site.matched:
+        views = ", ".join(titles[v] for v in sorted({x.view for x in bands}))
+        notes.append(f"Edificio {b.id}, corpo {b.bodies.index(body) + 1}: gronda a {level.eave:.2f} m e colmo a {level.ridge:.2f} m "
+                     f"misurati sui prospetti ({views}), dove il tetto e' lungo {', '.join(f'{x.length:.1f}' for x in bands)} m come i "
+                     "lati del corpo; controlla che sia davvero questo edificio."
+                     + ("" if body.measured_pitch is None else f" Pendenza {body.measured_pitch:.0f} gradi dal rialzo del tetto."))
+    guessed = [f"edificio {b.id}" + (f" (corpo {', '.join(str(k + 1) for k, body in enumerate(b.bodies) if body.eave_source == 'predefinita')})"
+                                    if len(b.bodies) > 1 else "")
+               for b in site.buildings if any(body.eave_source == "predefinita" for body in b.bodies)]
     if guessed:
-        notes.append(f"Altezze di gronda presunte per {', '.join(str(b.id) for b in guessed)}: nessun prospetto le misura; "
+        notes.append(f"Altezze di gronda presunte per {', '.join(guessed)}: nessun prospetto le misura; "
                      f"{cfg.storey_height:g} m a piano, un piano per i corpi piccoli (fino a {SMALL_BODY:.0f} m2), due per gli altri. "
                      "Per darle tu usa --altezza-muri.")
-    if site.pitch_source == "predefinita":
-        notes.append(f"Tetto: nessuna pendenza scritta ne' ricavabile dai prospetti: uso {site.pitch:.0f} gradi (--pendenza per cambiarla).")
-    elif site.pitch_source == "scritta":
-        notes.append(f"Tetto: pendenza {site.pitch:.0f} gradi, quella scritta nel foglio.")
+    if not cfg.wall_height_auto:
+        notes.append(f"Altezza di gronda: {cfg.wall_height:g} m per tutti i corpi, quella che hai indicato (--altezza-muri).")
+    how = {"predefinita": f"nessuna pendenza scritta ne' ricavabile dai prospetti: uso {site.pitch:.0f} gradi (--pendenza per cambiarla)",
+           "scritta": f"pendenza {site.pitch:.0f} gradi, quella scritta nel foglio",
+           "prospetto": f"pendenza dedotta dai prospetti: {site.pitch:.0f} gradi (il rialzo del tetto sulla meta' della sua larghezza)",
+           "indicata": ""}
+    if how[site.pitch_source]:
+        notes.append("Tetto: " + how[site.pitch_source] + ".")
     arrowless = sum(1 for b in site.buildings for p in b.planes if p.how == "gronda")
     if arrowless:
         notes.append(f"Tetto: {arrowless} falde senza freccia di pendenza: la gronda e' il loro lato piu' lungo sul bordo del tetto; "
                      "controlla nell'anteprima 3D che scendano dal lato giusto.")
     return notes
-
-
-def _sources(eaves: list[tuple[float, str, int]]) -> str:
-    how = {"predefinita": "presunta", "indicata": "indicata da te", "prospetto": "misurata sul prospetto"}
-    return ", ".join(sorted({how[src] for _, src, _ in eaves}))

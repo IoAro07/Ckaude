@@ -319,7 +319,7 @@ def _convert_site(doc, output_path: Path, cfg: Config) -> ConversionReport | Non
     """The conversion of a sheet that draws no plan of a building but the roofs of its buildings in a site plan (sitemode):
     volumes and roofs, written as any other conversion. None when the site plan draws no roofs."""
     analysis = cfg.analysis
-    warnings = list(cfg.analysis_notes)
+    warnings = [n for n in cfg.analysis_notes if "non ho capito quale sia la pianta" not in n]  # (there is none, and none is needed)
     site = build_site(doc, cfg, analysis, warnings)
     if site is None:
         return None

@@ -125,8 +125,8 @@ def _site_lines(report) -> list[str]:
            f"{', '.join(str(v) for v in site.views)}), nessuna pianta; ingombro {w:.1f} x {h:.1f} m"]
     for b in site.buildings:
         bw, bh = b.size
-        eaves = sorted({body.eave_height for body in b.bodies})
-        out.append(f"  Edificio {b.id:<11}: tetto {bw:.1f} x {bh:.1f} m, {len(b.planes)} falde in {len(b.bodies)} corp"
+        eaves = sorted({round(body.eave_height, 2) for body in b.bodies})
+        out.append(f"  {f'Edificio {b.id}':<19}: tetto {bw:.1f} x {bh:.1f} m, {len(b.planes)} falde in {len(b.bodies)} corp"
                    f"{'o' if len(b.bodies) == 1 else 'i'}, gronda a {', '.join(f'{e:g}' for e in eaves)} m; "
                    f"porte / finestre {sum(o.kind == 'door' and o.building == b.id for o in report.openings)} / "
                    f"{sum(o.kind == 'window' and o.building == b.id for o in report.openings)}")
