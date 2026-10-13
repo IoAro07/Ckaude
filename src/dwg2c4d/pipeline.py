@@ -36,7 +36,7 @@ from .passages import find_passages, wall_gaps
 from .elevmatch import agreed_height, match_known, match_views, storey_stated
 from .garden import build_garden, place_on_terrain
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
-from .lotfence import build_lot_fence
+from .lotfence import detect_lot_fence, finish_lot_fence, without_fence_layers
 from .floors import extend_to_outer_faces, floor_left_over, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
 from .qa import plan_overlay, preview_3d, write_report
 from .mesh import storey_tag
@@ -110,7 +110,7 @@ def _better_unit(span_m: float, declared: str) -> str | None:
 
 
 SURE_PAIRS = 3  # an elevation that pairs this many symbols with openings of the top storey is sure enough of its facade to give its eaves
-STOREY_OFF = dict(garden=False, roof=False, roof_auto=False, images=False, c4d_json=False, write_table=False,
+STOREY_OFF = dict(garden=False, fences=False, roof=False, roof_auto=False, images=False, c4d_json=False, write_table=False,
                   write_garden_table=False, garden_table_in=None, area=None, roof_area=None, roof_offset=None)  # what an upper storey leaves to the base
 GARDEN_SKIPPED_KINDS = ("elevation", "section", "roof", "detail")  # views whose contents are never garden, even with --area
 PREVIEW_MARGIN = 15.0  # m: the 3D preview shows the terrain this far round the building
@@ -365,6 +365,19 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         warnings.append(f"I layer nominano {len(found)} piani ({', '.join(f'P{n}' for n in found)}): ho letto il "
                         f"piano {found[0]}. Per un altro usa --piano N.")
 
+    lot = None
+    if cfg.fences and not cfg.part:  # the fence of the lot (an upper storey of a stack has none of its own): its layers leave the walls
+        try:
+            lot = detect_lot_fence(doc, cfg, result.unit_scale, [*(tuple(spec[:4]) for spec in cfg.elevations),
+                                                                  *(other_view_boxes(cfg.analysis) if cfg.analysis is not None else [])])
+        except Exception as exc:  # a help: whatever goes wrong in it is never the reason a conversion fails
+            warnings.append(f"Recinzione del lotto non cercata: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; "
+                            "per escluderla usa --no-recinzioni.")
+        result.items, taken = without_fence_layers(result.items, lot, cfg)
+        if taken:
+            warnings.append(f"Recinzione del lotto: i layer {', '.join(taken)} (nomi da muretto o recinzione) non sono letti come muri della "
+                            "casa. Per leggerli come muri usa --no-recinzioni (o indicali con --muri).")
+
     walls, layer_walls, false = _read_walls(result.items, cfg, warnings)
     if walls.is_empty:
         found = sorted({it.layer for it in result.items})
@@ -566,10 +579,8 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             roof_solid = moved(top.plan.solid_walls, top.shift)
     plan.roof, plan.flat_roof, roof_report, flat_roof_report = _build_roof(doc, roof_cfg, result, roof_solid, elevations, warnings)
 
-    lot = None
-    if cfg.fences:
-        skip = [*garden_zones, *(other_view_boxes(cfg.analysis) if cfg.analysis is not None else [])]
-        lot = build_lot_fence(doc, cfg, result.unit, result.unit_scale, footprint, read_zones, skip, warnings)
+    if lot is not None:
+        lot = finish_lot_fence(lot, doc, cfg, result.unit, footprint, read_zones, warnings)
     plan.lot = lot
     garden = None
     if cfg.garden:

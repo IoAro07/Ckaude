@@ -1,19 +1,22 @@
 """The fence of the lot: a low wall with a cap, square pillars, a railing on top, a gate gap, a thin wire fence.
 
-What a lot boundary looks like in a plan, drawn on any layer that is not a wall of the house (the names help, the shapes
-decide): the low wall is a pair of long parallel lines 8-40 cm apart (or one thin closed outline), the pillars are small
-closed squares or circles at its ends and corners and at both sides of a gate, the railing standing on the wall is a pair of
-thin lines 1-4 cm apart along it, the gate is a gap between two pillars, and a thin wire fence is a single long line that
-joins a pillar to another part of the boundary. A pair of lines alone proves nothing (a paving joint, a kerb, a bed edge are
-pairs too): a run is taken for the boundary only when a pillar stands at one of its ends, or a railing runs along it, or the
-name of its layer says what it is (Muretto, Recinzione, Ringhiera...). The same goes for a railing and a pillar.
+What a lot boundary looks like in a plan, drawn on any layer that is not a wall of the house (the shapes decide, the names
+help): the low wall is a pair of long parallel lines 8-40 cm apart (or one thin closed outline), the pillars are small closed
+squares or circles at its ends and corners and at both sides of a gate, the railing that stands on the wall is a pair of thin
+lines 1-4 cm apart along it, the gate is a gap between two pillars, and a thin wire fence is a single long line that joins a
+pillar to the building or to another part of the boundary. A pair of lines alone proves nothing (a paving joint, a kerb, a
+bed edge are pairs too): a run is taken for the boundary only when a pillar stands at one of its ends, or a railing runs along
+it, or the name of its layer says what it is (Muretto, Recinzione, Ringhiera...); a railing and a pillar need the same proofs.
+The layers the names call fence are read whatever else their names say (Muretto is a wall layer for the names, and so would
+be built as a wall of the house): what they give is taken out of the walls.
 
 Heights and design come from the elevation drawn in line with the plan (a front elevation below it): the ground line, the top
 of the wall and its cap, the top of the pillars and their caps, the rails and the spacing of the bars of the railing. What the
-elevation does not give is the default (``DEFAULT_*``) and the report says which it was.
+elevation does not give is a default (``DEFAULT_*``) and the report says which it was.
 
-The result is built as groups of their own (Muretto, Copertina, Pilastri_lotto, Ringhiera, Recinzione_pali, Recinzione_rete): see
-``add_lot_fence``.
+The result is built as groups of their own (Muretto, Copertina, Pilastri_lotto, Ringhiera, Recinzione_pali, Recinzione_rete):
+see ``add_lot_fence``. The pipeline calls ``detect_lot_fence`` before the walls (the layers it takes leave the walls) and
+``finish_lot_fence`` when the building is known (what lies in it is no fence; the wire fences join the building).
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import shapely
 from shapely import affinity
-from shapely.geometry import LineString, MultiPoint, Point, Polygon, box
+from shapely.geometry import LineString, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import linemerge, substring
 from shapely.strtree import STRtree
@@ -33,7 +36,7 @@ from shapely.strtree import STRtree
 from .config import Config
 from .geom import polygons_of, union
 from .mesh import Mesh, Slab
-from .reader import _entity_prims, layer_used, read_items
+from .reader import Item, _entity_prims, layer_used, read_items
 
 LINE_ENTITIES = {"LINE", "LWPOLYLINE", "POLYLINE", "ARC", "CIRCLE"}  # what a boundary is drawn with
 NAME_WORDS = ("murett", "recinz", "ringhier", "cancell", "inferriat", "fence", "railing", "gate", "confin", "boundary")  # layer names that say it
@@ -41,32 +44,37 @@ NAME_WORDS = ("murett", "recinz", "ringhier", "cancell", "inferriat", "fence", "
 WALL_THICKNESS = (0.08, 0.40)  # m: a low wall is drawn as two lines this far apart
 RAIL_GAP = (0.008, 0.04)  # m: a railing is drawn as two thin lines this far apart (closer: one line drawn twice)
 MIN_RUN = 1.5  # m: a run of wall shorter than this is a piece of something else
-MIN_RAIL_RUN = 1.0  # m
+MIN_RAIL_RUN = 1.0  # m: the same for a railing
 SAMPLE = 0.02  # m: spacing of the points at which two lines are compared
 PILLAR_SIDE = (0.12, 0.60)  # m: sides of a closed outline that can be a pillar
 PILLAR_ASPECT = 1.3  # its sides differ by less than this ratio
 TOUCH = 0.05  # m: touching is being this close
 MAX_CHAINS = 3000  # a drawing with more lines than this in the plan is not searched
+MAX_ENTITIES = 400_000  # a drawing with more lines than this in the plan is not looked at
 GATE_GAP = (0.6, 6.0)  # m: the gap between two pillars that is a gate
 WIRE_MIN = 3.0  # m: a single line shorter than this is no fence
-MIN_STRIP_AREA = 0.15  # m2
+MIN_STRIP_AREA = 0.15  # m2: a smaller strip is no wall
+SAME_THICKNESS = 0.03  # m: strips that touch and differ by less than this in thickness are of one boundary
+INSIDE = 0.5  # a strip or a railing with more than this share in the building is no fence
 
 DEFAULT_WALL = 0.80  # m: top of the wall, cap included, above the ground
 DEFAULT_CAP = 0.04  # m: thickness of the cap of the wall
 CAP_OVERHANG = 0.015  # m: the cap is this much wider than the wall at each side
 DEFAULT_PILLAR_RISE = 0.70  # m: the pillars stand this much higher than the wall
-DEFAULT_PILLAR_CAP = 0.04  # m
-PILLAR_CAP_OVERHANG = 0.02  # m
+DEFAULT_PILLAR_CAP = 0.04  # m: thickness of the cap of a pillar
+PILLAR_CAP_OVERHANG = 0.02  # m: the cap of a pillar is this much wider than it at each side
 DEFAULT_RAIL = 0.60  # m: height of the railing over the wall
 DEFAULT_PITCH = 0.12  # m: distance between two bars
 DEFAULT_BAR = 0.012  # m: side of a bar
-RAIL_SECTION = 0.02  # m: side of the rails the elevation does not draw
+RAIL_SECTION = 0.02  # m: side of the rails of a railing
+DEFAULT_FOOT = 0.06  # m: the bottom rail of a railing the elevation does not draw is this far over the wall
 DEFAULT_WIRE = 1.20  # m: height of a wire fence
 WIRE_POST = 0.05  # m: side of the posts of a wire fence
 WIRE_SPAN = 2.5  # m: distance between two posts
 WIRE_MESH = 0.006  # m: thickness of the panel of the mesh
 WIRE_FOOT = 0.10  # m: the mesh begins this far from the ground
 MAX_BARS = 6000  # a railing with more bars than this is built with a bar every two (the faces stay few)
+STEP = 2.0  # m: on sloping ground the rails of a railing step from piece to piece this long
 
 
 @dataclass
@@ -89,23 +97,21 @@ class Profile:
     rail: float = DEFAULT_RAIL  # top of the railing over the wall
     pitch: float = DEFAULT_PITCH
     bar: float = DEFAULT_BAR
-    rails: list[Rail] = field(default_factory=list)
+    rails: list[Rail] = field(default_factory=list)  # the rails the elevation draws
     wire: float = DEFAULT_WIRE
     sources: dict[str, str] = field(default_factory=lambda: {"muretto": "predefinita", "pilastri": "predefinita",
                                                               "ringhiera": "predefinita", "rete": "predefinita"})
 
     def rail_bars(self) -> list[Rail]:
         """The rails of the railing: the ones the elevation draws, else a bottom and a top one."""
-        if self.rails:
-            return self.rails
-        return [Rail(0.06, 0.06 + RAIL_SECTION), Rail(self.rail - RAIL_SECTION, self.rail)]
+        return self.rails or [Rail(DEFAULT_FOOT, DEFAULT_FOOT + RAIL_SECTION), Rail(self.rail - RAIL_SECTION, self.rail)]
 
 
 @dataclass
 class Gate:
     x: float
     y: float
-    width: float
+    width: float  # m, between the pillars
     angle: float  # radians: the direction of the wall it interrupts
 
 
@@ -118,6 +124,7 @@ class LotFence:
     gates: list[Gate] = field(default_factory=list)
     profile: Profile = field(default_factory=Profile)
     layers: set[str] = field(default_factory=set)  # the layers the elements were found on
+    chains: list[tuple[str, LineString]] = field(default_factory=list, repr=False)  # the lines of the plan, for the wire fences
 
     @property
     def empty(self) -> bool:
@@ -130,34 +137,41 @@ class LotFence:
 
     def lengths(self) -> tuple[float, float, float]:
         """(metres of wall, metres of railing, metres of wire fence)."""
-        wall = sum(_axis_length(p) for p in polygons_of(self.walls))
+        wall = sum(_strip_length(p) for p in polygons_of(self.walls))
         return wall, sum(r.length for r in self.railings), sum(w.length for w in self.wires)
 
 
-def _axis_length(strip: Polygon) -> float:
+def _strip_length(strip: Polygon) -> float:
     """The length of a strip of wall: half of its perimeter less its width."""
-    t = 2.0 * strip.area / strip.length if strip.length else 0.0
-    return strip.length / 2.0 - t
+    return strip.length / 2.0 - _thickness(strip)
 
 
 # --- reading the plan ------------------------------------------------------------------------
 
 def name_says_fence(layer: str) -> bool:
+    """Does the name of a layer say it holds a fence (Muretto, Recinzione, Ringhiera, Cancello...)?"""
     return any(t.startswith(NAME_WORDS) for t in re.split(r"[^a-z]+", layer.lower()) if t)
 
 
-def _eligible(cfg: Config, layer: str) -> bool:
-    """Is the linework of the layer looked at: the layers the names call walls, doors, windows, columns... belong to the
-    building, the furniture, the green, the texts and the elevations are no boundary; a name that says fence vouches for a
-    layer that none of those names called, unless the user said which layers are the walls."""
+def _user_layer(cfg: Config, layer: str) -> bool:
+    """Did the user (with --muri, --pilastri...) say what the layer is? The lists the program made itself (the layers the
+    analysis chose, the proposals he accepted) do not count."""
     rules = cfg.layers
-    if name_says_fence(layer):
-        return "wall" not in rules.overrides or not rules.matches("wall", layer)
-    return rules.classify_layer(layer) is None and not rules.vetoed(layer)
+    return any(rules.matches(cat, layer) for cat in rules.overrides
+               if cat not in cfg.proposed and not (cat == "wall" and cfg.walls_guessed))
+
+
+def _eligible(cfg: Config, layer: str) -> bool:
+    """Is the linework of a layer looked at? Not the layers the names call walls, doors, windows, columns... (they are the
+    building), the furniture, the green, the texts, the elevations: unless the name says fence; and never what the user said."""
+    rules = cfg.layers
+    if _user_layer(cfg, layer) or rules.vetoed(layer):
+        return False
+    return name_says_fence(layer) or rules.classify_layer(layer) is None
 
 
 def _rough(e) -> tuple[float, float, float, float] | None:
-    """The box of an entity in drawing units, cheaply (no curves flattened)."""
+    """The box of an entity in drawing units, cheaply (no curve is flattened)."""
     t = e.dxftype()
     try:
         if t == "LINE":
@@ -184,11 +198,10 @@ class Linework:
     rings: list[tuple[str, Polygon]] = field(default_factory=list)  # closed
 
 
-def read_linework(doc, cfg: Config, unit_scale: float, window, skip: list[tuple[float, float, float, float]],
-                  budget: int = 200_000) -> Linework:
-    """The lines, polylines, arcs and circles of the plan (modelspace, drawing units in, metres out) on the layers a boundary
-    can be drawn on. ``window``: the box of the plan (drawing units) or None; ``skip``: boxes of other views (an elevation
-    has pillars and walls too); ``budget``: entities looked at before giving up (a huge site plan)."""
+def read_linework(doc, cfg: Config, unit_scale: float, window, skip: list[tuple[float, float, float, float]]) -> Linework:
+    """The lines, polylines, arcs and circles of the plan (modelspace; drawing units in, metres out) on the layers a boundary can
+    be drawn on. ``window``: the box of the plan (drawing units) or None; ``skip``: boxes of other views (an elevation has
+    pillars and walls too)."""
     out = Linework()
     dist = cfg.arc_tolerance / unit_scale
     seen = 0
@@ -202,7 +215,7 @@ def read_linework(doc, cfg: Config, unit_scale: float, window, skip: list[tuple[
         if not ok[layer]:
             continue
         seen += 1
-        if seen > budget:
+        if seen > MAX_ENTITIES:
             return Linework()
         b = _rough(e)
         if b is None:
@@ -230,6 +243,7 @@ def read_linework(doc, cfg: Config, unit_scale: float, window, skip: list[tuple[
 # --- shapes ----------------------------------------------------------------------------------
 
 def _is_pillar(poly: Polygon) -> bool:
+    """A closed outline the size of a pillar and about as wide as long: a square, a circle."""
     x0, y0, x1, y1 = poly.bounds
     w, h = x1 - x0, y1 - y0
     lo, hi = PILLAR_SIDE
@@ -237,6 +251,7 @@ def _is_pillar(poly: Polygon) -> bool:
 
 
 def _thickness(poly: Polygon) -> float:
+    """Average thickness: 2 * area / perimeter (a strip of width t gives t)."""
     return 2.0 * poly.area / poly.length if poly.length else 0.0
 
 
@@ -273,12 +288,10 @@ def _runs(mask: np.ndarray) -> list[tuple[int, int]]:
 
 
 def _pair_runs(a: LineString, b: LineString, gap: tuple[float, float], min_run: float) -> list[tuple[LineString, LineString, float]]:
-    """The stretches where line ``a`` runs along line ``b`` at a distance within ``gap``: [(part of a, the part of b facing
-    it, the median distance)], each at least ``min_run`` long."""
-    n = max(int(a.length / SAMPLE), 2)
-    at = np.linspace(0.0, a.length, n + 1)
-    pts = shapely.line_interpolate_point(a, at)
-    d = shapely.distance(pts, b)
+    """The stretches where line ``a`` runs along line ``b`` at a distance within ``gap``: [(the part of a, the part of b that
+    faces it, the median distance)], each at least ``min_run`` long."""
+    at = np.linspace(0.0, a.length, max(int(a.length / SAMPLE), 2) + 1)
+    d = shapely.distance(shapely.line_interpolate_point(a, at), b)
     out = []
     for i0, i1 in _runs((d >= gap[0]) & (d <= gap[1])):
         s0, s1 = float(at[i0]), float(at[i1])
@@ -286,7 +299,7 @@ def _pair_runs(a: LineString, b: LineString, gap: tuple[float, float], min_run: 
             continue
         part = substring(a, s0, s1)
         t0, t1 = b.project(Point(part.coords[0])), b.project(Point(part.coords[-1]))
-        if abs(t1 - t0) < min_run * 0.8:
+        if abs(t1 - t0) < 0.8 * min_run:
             continue
         facing = substring(b, min(t0, t1), max(t0, t1))
         if t0 > t1:
@@ -296,7 +309,7 @@ def _pair_runs(a: LineString, b: LineString, gap: tuple[float, float], min_run: 
 
 
 def _ribbon(a: LineString, b: LineString) -> Polygon | None:
-    """The strip between two lines that run side by side: a's points, then b's back."""
+    """The strip between two lines that run side by side: the points of a, then those of b back."""
     poly = Polygon(list(a.coords) + list(b.coords)[::-1])
     if not poly.is_valid:
         poly = poly.buffer(0)
@@ -306,17 +319,24 @@ def _ribbon(a: LineString, b: LineString) -> Polygon | None:
 
 def _midline(a: LineString, b: LineString) -> LineString:
     """The line half way between two lines that run side by side."""
-    n = max(int(a.length / 0.1), 1)
     pts = []
-    for d in np.linspace(0.0, a.length, n + 1):
+    for d in np.linspace(0.0, a.length, max(int(a.length / 0.1), 1) + 1):
         p = a.interpolate(d)
         q = b.interpolate(b.project(p))
         pts.append(((p.x + q.x) / 2.0, (p.y + q.y) / 2.0))
     return LineString(pts).simplify(0.002)
 
 
-def _pairs(chains: list[tuple[str, LineString]], gap: tuple[float, float], min_run: float, closed: BaseGeometry | None = None):
-    """Every stretch where two chains run side by side at a distance within ``gap``: (layer of the first, strip, midline, distance)."""
+@dataclass
+class _Pair:
+    layer: str
+    strip: Polygon
+    axis: LineString
+    distance: float
+
+
+def _pairs(chains: list[tuple[str, LineString]], gap: tuple[float, float], min_run: float) -> list[_Pair]:
+    """Every stretch where two chains run side by side at a distance within ``gap``."""
     if len(chains) > MAX_CHAINS:
         return []
     geoms = [g for _, g in chains]
@@ -326,14 +346,20 @@ def _pairs(chains: list[tuple[str, LineString]], gap: tuple[float, float], min_r
         if a.length < min_run:
             continue
         for j in tree.query(a.buffer(gap[1])):
-            j = int(j)
-            if j <= i or geoms[j].length < min_run:
+            if int(j) <= i or geoms[int(j)].length < min_run:
                 continue
-            for part, facing, dist in _pair_runs(a, geoms[j], gap, min_run):
+            for part, facing, dist in _pair_runs(a, geoms[int(j)], gap, min_run):
                 strip = _ribbon(part, facing)
                 if strip is not None and strip.area >= 0.5 * part.length * dist:
-                    found.append((layer, strip, _midline(part, facing), dist, (part, facing)))
+                    found.append(_Pair(layer, strip, _midline(part, facing), dist))
     return found
+
+
+def _end_sides(strip: Polygon) -> list[LineString]:
+    """The two short sides of a strip (of the box that holds it, turned to fit)."""
+    c = list(shapely.minimum_rotated_rectangle(strip).exterior.coords)[:4]
+    sides = sorted((LineString([c[k], c[(k + 1) % 4]]) for k in range(4)), key=lambda s: s.length)
+    return sides[:2]
 
 
 # --- the elements ----------------------------------------------------------------------------
@@ -344,180 +370,179 @@ class _Strip:
     axis: LineString
     thickness: float
     layer: str
-    lines: tuple[LineString, LineString] | None = None
     sure: bool = False  # a name, a pillar or a railing vouches for it
 
 
-def _end_lines(strip: Polygon) -> list[LineString]:
-    """The two short sides of a strip (as the box that holds it turned to fit)."""
-    rect = shapely.minimum_rotated_rectangle(strip)
-    c = list(rect.exterior.coords)[:4]
-    sides = [LineString([c[k], c[(k + 1) % 4]]) for k in range(4)]
-    sides.sort(key=lambda s: s.length)
-    return sides[:2]
-
-
-def _wall_strips(rings: list[tuple[str, Polygon]], chains: list[tuple[str, LineString]]) -> list[_Strip]:
-    """The wall strips: closed outlines that are thin and long, and the stretches where two lines run side by side 8-40 cm
-    apart. Where strips overlap (three lines make three) the narrowest are kept."""
+def _wall_strips(rings: list[tuple[str, Polygon]], pairs: list[_Pair]) -> list[_Strip]:
+    """The wall strips: thin long closed outlines, and the stretches where two lines run side by side. Where strips overlap
+    (three lines make three) the narrowest are kept."""
     found: list[_Strip] = []
     for layer, poly in rings:
         x0, y0, x1, y1 = poly.bounds
         t = _thickness(poly)
         if WALL_THICKNESS[0] <= t <= WALL_THICKNESS[1] and max(x1 - x0, y1 - y0) >= MIN_RUN and not poly.interiors:
-            axis = LineString([(a + b) / 2.0 for a, b in zip(*[list(s.coords)[:2] for s in _end_lines(poly)])])
-            found.append(_Strip(poly, axis, t, layer))
-    for layer, strip, axis, dist, lines in _pairs(chains, WALL_THICKNESS, MIN_RUN):
-        found.append(_Strip(strip, axis, dist, layer, lines))
+            ends = _end_sides(poly)
+            found.append(_Strip(poly, LineString([ends[0].centroid.coords[0], ends[1].centroid.coords[0]]), t, layer))
+    found.extend(_Strip(p.strip, p.axis, p.distance, p.layer) for p in pairs)
     found.sort(key=lambda s: s.thickness)
     kept: list[_Strip] = []
     covered: BaseGeometry = Polygon()
     for s in found:
-        if s.body.area < MIN_STRIP_AREA:
-            continue
-        if not covered.is_empty and s.body.intersection(covered).area > 0.3 * s.body.area:
+        if s.body.area < MIN_STRIP_AREA or (not covered.is_empty and s.body.intersection(covered).area > 0.3 * s.body.area):
             continue
         kept.append(s)
         covered = covered.union(s.body)
     return kept
 
 
-def _railings(chains: list[tuple[str, LineString]]) -> tuple[list[tuple[str, LineString, tuple]], list[LineString]]:
-    """The railings: stretches where two lines run side by side 1-4 cm apart, [(layer, axis, the two lines)], and the lines that
-    make them up (they are not walls: they leave the pool the wall strips are looked for in)."""
-    found = [(layer, axis, lines) for layer, _, axis, _, lines in _pairs(chains, RAIL_GAP, MIN_RAIL_RUN)]
-    return found, [l for _, _, pair in found for l in pair]
-
-
-def _without_lines(chains: list[tuple[str, LineString]], used: list[LineString]) -> list[tuple[str, LineString]]:
-    """The chains without the stretches covered by ``used`` (the lines of a railing): what is left of a chain after the part
-    that runs along another within a hair is cut out."""
-    if not used:
+def _without_railings(chains: list[tuple[str, LineString]], rails: list[_Pair]) -> list[tuple[str, LineString]]:
+    """The chains without the stretches that make up the railings found (the two lines of a railing are no faces of a wall)."""
+    if not rails:
         return chains
-    cover = union([u.buffer(0.004, cap_style="flat") for u in used])
+    cover = union([r.axis.buffer(RAIL_GAP[1] / 2.0 + 0.005) for r in rails])
     out = []
     for layer, g in chains:
         rest = g.difference(cover)
-        pieces = getattr(rest, "geoms", [rest])
-        out.extend((layer, p) for p in pieces if p.geom_type == "LineString" and p.length > 0)
+        out.extend((layer, p) for p in getattr(rest, "geoms", [rest]) if p.geom_type == "LineString" and p.length > 0)
     return _chains(out)
 
 
-def find(lines: Linework, footprint: BaseGeometry, cfg: Config) -> LotFence | None:
-    """The fence of the lot in the linework of the plan, or None. ``footprint``: the building (metres), where nothing is a fence."""
-    pillars_all = [(layer, p) for layer, p in lines.rings if _is_pillar(p)]
-    thin_rings = [(layer, p) for layer, p in lines.rings if not _is_pillar(p)]
+def detect_lot_fence(doc, cfg: Config, unit_scale: float, skip: list) -> LotFence | None:
+    """The fence of the lot in the plan (the pipeline calls it before the walls are read), or None. ``skip``: boxes (drawing
+    units) of the other views of the sheet. The building is not known yet: ``finish_lot_fence`` takes out what lies in it."""
+    lines = read_linework(doc, cfg, unit_scale, cfg.area, skip)
     chains = _chains(lines.lines)
-    rails, rail_lines = _railings(chains)
-    walls = _wall_strips(thin_rings, _without_lines(chains, rail_lines))
-
-    # the pillars that touch a strip or a railing
-    pillar_polys = [p for _, p in pillars_all]
-    ptree = STRtree(pillar_polys) if pillar_polys else None
+    rails = _pairs(chains, RAIL_GAP, MIN_RAIL_RUN)
+    strips = _wall_strips([(l, p) for l, p in lines.rings if not _is_pillar(p)],
+                          _pairs(_without_railings(chains, rails), WALL_THICKNESS, MIN_RUN))
+    if not strips and not rails:
+        return None
+    candidates = [(layer, p) for layer, p in lines.rings if _is_pillar(p)]
+    tree = STRtree([p for _, p in candidates]) if candidates else None
 
     def pillars_at(geom: BaseGeometry) -> list[int]:
-        return [int(i) for i in ptree.query(geom.buffer(TOUCH))] if ptree is not None else []
+        return [int(i) for i in tree.query(geom.buffer(TOUCH))] if tree is not None else []
 
-    def named(layer: str) -> bool:
-        return name_says_fence(layer)
-
-    for s in walls:
-        ends = _end_lines(s.body)
-        s.sure = named(s.layer) or any(pillars_at(e) for e in ends)
-    rails = [r for r in rails if footprint.is_empty or r[1].intersection(footprint).length < 0.5 * r[1].length]
-    if not walls and not rails:
-        return None
-
-    wall_union = union([s.body for s in walls])
-    kept_rails = []
-    for layer, axis, pair in rails:
-        on_wall = not wall_union.is_empty and axis.intersection(wall_union.buffer(0.01)).length >= 0.8 * axis.length
-        ends = [Point(axis.coords[0]), Point(axis.coords[-1])]
-        at_pillar = any(pillars_at(p) for p in ends)
-        if on_wall or at_pillar or named(layer):
-            kept_rails.append((layer, axis, on_wall))
-    # a strip is sure when a railing runs along it; a railing on a strip that is not sure vouches for it
-    for s in walls:
-        if not s.sure and any(on and s.body.buffer(0.01).contains(axis.interpolate(0.5, normalized=True))
-                              for _, axis, on in kept_rails):
+    for s in strips:
+        s.sure = name_says_fence(s.layer) or any(pillars_at(e) for e in _end_sides(s.body))
+    wall_union = union([s.body for s in strips]).buffer(0.01)
+    railings: list[tuple[str, LineString, bool]] = []  # (layer, axis, stands on a wall)
+    for r in rails:
+        on_wall = not wall_union.is_empty and r.axis.intersection(wall_union).length >= 0.8 * r.axis.length
+        if on_wall or name_says_fence(r.layer) or any(pillars_at(Point(c)) for c in (r.axis.coords[0], r.axis.coords[-1])):
+            railings.append((r.layer, r.axis, on_wall))
+    for s in strips:  # a railing on a strip vouches for it
+        if not s.sure and any(on and s.body.buffer(0.01).contains(axis.interpolate(0.5, normalized=True)) for _, axis, on in railings):
             s.sure = True
-    # strips that touch a sure strip, of about its thickness, are of the same boundary
     changed = True
-    while changed:
+    while changed:  # strips that touch a sure one, of about its thickness, are of the same boundary
         changed = False
-        for s in walls:
-            if s.sure:
-                continue
-            if any(o.sure and abs(o.thickness - s.thickness) <= 0.03 and s.body.distance(o.body) <= TOUCH for o in walls):
+        for s in strips:
+            if not s.sure and any(o.sure and abs(o.thickness - s.thickness) <= SAME_THICKNESS and s.body.distance(o.body) <= TOUCH
+                                  for o in strips):
                 s.sure, changed = True, True
-    walls = [s for s in walls if s.sure]
-    body = union([s.body for s in walls])
-    fence = LotFence(walls=body)
-    fence.layers = {s.layer for s in walls} | {layer for layer, _, _ in kept_rails}
+    strips = [s for s in strips if s.sure]
 
-    chosen = set()
-    for s in walls:
+    chosen = {k for k, (layer, _) in enumerate(candidates) if name_says_fence(layer)}  # a name vouches for a pillar
+    for s in strips:
         chosen.update(pillars_at(s.body))
-    for layer, axis, on_wall in kept_rails:
-        if on_wall or True:
-            chosen.update(pillars_at(axis))
-    fence.pillars = [pillar_polys[i] for i in sorted(chosen)]
-    fence.layers |= {pillars_all[i][0] for i in chosen}
-
-    gates = _gates(fence.pillars, fence.walls)
-    fence.gates = gates
-    leaf = [g for g in gates]
-    gate_boxes = [box(g.x - g.width / 2.0 - TOUCH, g.y - g.width / 2.0 - TOUCH, g.x + g.width / 2.0 + TOUCH,
-                      g.y + g.width / 2.0 + TOUCH) for g in leaf]
-    fence.railings = [axis for _, axis, _ in kept_rails if not any(b.contains(axis) for b in gate_boxes)]
-    fence.wires = _wires(chains, footprint, fence, pillars_at)
+    for _, axis, _ in railings:
+        chosen.update(pillars_at(axis))
+    pillars = [candidates[i][1] for i in sorted(chosen)]
+    fence = LotFence(walls=union([s.body for s in strips]).difference(union(pillars).buffer(0.002)), pillars=pillars, chains=chains)
+    fence.gates = _gates(pillars, fence.walls)
+    leaves = union(_gate_zone(g) for g in fence.gates)
+    fence.railings = [axis for _, axis, _ in railings if leaves.is_empty or not leaves.contains(axis)]  # the leaf of a gate is left open
+    fence.layers = {s.layer for s in strips} | {layer for layer, _, _ in railings} | {candidates[i][0] for i in chosen}
     return None if fence.empty else fence
 
 
 def _gates(pillars: list[Polygon], walls: BaseGeometry) -> list[Gate]:
-    """Gaps between two pillars that face each other along a wall: the wall stops at each and nothing joins them."""
+    """The gaps between two pillars that face each other: the wall stops at each and nothing joins them."""
     out: list[Gate] = []
+    reach = walls.buffer(TOUCH)
     for i, a in enumerate(pillars):
         for b in pillars[i + 1:]:
             ca, cb = a.centroid, b.centroid
             dx, dy = cb.x - ca.x, cb.y - ca.y
-            if abs(dx) > abs(dy):
-                aligned, along = abs(dy) <= TOUCH, dx
-                gap = abs(dx) - (a.bounds[2] - a.bounds[0] + b.bounds[2] - b.bounds[0]) / 2.0
-            else:
-                aligned, along = abs(dx) <= TOUCH, dy
-                gap = abs(dy) - (a.bounds[3] - a.bounds[1] + b.bounds[3] - b.bounds[1]) / 2.0
-            if not aligned or not GATE_GAP[0] <= gap <= GATE_GAP[1]:
+            across_x = abs(dx) > abs(dy)
+            aligned = abs(dy if across_x else dx) <= TOUCH
+            sizes = (a.bounds[2] - a.bounds[0] + b.bounds[2] - b.bounds[0]) if across_x else (a.bounds[3] - a.bounds[1] + b.bounds[3] - b.bounds[1])
+            gap = abs(dx if across_x else dy) - sizes / 2.0
+            if not aligned or not GATE_GAP[0] <= gap <= GATE_GAP[1] or not (reach.intersects(a) and reach.intersects(b)):
                 continue
             between = LineString([(ca.x, ca.y), (cb.x, cb.y)]).difference(a).difference(b)
             if not walls.is_empty and between.intersection(walls).length > 0.1:
                 continue  # a wall joins them: no gate
-            if not (walls.buffer(TOUCH).intersects(a) and walls.buffer(TOUCH).intersects(b)):
-                continue  # the boundary does not run into both
             mid = between.interpolate(0.5, normalized=True)
-            out.append(Gate(mid.x, mid.y, gap, math.atan2(dy, dx) if abs(dx) > abs(dy) else math.pi / 2.0))
+            out.append(Gate(mid.x, mid.y, gap, 0.0 if across_x else math.pi / 2.0))
     return out
 
 
-def _wires(chains: list[tuple[str, LineString]], footprint: BaseGeometry, fence: LotFence, pillars_at) -> list[LineString]:
-    """The thin wire fences: a single straight line of ``WIRE_MIN`` or more that starts at a pillar of the fence and ends at the
-    building or at another part of the boundary, outside the building."""
+def _gate_zone(gate: Gate) -> BaseGeometry:
+    """The box of the gap of a gate (where its leaf is drawn, with a hair around)."""
+    half = gate.width / 2.0 + TOUCH
+    if gate.angle == 0.0:
+        return box(gate.x - half, gate.y - TOUCH, gate.x + half, gate.y + TOUCH)
+    return box(gate.x - TOUCH, gate.y - half, gate.x + TOUCH, gate.y + half)
+
+
+def _wires(fence: LotFence, footprint: BaseGeometry) -> list[LineString]:
+    """The thin wire fences: a single line of ``WIRE_MIN`` or more, straight, that starts at a pillar of the fence and ends at the
+    building or at another part of the boundary (or, on a layer the name calls fence, any long line), outside the building."""
     anchors = union([fence.walls.buffer(TOUCH), *[p.buffer(TOUCH) for p in fence.pillars], footprint.buffer(TOUCH)])
-    mine = {i for i in range(len(fence.pillars))}
+    taken = union([fence.walls.buffer(0.01), *[axis.buffer(0.03) for axis in fence.railings], *[_gate_zone(g) for g in fence.gates]])
     out = []
-    taken = union([fence.walls.buffer(0.01), *[axis.buffer(0.03) for axis in fence.railings]])
-    for layer, g in chains:
-        if g.length < WIRE_MIN or len(g.coords) != 2:
+    for layer, g in fence.chains:
+        if g.length < WIRE_MIN or g.intersection(footprint).length > 0.2 or g.intersection(taken).length > 0.5 * g.length:
             continue
         ends = [Point(g.coords[0]), Point(g.coords[-1])]
-        touches = [any(p.distance(q) <= TOUCH for q in fence.pillars) for p in ends]
-        other = [anchors.contains(p) for p in ends]
-        if not any(touches) or not all(other):
-            continue
-        if g.intersection(footprint).length > 0.2 or g.intersection(taken).length > 0.5 * g.length:
-            continue
-        out.append(g)
+        named = name_says_fence(layer)
+        joined = any(p.distance(q) <= TOUCH for p in ends for q in fence.pillars) and all(anchors.contains(p) for p in ends)
+        if named or (joined and len(g.coords) == 2):
+            out.append(g)
     return out
+
+
+def finish_lot_fence(fence: LotFence, doc, cfg: Config, unit: str, footprint: BaseGeometry, zones: list, warnings: list[str]) -> LotFence | None:
+    """What the fence needs once the building is known: what lies in the building is no fence, the wire fences, the heights and
+    the design from the elevations (``zones``: their boxes in drawing units), the height the user gave. None when nothing is left.
+    It is a help: whatever goes wrong in it is never the reason a conversion fails."""
+    try:
+        if not footprint.is_empty:
+            inside = footprint.buffer(0.02)
+            fence.walls = union([p for p in polygons_of(fence.walls) if p.intersection(inside).area <= INSIDE * p.area])
+            fence.pillars = [p for p in fence.pillars if not inside.contains(p.centroid)]
+            fence.railings = [r for r in fence.railings if r.intersection(inside).length <= INSIDE * r.length]
+        fence.wires = _wires(fence, footprint)
+        if fence.empty:
+            return None
+        read_profile(fence, [read_items(doc, cfg, area=z, ignore_veto=True, keep_other=True, keep_fills=True, unit=unit).items
+                             for z in zones])
+        if cfg.lot_wall_height is not None:
+            prof = fence.profile
+            prof.wall, prof.sources["muretto"] = cfg.lot_wall_height, "indicata"
+            if prof.sources["pilastri"] == "predefinita":
+                prof.pillar = prof.wall + DEFAULT_PILLAR_RISE
+    except Exception as exc:
+        warnings.append(f"Recinzione del lotto non costruita: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; "
+                        "per escluderla usa --no-recinzioni.")
+        return None
+    warnings.append("Recinzione del lotto riconosciuta dalla forma del disegno (coppie di linee parallele a 8-40 cm con un pilastro "
+                    "a un'estremita' o una ringhiera lungo, o su un layer che la nomina; quadrati chiusi come pilastri; due linee "
+                    "sottili come ringhiera; una linea sola che unisce un pilastro alla casa come rete): controlla nella pianta "
+                    "di controllo e, se non lo e', escludila con --no-recinzioni.")
+    return fence
+
+
+def without_fence_layers(items: list[Item], fence: LotFence | None, cfg: Config) -> tuple[list[Item], list[str]]:
+    """(the items without the walls and columns on the layers the names call fence that gave elements of the fence, those layers):
+    a layer called Muretto is a wall layer for the names, and the fence would be built twice."""
+    if fence is None:
+        return items, []
+    layers = sorted({it.layer for it in items if it.layer in fence.layers and name_says_fence(it.layer)
+                     and it.category in ("wall", "column") and not _user_layer(cfg, it.layer)})
+    return [it for it in items if it.layer not in layers], layers
 
 
 # --- the elevation ---------------------------------------------------------------------------
@@ -531,9 +556,12 @@ RAIL_RANGE = (0.2, 2.0)  # m: a railing is this high over the wall
 BAR_SPACING = (0.03, 0.5)  # m: the bars of a railing are this far apart
 BAR_WIDTH = (0.004, 0.04)  # m: the two edges of a bar are this far apart
 MIN_BARS = 5  # fewer bars than this do not tell the spacing
+RAIL_GROUP = 0.03  # m: lines this close above one another are one rail
+PILLAR_TOP = 0.15  # m: the cap of a pillar is looked for this far above the shaft
+MIN_SHAFT = 0.5  # m: a vertical line this long at the foot of a pillar is its shaft
 
 
-def _segments(items: list) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
+def _segments(items: list[Item]) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
     """The horizontal ((y, x0, x1)) and the vertical ((x, y0, y1)) pieces of every line, outline and fill of ``items`` (metres)."""
     horizontal, vertical = [], []
     for it in items:
@@ -564,18 +592,17 @@ def _joined(pieces: list[tuple[float, float, float]]) -> list[tuple[float, float
             by_level.append([piece])
     out: list[tuple[float, float, float]] = []
     for group in by_level:
-        level = group[0][0]
         start = len(out)
         for _, a, b in sorted(group, key=lambda p: p[1]):
             if len(out) > start and a <= out[-1][2] + JOIN:
-                out[-1] = (level, out[-1][1], max(out[-1][2], b))
+                out[-1] = (group[0][0], out[-1][1], max(out[-1][2], b))
             else:
-                out.append((level, a, b))
+                out.append((group[0][0], a, b))
     return out
 
 
 def _grouped(levels: list[float], tol: float) -> list[tuple[float, float]]:
-    """(lowest, highest) of every set of levels that follow each other within ``tol``."""
+    """(lowest, highest) of every set of values that follow each other within ``tol``."""
     out: list[list[float]] = []
     for v in sorted(levels):
         if out and v - out[-1][1] <= tol:
@@ -585,29 +612,20 @@ def _grouped(levels: list[float], tol: float) -> list[tuple[float, float]]:
     return [(a, b) for a, b in out]
 
 
-def _median(values: list[float]) -> float | None:
-    return float(np.median(values)) if values else None
-
-
-def read_profile(fence: LotFence, elevations: list[list]) -> None:
+def read_profile(fence: LotFence, elevations: list[list[Item]]) -> None:
     """Fill ``fence.profile`` with what an elevation drawn in line with the plan says: the ground line, the top of the wall and
     its cap, the top of the pillars and their caps, the rails and the bars of the railing. ``elevations``: the items (hatches
     included) of each elevation, in metres. What it does not say stays as it was (the defaults)."""
-    prof = fence.profile
     runs = [p.bounds for p in polygons_of(fence.walls) if p.bounds[2] - p.bounds[0] >= p.bounds[3] - p.bounds[1]]  # along x: seen in a front view
     pillars = [p.bounds for p in fence.pillars]
-    spans = runs + pillars
-    if not spans:
+    if not runs and not pillars:
         return
-    x_lo, x_hi = min(b[0] for b in spans), max(b[2] for b in spans)
+    x_lo, x_hi = min(b[0] for b in runs + pillars), max(b[2] for b in runs + pillars)
     for items in elevations:
         horizontal, vertical = _segments(items)
         lines = _joined([h for h in horizontal if h[2] >= x_lo - 0.1 and h[1] <= x_hi + 0.1])
-        ground = min((y for y, a, b in lines if b - a >= 0.5 * (x_hi - x_lo)), default=None)
-        if ground is None:
-            continue
-        found = _read_heights(prof, lines, vertical, ground, runs, pillars, bool(fence.railings))
-        if found:
+        ground = min((y for y, a, b in lines if b - a >= 0.5 * (x_hi - x_lo)), default=None)  # the ground line spans the lot
+        if ground is not None and _read_heights(fence.profile, lines, vertical, ground, runs, pillars, bool(fence.railings)):
             return
 
 
@@ -615,45 +633,46 @@ def _read_heights(prof: Profile, lines: list, vertical: list, ground: float, run
     """The part of ``read_profile`` that works on the pieces of one elevation: True when it gave the wall or the pillars."""
     tops, caps = [], []
     for x0, _, x1, _ in pillars:
-        shafts = [y1 for x, y0, y1 in vertical if x0 - 0.05 <= x <= x1 + 0.05 and y0 <= ground + 0.1 and y1 - y0 >= 0.5]
+        shafts = [y1 for x, y0, y1 in vertical if x0 - TOUCH <= x <= x1 + TOUCH and y0 <= ground + 0.1 and y1 - y0 >= MIN_SHAFT]
         if not shafts:
             continue
         shaft = max(shafts)
-        above = [y for y, a, b in lines if shaft < y <= shaft + 0.15 and a >= x0 - 0.1 and b <= x1 + 0.1 and b - a >= 0.5 * (x1 - x0)]
+        above = [y for y, a, b in lines if shaft < y <= shaft + PILLAR_TOP and a >= x0 - 0.1 and b <= x1 + 0.1 and b - a >= 0.5 * (x1 - x0)]
         tops.append(max(above, default=shaft) - ground)
         caps.append(max(above, default=shaft) - shaft)
-    if tops:
-        prof.pillar = _median(tops)
-        prof.sources["pilastri"] = "prospetto"
-        if _median(caps) >= 0.01:
-            prof.pillar_cap = _median(caps)
-    tops_of_runs = []
+    prof_top = float(np.median(tops)) if tops else None
+    wall_tops = []
     for x0, _, x1, _ in runs:
         covering = sorted(y for y, a, b in lines if WALL_RANGE[0] <= y - ground <= WALL_RANGE[1] and a <= x0 + 0.1 and b >= x0 + COVER * (x1 - x0))
         if covering:
             capped = next((y for y in covering if covering[0] < y <= covering[0] + CAP_RANGE), None)
-            tops_of_runs.append((capped or covering[0], capped - covering[0] if capped else 0.0))
-    wall_top = max(tops_of_runs, default=None)  # the highest run: a run whose cap the drawing leaves out is not lower for it
+            wall_tops.append((capped or covering[0], capped - covering[0] if capped else 0.0))
+    wall_top = max(wall_tops, default=None)  # the highest run: a run whose cap the drawing leaves out is not lower for it
     if wall_top is not None:
         prof.wall, prof.sources["muretto"] = wall_top[0] - ground, "prospetto"
         if wall_top[1]:
             prof.cap = wall_top[1]
-        if railing:
-            _read_railing(prof, lines, vertical, wall_top[0], runs)
-    return bool(tops) or wall_top is not None
+    if prof_top is not None:
+        prof.pillar, prof.sources["pilastri"] = prof_top, "prospetto"
+        if float(np.median(caps)) >= 0.01:
+            prof.pillar_cap = float(np.median(caps))
+    elif wall_top is not None:
+        prof.pillar = prof.wall + DEFAULT_PILLAR_RISE  # the pillars stand over the wall that was found, not over the default one
+    if wall_top is not None and railing:
+        _read_railing(prof, lines, vertical, wall_top[0], runs)
+    return prof_top is not None or wall_top is not None
 
 
 def _read_railing(prof: Profile, lines: list, vertical: list, top: float, runs: list) -> None:
     """The rails and the bars of the railing over the wall whose top is at ``top`` (drawing y), in the span of the runs."""
     x0, x1 = min(r[0] for r in runs), max(r[2] for r in runs)
-    band = [y for y, a, b in lines if top + 0.02 < y <= top + RAIL_RANGE[1] and b - a >= COVER * min(r[2] - r[0] for r in runs)]
-    rails = [Rail(a - top, b - top) for a, b in _grouped(band, 0.03)]
+    shortest = min(r[2] - r[0] for r in runs)
+    band = [y for y, a, b in lines if top + 0.02 < y <= top + RAIL_RANGE[1] and b - a >= COVER * shortest]
+    rails = [Rail(a - top, b - top) for a, b in _grouped(band, RAIL_GROUP)]
     if not rails or not RAIL_RANGE[0] <= rails[-1].z1 <= RAIL_RANGE[1]:
         return
-    prof.rails = rails[:4]
-    prof.rail = rails[-1].z1
-    prof.sources["ringhiera"] = "prospetto"
-    edges = sorted(x for x, y0, y1 in vertical if x0 <= x <= x1 and y0 >= top - 0.01 and y1 <= top + prof.rail + 0.01 and y1 - y0 >= 0.05)
+    prof.rails, prof.rail, prof.sources["ringhiera"] = rails[:4], rails[-1].z1, "prospetto"
+    edges = [x for x, y0, y1 in vertical if x0 <= x <= x1 and y0 >= top - 0.01 and y1 <= top + prof.rail + 0.01 and y1 - y0 >= 0.05]
     bars = _grouped(edges, BAR_WIDTH[1])  # the two edges of a bar are one bar
     centres = [(a + b) / 2.0 for a, b in bars]
     gaps = [d for d in np.diff(centres) if BAR_SPACING[0] <= d <= BAR_SPACING[1]]
@@ -672,10 +691,9 @@ def _lift(ground, x: float, y: float) -> float:
 
 
 def _bars(axis: LineString, pitch: float) -> list[tuple[float, float]]:
-    """The places of the bars along a railing: evenly spaced, a half step from each end, at ``pitch`` or a little less."""
+    """The places of the bars along a railing: evenly spaced, half a step from each end, at ``pitch`` or a little less."""
     n = max(int(math.ceil(axis.length / pitch - 1e-9)), 1)
-    points = [axis.interpolate((i + 0.5) * axis.length / n) for i in range(n)]
-    return [(p.x, p.y) for p in points]
+    return [(p.x, p.y) for p in (axis.interpolate((i + 0.5) * axis.length / n) for i in range(n))]
 
 
 def _pieces(axis: LineString, step: float) -> list[LineString]:
@@ -700,14 +718,13 @@ def _laid(mesh: Mesh, ground, group: str, geom: BaseGeometry, z0: float, z1: flo
 
 
 def add_lot_fence(mesh: Mesh, fence: LotFence, cfg: Config, ground=None) -> None:
-    """The wall, its cap, the pillars, the railing and the wire fences as groups of their own. They stand on the ground
-    of the flat model (zero) from the depth of the ground slabs up to the heights of ``fence.profile``; on a terrain
-    (``ground``) the wall and the pillars are laid on it and the railing follows it, stepping from piece to piece."""
+    """The wall, its cap, the pillars, the railing and the wire fences as groups of their own. They stand on the ground of the
+    flat model (zero) from the depth of the ground slabs up to the heights of ``fence.profile``; on a terrain (``ground``) the
+    wall and the pillars are laid on it and the railing follows it, stepping from piece to piece."""
     prof = fence.profile
     top = prof.wall
     cap = min(prof.cap, top / 2.0)
     base = -cfg.garden_thickness
-
     _laid(mesh, ground, "Muretto", fence.walls, 0.0, top - cap, base)
     _laid(mesh, ground, "Copertina", fence.walls.buffer(CAP_OVERHANG, join_style="mitre").difference(union(fence.pillars)),
           top - cap, top, base)
@@ -726,12 +743,10 @@ def add_lot_fence(mesh: Mesh, fence: LotFence, cfg: Config, ground=None) -> None
     bar_top = (top_rail.z0 + top_rail.z1) / 2.0  # the bars end inside the top rail
     half = prof.bar / 2.0
     for axis in fence.railings:
-        for piece in (_pieces(axis, 2.0) if ground is not None else [axis]):
-            ends = [piece.interpolate(d) for d in (0.0, piece.length / 2.0, piece.length)]
-            z = top + max(_lift(ground, p.x, p.y) for p in ends)  # the rails are level on the highest ground under them
-            for r in rails:
-                mesh.add_extrusion("Ringhiera", [Slab(z + r.z0, z + r.z1,
-                                                      piece.buffer(RAIL_SECTION / 2.0, cap_style="flat", join_style="mitre"))])
+        for piece in (_pieces(axis, STEP) if ground is not None else [axis]):
+            z = top + max(_lift(ground, p.x, p.y) for p in (piece.interpolate(d) for d in (0.0, piece.length / 2.0, piece.length)))
+            for r in rails:  # level on the highest ground under the piece
+                mesh.add_extrusion("Ringhiera", [Slab(z + r.z0, z + r.z1, piece.buffer(RAIL_SECTION / 2.0, cap_style="flat", join_style="mitre"))])
             for x, y in _bars(piece, pitch):
                 mesh.add_extrusion("Ringhiera", [Slab(top + _lift(ground, x, y), z + bar_top, box(x - half, y - half, x + half, y + half))])
 
@@ -739,52 +754,28 @@ def add_lot_fence(mesh: Mesh, fence: LotFence, cfg: Config, ground=None) -> None
         n = max(int(math.ceil(axis.length / WIRE_SPAN - 1e-9)), 1)
         for i in range(n + 1):
             p = axis.interpolate(i * axis.length / n)
-            g = _lift(ground, p.x, p.y)
-            mesh.add_extrusion("Recinzione_pali", [Slab(base + g, prof.wire + g, box(p.x - WIRE_POST / 2.0, p.y - WIRE_POST / 2.0,
-                                                                                    p.x + WIRE_POST / 2.0, p.y + WIRE_POST / 2.0))])
+            g, h = _lift(ground, p.x, p.y), WIRE_POST / 2.0
+            mesh.add_extrusion("Recinzione_pali", [Slab(base + g, prof.wire + g, box(p.x - h, p.y - h, p.x + h, p.y + h))])
         g = _lift(ground, *axis.coords[0])
-        mesh.add_extrusion("Recinzione_rete", [Slab(WIRE_FOOT + g, prof.wire + g,
-                                                    axis.buffer(WIRE_MESH / 2.0, cap_style="flat", join_style="mitre"))])
+        mesh.add_extrusion("Recinzione_rete", [Slab(WIRE_FOOT + g, prof.wire + g, axis.buffer(WIRE_MESH / 2.0, cap_style="flat", join_style="mitre"))])
 
 
 def summary(fence: LotFence) -> str:
-    """The line of the report: what was found and where the heights come from."""
+    """The line of the report: what was found, and where the heights come from."""
     wall, rail, wire = fence.lengths()
+    prof = fence.profile
     parts = []
     if wall >= 0.1:
-        parts.append(f"{wall:.1f} m di muretto alto {fence.profile.wall:.2f} m ({fence.profile.sources['muretto']})")
+        parts.append(f"{wall:.1f} m di muretto alto {prof.wall:.2f} m ({prof.sources['muretto']})")
     if fence.pillars:
-        parts.append(f"{len(fence.pillars)} pilastri alti {fence.profile.pillar:.2f} m ({fence.profile.sources['pilastri']})")
+        parts.append(f"{len(fence.pillars)} pilastri alti {prof.pillar:.2f} m ({prof.sources['pilastri']})")
     if rail >= 0.1:
-        parts.append(f"{rail:.1f} m di ringhiera alta {fence.profile.rail:.2f} m sul muretto, "
-                     f"un montante ogni {fence.profile.pitch * 100:.0f} cm ({fence.profile.sources['ringhiera']})")
+        parts.append(f"{rail:.1f} m di ringhiera alta {prof.rail:.2f} m sul muretto, un montante ogni {prof.pitch * 100:.0f} cm "
+                     f"({prof.sources['ringhiera']})")
     if wire >= 0.1:
-        parts.append(f"{wire:.1f} m di rete alta {fence.profile.wire:.2f} m ({fence.profile.sources['rete']})")
+        parts.append(f"{wire:.1f} m di rete alta {prof.wire:.2f} m ({prof.sources['rete']})")
     if fence.gates:
-        widths = ", ".join(f"{g.width:.2f} m" for g in fence.gates)
-        parts.append(f"{len(fence.gates)} cancell{'o' if len(fence.gates) == 1 else 'i'} ({widths}) lasciat{'o' if len(fence.gates) == 1 else 'i'} apert{'o' if len(fence.gates) == 1 else 'i'}")
+        one = len(fence.gates) == 1
+        parts.append(f"{len(fence.gates)} cancell{'o' if one else 'i'} ({', '.join(f'{g.width:.2f} m' for g in fence.gates)}) "
+                     f"lasciat{'o' if one else 'i'} apert{'o' if one else 'i'}")
     return ", ".join(parts)
-
-
-def build_lot_fence(doc, cfg: Config, unit: str, unit_scale: float, footprint: BaseGeometry, zones: list, skip: list,
-                    warnings: list[str]) -> LotFence | None:
-    """The fence of the lot of the plan, or None. ``zones``: the boxes (drawing units) of the elevations drawn in line with the
-    plan, where the heights are read; ``skip``: boxes of the other views of the sheet. It is a help: whatever goes wrong in it is
-    never the reason a conversion fails."""
-    try:
-        fence = find(read_linework(doc, cfg, unit_scale, cfg.area, skip), footprint, cfg)
-        if fence is None:
-            return None
-        read_profile(fence, [read_items(doc, cfg, area=z, ignore_veto=True, keep_other=True, keep_fills=True, unit=unit).items
-                             for z in zones])
-        if cfg.lot_wall_height is not None:
-            fence.profile.wall, fence.profile.sources["muretto"] = cfg.lot_wall_height, "indicata"
-    except Exception as exc:
-        warnings.append(f"Recinzione del lotto non costruita: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; "
-                        "per escluderla usa --no-recinzioni.")
-        return None
-    warnings.append("Recinzione del lotto riconosciuta dalla forma del disegno (coppie di linee parallele a 8-40 cm con un pilastro "
-                    "a un'estremita', o con una ringhiera lungo, o su un layer che la nomina; quadrati chiusi come pilastri; "
-                    "due linee sottili come ringhiera; una linea sola che unisce un pilastro alla casa come rete): controlla nella "
-                    "pianta di controllo e, se non lo e', escludila con --no-recinzioni.")
-    return fence
