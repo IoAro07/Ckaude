@@ -207,9 +207,9 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
 
 def _build_terrain(doc, cfg: Config, result, solid: BaseGeometry, columns: BaseGeometry, garden,
                    warnings: list[str]):
-    """The terrain from the contour lines of the sheet (terrain.py), or None. Nothing the user did not ask for when the plan
-    converted is a site plan (--vista on the survey): the ground is its own drawing then. It is a help: whatever goes wrong
-    in it is never the reason a conversion fails."""
+    """The terrain from the contour lines of the sheet (terrain.py), or None. None as well when the plan converted is a site
+    plan the user asked for (--vista on it): all its linework would be taken for a building and flattened, unless --terreno.
+    It is a help: whatever goes wrong in it is never the reason a conversion fails."""
     if not cfg.terrain and cfg.analysis is not None and site_plan_asked(cfg.analysis, cfg):
         return None
     footprint = building_footprint(solid)
