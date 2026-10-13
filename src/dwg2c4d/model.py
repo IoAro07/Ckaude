@@ -17,7 +17,7 @@ from .fixtures import add_fixtures
 from .garden import add_garden
 from .mesh import Mesh, Slab
 from .openings import Opening
-from .roof import Roof
+from .roof import FlatRoof, Roof
 from .walls import clean_footprint
 
 SLIVER = 0.004  # wall remnants thinner than 2*SLIVER next to an opening are removed
@@ -32,6 +32,7 @@ class Plan:
     openings: list[Opening] = field(default_factory=list)
     merge_tolerance: float = 0.01
     roof: Roof | None = None
+    flat_roof: FlatRoof | None = None  # slabs (and a parapet) on the walls: the roofs the roof plan draws with no ridge
     floors: list[tuple[str, BaseGeometry]] = field(default_factory=list)  # (name, shape): one object each
     skirting: BaseGeometry = field(default_factory=Polygon)
     partitions: BaseGeometry = field(default_factory=Polygon)  # the thin walls, apart from the main walls
@@ -181,6 +182,13 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
 
     if plan.roof is not None:
         mesh.add_roof_solid("Tetto", plan.roof, z_base=cfg.wall_height, thickness=cfg.roof_thickness)
+    if plan.flat_roof is not None:
+        flat = plan.flat_roof
+        top = cfg.wall_height + flat.thickness
+        slabs = [Slab(cfg.wall_height, top, flat.slab)]
+        if flat.parapet is not None:
+            slabs.append(Slab(top, top + flat.parapet_height, flat.parapet))
+        mesh.add_extrusion("Copertura", slabs, bottom=True)
 
     if not plan.skirting.is_empty:
         mesh.add_extrusion("Battiscopa", [Slab(0.0, cfg.skirting_height, plan.skirting)], bottom=False)

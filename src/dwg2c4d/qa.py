@@ -70,6 +70,12 @@ def summary_lines(report) -> list[str]:
         view = f", dalla vista {r['view']} della copertura (sporto {r['overhang']:.2f} m)" if r.get("view") else ""
         out.append(f"  Tetto              : {r['faces']} falde, pendenza {slope} gradi "
                    f"({how[r['pitch_source']]}), colmo a {r['ridge_height']:.2f} m{view}")
+    if report.flat_roof:
+        f = report.flat_roof
+        parapet = (f", parapetto alto {f['parapet_height']:.2f} m ({'dal prospetto' if f['parapet_source'] == 'prospetto' else 'presunto'})"
+                   if f["parapet_height"] is not None else "")
+        out.append(f"  Tetto piano        : {f['bodies']} corp{'o' if f['bodies'] == 1 else 'i'}, {f['area_m2']:.0f} m2, lastra di "
+                   f"{f['thickness'] * 100:.0f} cm{parapet}, dalla vista {f['view']} della copertura")
     if report.columns:
         out.append(f"  Pilastri           : {report.columns}")
     if report.garden is not None:

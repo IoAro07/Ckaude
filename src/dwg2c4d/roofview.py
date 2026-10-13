@@ -27,12 +27,19 @@ from shapely.ops import polygonize, unary_union
 from .config import LayerRules
 from .geom import polygons_of, union
 from .reader import Item, Prim
+from .roof import FlatBody
 from .walls import _key, closure_segments, thinness
 
 if TYPE_CHECKING:
-    from .roof import Roof
+    from .roof import FlatRoof, Roof
 
 # --- cleaning ---
+PARAPET_INSET = 0.4  # m: a loop this close inside the edge of a flat roof is the inner face of its parapet, not a wall
+PARAPET_WIDTH = 0.6  # m: a strip around a flat roof is a parapet (or a rib) when it is no thicker than this
+RIM_SHARE = 0.6  # ... and the strips run along this share of the edge of the roof
+MIN_PLANE_DEPTH = 1.2  # m: a plane thinner than this is a strip (a gutter, a step), not a slope of a pitched roof
+SHARED_EDGE = 0.3  # m: two planes that share an edge this long meet along a ridge, a hip or a valley
+MIN_STRIP = 0.05  # m2: a strip smaller than this is a sliver of the drawing, not a gutter or a parapet
 MIN_ROOF_AREA = 4.0  # m2: a closed outline smaller than this is a skylight, a chimney or a panel, not a roof
 FASCIA = 0.30  # m: a closed outline thinner than this is a gutter or a fascia board along the eaves
 OUT_TOLERANCE = 0.30  # m: a line that goes further than this beyond the outline is a dimension or a section mark
@@ -117,12 +124,28 @@ class _Part:
 
 @dataclass
 class CleanRoof:
-    """What is left of a roof view after cleaning: roof items (lines only) in the frame of the sheet, the outline of the
-    roof (the union of its planes) and, when the view draws the wall under the eaves, how far the eaves reach."""
+    """What is left of a roof view after cleaning: the planes of the roof (polygons, in the frame of the sheet), told apart
+    into those of pitched roofs (planes that meet along a ridge, a hip or a valley, or that lie under tiles) and those of
+    flat roofs; the strips between and around the planes (gutters, parapets, ribs); and, when the view draws the wall
+    under the eaves, how far the eaves reach."""
 
-    items: list[Item]
-    outline: BaseGeometry
+    pitched: list[Polygon]
+    flat: list[Polygon]
+    thin: list[Polygon]
     overhang: float | None
+
+    @property
+    def outline(self) -> BaseGeometry:
+        return union([*self.pitched, *self.flat])
+
+    def pitched_items(self) -> list[Item]:
+        """The edges of the planes of the pitched roofs, as the lines roof.build_roof reads."""
+        lines = [LineString(ring.coords) for plane in self.pitched for ring in (plane.exterior, *plane.interiors)]
+        return [Item("0", None, "roof", [Prim(l, "line") for l in lines])] if lines else []
+
+    def all_lines(self) -> BaseGeometry:
+        return unary_union([LineString(ring.coords) for plane in (*self.pitched, *self.flat)
+                            for ring in (plane.exterior, *plane.interiors)])
 
 
 def _parts(items: list[Item]) -> list[_Part]:
@@ -169,11 +192,13 @@ def _pieces(geom: BaseGeometry) -> list[LineString]:
     return [g for g in getattr(geom, "geoms", [geom]) if isinstance(g, LineString) and g.length > 0]
 
 
-def _faces(lines: list[LineString]) -> list[Polygon]:
-    """The closed planes the lines make (thin strips, gutters and slivers left out)."""
+def _faces(lines: list[LineString], thin: bool = False) -> list[Polygon]:
+    """The closed planes the lines make (thin strips, gutters and slivers left out; with ``thin`` only those)."""
     segs = _pieces(unary_union(lines))
     network = unary_union(segs + closure_segments(segs, CLOSE_GAP))
-    return [f for f in polygonize(network) if f.area >= MIN_ROOF_AREA and thinness(f) >= FASCIA]
+    faces = [f for f in polygonize(network) if f.area >= MIN_STRIP]
+    plane = [f.area >= MIN_ROOF_AREA and thinness(f) >= FASCIA for f in faces]
+    return [f for f, is_plane in zip(faces, plane) if is_plane != thin]
 
 
 def _outline(parts: list[_Part]) -> BaseGeometry:
@@ -224,12 +249,15 @@ def _components(lines: list[LineString]) -> list[list[LineString]]:
     return list(groups.values())
 
 
-def clean_roof(items: list[Item]) -> CleanRoof | None:
+def clean_roof(items: list[Item], tiles: list[tuple[float, float]] = ()) -> CleanRoof | None:
     """The roof structure of a roof view: its outline and its ridge, hip and valley lines. Out go the layers of
     dimensions, texts, section marks and tile patterns; small closed outlines (skylights, chimneys, panels) and strips
     (gutters); the wall line that runs inside the outline all round (that is the wall under the eaves: it tells the
     overhang, it is no roof line); everything that goes beyond the outline (dimensions, section lines); the lines that
-    end in the air (arrows); and a closed shape lying inside a plane of another (a panel array)."""
+    end in the air (arrows); and a closed shape lying inside a plane of another (a panel array).
+
+    The planes that are left are told apart: pitched roofs (planes that meet along a ridge, a hip or a valley, or with a
+    hatch of tiles in them: ``tiles`` are where such hatches lie, metres) and flat roofs (a plane alone)."""
     parts = _parts(items)
     if not parts:
         return None
@@ -239,7 +267,7 @@ def clean_roof(items: list[Item]) -> CleanRoof | None:
     if outline.is_empty:
         return None
     grown = outline.buffer(OUT_TOLERANCE)
-    overhang: float | None = None
+    insets: list[tuple[Polygon, float]] = []  # loops that run inside the outline all round, and how far inside
     kept: list[LineString] = []
     for p in parts:
         loop = _loop(p)
@@ -248,7 +276,7 @@ def clean_roof(items: list[Item]) -> CleanRoof | None:
                 continue
             inset = _eaves_inset(loop, outline)
             if inset is not None:
-                overhang = inset if overhang is None else min(overhang, inset)
+                insets.append((loop, inset))
                 continue
         if p.line.difference(grown).length > 1e-6:
             ends = [Point(p.line.coords[0]), Point(p.line.coords[-1])]
@@ -273,8 +301,71 @@ def clean_roof(items: list[Item]) -> CleanRoof | None:
                          for j, (_, other) in enumerate(groups) for plane in other)]
     if not groups:
         return None
-    lines = [l for comp, _ in groups for l in comp]
-    return CleanRoof([Item("0", None, "roof", [Prim(l, "line") for l in lines])], union(p for _, planes in groups for p in planes), overhang)
+    planes = [p for _, group in groups for p in group]
+    thin = [p for comp, _ in groups for p in _faces(comp, thin=True)]
+    pitched, flat = _sort_planes(planes, tiles)
+    under, flat_region = union(pitched).buffer(OUT_TOLERANCE), union(flat).buffer(1e-6)
+    overhang = min((d for loop, d in insets if under.covers(loop)), default=None)  # the wall under the eaves of a pitched roof
+    for loop, d in insets:  # ... but on a flat roof a loop that close to the edge is the inner face of the parapet
+        if d <= PARAPET_INSET and not under.covers(loop) and flat_region.covers(loop):
+            thin.extend(polygons_of(polygon_of(flat_region, loop).difference(loop)))
+    return CleanRoof(pitched, flat, thin, overhang)
+
+
+def polygon_of(region: BaseGeometry, inside: Polygon) -> BaseGeometry:
+    """The polygon of ``region`` that holds ``inside``."""
+    return next((p for p in polygons_of(region) if p.covers(inside)), region)
+
+
+def _sort_planes(planes: list[Polygon], tiles: list[tuple[float, float]]) -> tuple[list[Polygon], list[Polygon]]:
+    """(the planes of pitched roofs, the planes of flat roofs). Planes that share an edge (a ridge, a hip, a valley) are one
+    pitched roof; a plane alone is flat unless a hatch of tiles lies in it."""
+    from shapely.strtree import STRtree
+
+    tree = STRtree(planes)
+    group = list(range(len(planes)))
+
+    def find(k: int) -> int:
+        while group[k] != k:
+            group[k] = group[group[k]]
+            k = group[k]
+        return k
+
+    meets = [False] * len(planes)
+    broad = [_depth(p) >= MIN_PLANE_DEPTH for p in planes]  # a strip beside a roof is no plane of it
+    for i, plane in enumerate(planes):
+        for j in tree.query(plane.buffer(1e-4)):
+            if j > i and broad[i] and broad[int(j)] and plane.boundary.intersection(planes[j].boundary).length >= SHARED_EDGE:
+                group[find(i)] = find(int(j))
+                meets[i] = meets[int(j)] = True
+    tiled = [any(plane.buffer(OUT_TOLERANCE).covers(Point(t)) for t in tiles) for plane in planes]
+    pitched = [meets[i] or tiled[i] for i in range(len(planes))]
+    for i in range(len(planes)):  # a plane that shares an edge with a pitched one is part of that roof
+        pitched[find(i)] = pitched[find(i)] or pitched[i]
+    return [p for i, p in enumerate(planes) if pitched[find(i)]], [p for i, p in enumerate(planes) if not pitched[find(i)]]
+
+
+def _depth(plane: Polygon) -> float:
+    """The shorter side of the smallest rectangle that holds the plane."""
+    c = list(shapely.minimum_rotated_rectangle(plane).exterior.coords)
+    return min(math.dist(c[0], c[1]), math.dist(c[1], c[2]))
+
+
+def flat_bodies(clean: CleanRoof) -> list[FlatBody]:
+    """The flat roofs of a roof plan, each a slab: planes joined by the strips between them (a double line between two
+    bays), and the strips as a parapet when they run along most of the edge of the roof (a double line along it is a
+    raised edge, across it the ribs between the bays)."""
+    if not clean.flat:
+        return []
+    near = [t for t in clean.thin if any(t.buffer(CLOSE_GAP).intersects(p) for p in clean.flat)]
+    whole = union([*clean.flat, *near]).buffer(CLOSE_GAP, join_style="mitre").buffer(-CLOSE_GAP, join_style="mitre")
+    bodies = []
+    for slab in polygons_of(whole):
+        band = union(t for t in near if t.intersects(slab) and thinness(t) <= PARAPET_WIDTH)
+        edge = slab.boundary
+        along = edge.intersection(band.buffer(1e-3)).length / edge.length if not band.is_empty and edge.length else 0.0
+        bodies.append(FlatBody(slab, band if along >= RIM_SHARE else None))
+    return bodies
 
 
 # ------------------------------------------------------------------------------------------------
@@ -435,7 +526,8 @@ def _registration(result: tuple, building: BaseGeometry, tied: list[tuple] = ())
 class ViewRoof:
     """A roof plan found in a view of the sheet and laid over the plan: its roof items in the frame of the plan."""
 
-    items: list[Item]
+    items: list[Item]  # the lines of the pitched roofs
+    flats: list[FlatBody]  # the flat roofs
     view: int
     registration: Registration
     overhang: float | None  # m: from the wall line the view draws under the eaves, else from the registration
@@ -472,6 +564,14 @@ def written_pitch(analysis) -> tuple[float, str] | None:
     return pitch_from_texts(texts)
 
 
+def _tile_points(analysis, scale: float) -> list[tuple[float, float]]:
+    """The middles (metres) of the hatches of the sheet that are roof tiles (COPPI, TEGOLE, shingles...)."""
+    from .autodetect import TILE_PATTERNS
+
+    return [((h["bbox"][0] + h["bbox"][2]) / 2 * scale, (h["bbox"][1] + h["bbox"][3]) / 2 * scale)
+            for h in analysis.soup.hatches if any(t in h["pattern"].upper() for t in TILE_PATTERNS)]
+
+
 def roof_views(analysis) -> list:
     """The views of the sheet that are roof plans, the biggest first."""
     return sorted((v for v in analysis.views if v.kind == "roof" and v is not analysis.plan), key=lambda v: -v.cells)[:MAX_VIEWS]
@@ -495,10 +595,11 @@ def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale:
     best: ViewRoof | None = None
     worst: Registration | None = None
     empty = 0
+    tiles = _tile_points(analysis, scale)
     for v in views:
         x0, y0, x1, y1 = (c * scale for c in v.bbox)
         mine = [it for it, b in zip(read.items, bounds) if x0 <= (b[0] + b[2]) / 2 <= x1 and y0 <= (b[1] + b[3]) / 2 <= y1]
-        clean = clean_roof(mine)
+        clean = clean_roof(mine, [t for t in tiles if x0 <= t[0] <= x1 and y0 <= t[1] <= y1])
         if clean is None:
             empty += 1
             continue
@@ -506,12 +607,13 @@ def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale:
         if reg is None or not reg.sound:
             worst = reg if worst is None or (reg is not None and reg.iou > worst.iou) else worst
             continue
-        placed = [Item(it.layer, None, "roof", [Prim(place(p.geom, reg), p.kind) for p in it.prims]) for it in clean.items]
-        drawn = unary_union([p.geom for it in clean.items for p in it.prims])
+        placed = [Item("0", None, "roof", [Prim(place(p.geom, reg), "line") for p in it.prims]) for it in clean.pitched_items()]
+        flats = [FlatBody(place(f.slab, reg), place(f.parapet, reg) if f.parapet is not None else None) for f in flat_bodies(clean)]
+        drawn = clean.all_lines()
         ambiguous = any(place(drawn, alt).difference(place(drawn, reg).buffer(SAME_LINES)).length > 0.02 * drawn.length
                         for alt in reg.alternatives)
         bx0, by0, bx1, by1 = clean.outline.bounds
-        found = ViewRoof(placed, v.id, reg, clean.overhang if clean.overhang is not None else reg.overhang,
+        found = ViewRoof(placed, flats, v.id, reg, clean.overhang if clean.overhang is not None else reg.overhang,
                          (bx1 - bx0, by1 - by0), ambiguous)
         if best is None or reg.iou > best.registration.iou:
             best = found
@@ -530,7 +632,7 @@ def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale:
     return None
 
 
-def view_roof_notes(found: ViewRoof, roof: "Roof", pitch: tuple[float, str] | None, elevations: list,
+def view_roof_notes(found: ViewRoof, roof: "Roof | None", pitch: tuple[float, str] | None, elevations: list,
                     wall_height: float) -> list[str]:
     """What the report tells about a roof taken from a view: where it came from, how it was put on the plan, the slope,
     and the storeys the elevations show that the plan does not. Every one of these is a reading of the drawing, not
@@ -550,14 +652,27 @@ def view_roof_notes(found: ViewRoof, roof: "Roof", pitch: tuple[float, str] | No
                      "simmetrica) e i colmi cambierebbero di posto: ho scelto "
                      + ("quella non ruotata" if reg.turns == 0 and not reg.mirror else "quella che copre meglio i corpi del tetto")
                      + "; controlla nell'anteprima 3D che i corpi del tetto stiano dal lato giusto.")
-    if roof.pitch_source == "scritta" and pitch:
+    if roof is not None and roof.pitch_source == "scritta" and pitch:
         notes.append(f"Tetto: pendenza {roof.pitch_deg:.0f} gradi, quella scritta nel foglio ({pitch[1]}).")
-    elif roof.pitch_source == "predefinita":
+    elif roof is not None and roof.pitch_source == "predefinita":
         notes.append(f"Tetto: nessuna pendenza scritta ne' ricavabile dai prospetti: uso {roof.pitch_deg:.0f} gradi (--pendenza per "
                      "cambiarla).")
+    rise = roof.ridge_height if roof is not None else 0.0
     top = max((y - ev.zero for ev in elevations for y, _, _ in ev.hlines), default=0.0)
-    if top > wall_height + roof.ridge_height + STOREY_SLACK:
+    if top > wall_height + rise + STOREY_SLACK:
         notes.append(f"Tetto: i prospetti arrivano a {top:.1f} m sopra il pavimento, il tetto che ho costruito a "
-                     f"{wall_height + roof.ridge_height:.1f} m: mostrano piu' piani di quello convertito. Il tetto e' posato sui muri "
+                     f"{wall_height + rise:.1f} m: mostrano piu' piani di quello convertito. Il tetto e' posato sui muri "
                      f"di questo piano ({wall_height:g} m), non su quelli dei piani sopra, che non sono modellati.")
+    return notes
+
+
+def flat_roof_notes(flat: "FlatRoof") -> list[str]:
+    """What the report tells about the flat roofs taken from a view."""
+    one = flat.bodies == 1
+    notes = [f"Tetto piano: {flat.bodies} corp{'o' if one else 'i'} della copertura senza colmi ne' displuvi ({flat.slab.area:.0f} m2), "
+             f"fatt{'o' if one else 'i'} come lastra di {flat.thickness * 100:.0f} cm sopra i muri."]
+    if flat.parapet is not None:
+        how = "misurata sul prospetto" if flat.parapet_source == "prospetto" else "presunta (il prospetto non la dice)"
+        notes.append(f"Tetto piano: la pianta della copertura disegna un bordo rialzato (parapetto e nervature): alto "
+                     f"{flat.parapet_height:.2f} m, {how}.")
     return notes

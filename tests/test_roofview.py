@@ -99,11 +99,11 @@ def roof_view(extra=()):
 
 
 def lines_of(clean):
-    return [p.geom for it in clean.items for p in it.prims]
+    return list(getattr(clean.all_lines(), "geoms", [clean.all_lines()]))
 
 
 def total_length(clean):
-    return sum(l.length for l in lines_of(clean))
+    return clean.all_lines().length
 
 
 def test_the_outline_and_the_ridge_are_what_is_left_of_a_plain_roof_view():
@@ -262,7 +262,7 @@ def fake_roof(ridge=2.0):
 
 def fake_found():
     reg = rv.Registration(0, False, (-54.0, 0.0), 0.72, 0.6)
-    return rv.ViewRoof([], 6, reg, 0.6, (16.9, 16.8), False)
+    return rv.ViewRoof([], [], 6, reg, 0.6, (16.9, 16.8), False)
 
 
 def test_elevations_that_reach_far_above_the_roof_are_said_to_show_more_storeys():
@@ -318,3 +318,83 @@ def test_of_two_poses_that_overlap_alike_the_one_where_every_body_of_the_roof_st
     smallest = min(laid_back(drawn, reg).geoms, key=lambda g: g.area)
     assert smallest.centroid.x == pytest.approx(121.5, abs=1.0)  # the pavilion is at the end that has the walls
     assert not reg.alternatives
+
+
+# --- flat roofs --------------------------------------------------------------------------------------
+
+from dwg2c4d.roof import FlatBody, build_flat_roof  # noqa: E402
+
+
+def test_a_roof_drawn_as_an_outline_alone_is_a_flat_roof():
+    clean = rv.clean_roof(outline_lines(ROOF))
+    assert clean.pitched == [] and len(clean.flat) == 1
+    (body,) = rv.flat_bodies(clean)
+    assert body.slab.symmetric_difference(ROOF).area < 0.05 and body.parapet is None
+
+
+def test_planes_that_meet_along_a_ridge_are_a_pitched_roof_not_a_flat_one():
+    clean = rv.clean_roof(roof_view())
+    assert len(clean.pitched) == 2 and clean.flat == []
+
+
+def test_a_plane_alone_under_a_hatch_of_tiles_is_a_pitched_roof_and_without_it_a_flat_one():
+    centre = ROOF.centroid
+    assert len(rv.clean_roof(outline_lines(ROOF), [(centre.x, centre.y)]).pitched) == 1
+    assert len(rv.clean_roof(outline_lines(ROOF), [(centre.x + 200, centre.y)]).flat) == 1  # tiles of another roof
+
+
+def test_a_strip_beside_a_roof_is_no_slope_of_it_and_two_flat_roofs_side_by_side_stay_flat():
+    canopy, strip = box(0, 0, 19, 3.5), box(0, 3.5, 19, 4.4)  # a canopy and a 0.9 m strip along it
+    lines = [*outline_lines(canopy), *outline_lines(strip)]
+    clean = rv.clean_roof(lines)
+    assert clean.pitched == [] and len(clean.flat) == 2
+
+
+def parapet_roof(w=30.0, d=10.0, rim=0.25):
+    """A flat roof drawn the way an architect draws one with a parapet: a double line along the edge."""
+    return outline_lines(box(0, 0, w, d)) + outline_lines(box(rim, rim, w - rim, d - rim))
+
+
+def test_the_double_line_along_the_edge_of_a_flat_roof_is_its_parapet():
+    clean = rv.clean_roof(parapet_roof())
+    assert clean.pitched == [] and clean.overhang is None
+    (body,) = rv.flat_bodies(clean)
+    assert body.slab.symmetric_difference(box(0, 0, 30, 10)).area < 0.5
+    assert body.parapet is not None and body.parapet.area == pytest.approx(300 - 29.5 * 9.5, abs=0.5)
+
+
+def test_a_wall_line_far_inside_a_pitched_roof_is_not_a_parapet():
+    clean = rv.clean_roof(roof_view([item("0", LineString(HOUSE.exterior.coords))]))
+    assert clean.overhang == pytest.approx(0.6, abs=0.01)
+    assert all(b.parapet is None for b in rv.flat_bodies(clean))
+
+
+def test_the_bays_of_a_flat_roof_with_double_lines_between_them_are_one_slab():
+    lines = outline_lines(box(0, 0, 30, 10))
+    for x in (9.875, 19.875):  # two ribs drawn as double lines 0.25 m apart across the roof, from edge to edge
+        for dx in (0, 0.25):
+            lines.append(item("0", LineString([(x + dx, 0), (x + dx, 10)])))
+    clean = rv.clean_roof(lines)
+    assert clean.pitched == [] and len(clean.flat) == 3
+    (body,) = rv.flat_bodies(clean)
+    assert body.slab.symmetric_difference(box(0, 0, 30, 10)).area < 0.5
+    assert body.parapet is None  # the ribs run across the roof, not along the edge
+
+
+def test_a_flat_roof_gets_a_slab_on_the_walls_and_a_parapet_of_the_default_height_when_the_plan_draws_one():
+    bodies = rv.flat_bodies(rv.clean_roof(parapet_roof()))
+    flat = build_flat_roof(bodies, [], 3.0)
+    assert flat.thickness == pytest.approx(0.2) and flat.parapet is not None
+    assert flat.parapet_height == pytest.approx(0.5) and flat.parapet_source == "presunta" and flat.bodies == 1
+
+
+def test_the_parapet_is_as_high_as_the_long_line_the_elevation_draws_a_little_over_the_walls():
+    ev = Elevation("south", 0.0, "porta", [], [(3.0, 0.0, 30.0), (3.9, 0.0, 30.0), (2.0, 5.0, 6.0)])
+    flat = build_flat_roof(rv.flat_bodies(rv.clean_roof(parapet_roof())), [ev], 3.0)
+    assert flat.parapet_height == pytest.approx(0.9 - 0.2) and flat.parapet_source == "prospetto"
+
+
+def test_there_is_no_flat_roof_without_flat_bodies_and_no_parapet_without_the_double_line():
+    assert build_flat_roof([], [], 3.0) is None
+    flat = build_flat_roof([FlatBody(box(0, 0, 5, 5))], [], 3.0)
+    assert flat.parapet is None

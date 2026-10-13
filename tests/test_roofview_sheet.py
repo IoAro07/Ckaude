@@ -122,3 +122,39 @@ def test_a_roof_plan_that_fits_no_building_is_not_placed_and_the_report_says_so(
     report, obj = converted(tmp_path, roof=strip)
     assert report.roof is None and "Tetto" not in obj.groups
     assert any("non combacia" in w for w in report.warnings)
+
+
+def add_flat_roof(msp, w=1400, d=900, layer="0", parapet=True, **kw):
+    """The plan of a flat roof over ``add_plan``: the outline (``OVER`` of eaves) and, when ``parapet``, the inner face of a
+    25 cm parapet; a skylight and the tile lines of nothing else: a flat roof has no ridge."""
+    x0, y0, x1, y1 = -OVER, -OVER, w + OVER, d + OVER
+    msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
+    if parapet:
+        msp.add_lwpolyline([(x0 + 25, y0 + 25), (x1 - 25, y0 + 25), (x1 - 25, y1 - 25), (x0 + 25, y1 - 25)], close=True,
+                           dxfattribs={"layer": layer})
+    msp.add_lwpolyline([(300, 150), (450, 150), (450, 300), (300, 300)], close=True, dxfattribs={"layer": layer})  # a skylight
+
+
+@pytest.mark.parametrize("turns", [0, 1, 3])
+def test_a_roof_drawn_with_no_ridge_becomes_a_flat_slab_on_the_walls(tmp_path, turns):
+    report, obj = converted(tmp_path, roof=add_flat_roof, turns=turns, parapet=False)
+    assert report.roof is None and report.flat_roof is not None and report.flat_roof["parapet_height"] is None
+    assert "Copertura" in obj.groups and "Tetto" not in obj.groups
+    (rx0, ry0, rz0), (rx1, ry1, rz1) = obj.bbox("Copertura")
+    (wx0, _, wz0), (wx1, _, _) = obj.bbox("Muri")
+    assert (ry0, ry1) == pytest.approx((report.wall_height, report.wall_height + 0.2), abs=0.01)
+    assert (rx0, rx1, rz0, rz1) == pytest.approx((wx0 - OVER / 100, wx1 + OVER / 100, wz0 - OVER / 100, wz0 + 9.0 + OVER / 100), abs=0.1)
+    assert any("Tetto piano" in w for w in report.warnings)
+
+
+def test_the_double_line_along_the_edge_of_a_flat_roof_is_a_parapet_in_the_model(tmp_path):
+    report, obj = converted(tmp_path, roof=add_flat_roof, parapet=True)
+    assert report.flat_roof["parapet_height"] == pytest.approx(0.5) and report.flat_roof["parapet_source"] == "presunta"
+    (_, ry0, _), (_, ry1, _) = obj.bbox("Copertura")
+    assert ry1 == pytest.approx(report.wall_height + 0.2 + 0.5, abs=0.01)
+    assert any("bordo rialzato" in w for w in report.warnings)
+
+
+def test_a_roof_with_ridges_makes_no_flat_slab(tmp_path):
+    report, obj = converted(tmp_path)
+    assert report.flat_roof is None and "Copertura" not in obj.groups

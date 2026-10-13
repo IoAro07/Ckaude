@@ -20,8 +20,8 @@ from .glazing import ribbon_windows
 from .thinwalls import THICKNESS, single_line_walls
 from .openings import assign_ids, build_openings
 from .reader import layer_used, storeys, read_items
-from .roof import Roof, build_roof, ridge_hints_from
-from .roofview import roof_from_view, view_roof_notes, written_pitch
+from .roof import FlatRoof, Roof, build_flat_roof, build_roof, ridge_hints_from
+from .roofview import flat_roof_notes, roof_from_view, view_roof_notes, written_pitch
 from .falsewalls import FalseWalls, lower_far_walls, separate_prims
 from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
@@ -68,6 +68,7 @@ class ConversionReport:
     mesh: object | None = None  # the final Mesh (for previews); not part of the printed summary
     elevations: list[dict] = field(default_factory=list)  # side, matched, total, zero source
     roof: dict | None = None  # pitch_deg, pitch_source, ridge_height, faces
+    flat_roof: dict | None = None  # area_m2, bodies, thickness, parapet_height
     garden: object | None = None  # the Garden: ground, pools, plants, furniture
     garden_table_path: Path | None = None
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
@@ -150,15 +151,16 @@ def _read_walls(items: list, cfg: Config, warnings: list[str]) -> tuple[BaseGeom
     return clean_footprint(union(layer_walls.values()), cfg.merge_tolerance), layer_walls, FalseWalls()
 
 
-def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list, warnings: list[str]) -> tuple[Roof | None, dict | None]:
-    """(the roof, its line of the report). From the layers the names call roof (or --layer-tetto): they always win. When
-    they give none (no such layer, or only the lines of a tile pattern) and the sheet draws a roof plan as a view of its
-    own, from that view, cleaned and laid over the plan (roofview): never when the user said where the roof is
-    (--layer-tetto, --area-tetto, --sposta-tetto)."""
+def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
+                warnings: list[str]) -> tuple[Roof | None, FlatRoof | None, dict | None, dict | None]:
+    """(the pitched roof, the flat roof, their lines of the report). From the layers the names call roof (or --layer-tetto):
+    they always win. When they give none (no such layer, or only the lines of a tile pattern) and the sheet draws a roof
+    plan as a view of its own, from that view, cleaned and laid over the plan (roofview): never when the user said where
+    the roof is (--layer-tetto, --area-tetto, --sposta-tetto)."""
     if not (cfg.roof or cfg.roof_auto):
-        return None, None
+        return None, None, None, None
     own: list[str] = []
-    roof, view, overhang = None, None, None
+    roof, flat, view, overhang = None, None, None, None
     rr = read_items(doc, cfg, area=cfg.roof_area, unit=result.unit)
     items = rr.items if cfg.roof else [it for it in rr.items if it.category == "roof" and not is_elevation_layer(it.layer)]
     if items or cfg.roof:  # nothing asked, nothing drawn: no roof and no remark
@@ -169,18 +171,25 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
                                result.unit_scale, own)
         if found is not None:
             pitch = written_pitch(cfg.analysis)
-            roof = build_roof(found.items, replace(cfg, roof_offset=(0.0, 0.0)), result.unit_scale, solid.bounds,
-                              ridge_hints_from(elevations, cfg.wall_height), own, pitch[0] if pitch else None)
-            if roof is not None:
+            if found.items:
+                roof = build_roof(found.items, replace(cfg, roof_offset=(0.0, 0.0)), result.unit_scale, solid.bounds,
+                                  ridge_hints_from(elevations, cfg.wall_height), own, pitch[0] if pitch else None)
+            flat = build_flat_roof(found.flats, elevations, cfg.wall_height)
+            if roof is not None or flat is not None:
                 view, overhang = found.view, found.overhang
                 own = [n for n in own if not n.startswith("Tetto: le linee del tetto non formano")]
                 own.extend(view_roof_notes(found, roof, pitch, elevations, cfg.wall_height))
+                if flat is not None:
+                    own.extend(flat_roof_notes(flat))
     warnings.extend(own)
-    if roof is None:
-        return None, None
-    return roof, {"pitch_deg": roof.pitch_deg, "pitch_range": roof.pitch_range, "pitch_source": roof.pitch_source,
-                  "ridge_height": roof.ridge_height + cfg.wall_height, "faces": roof.faces,
-                  "ridges_from_elevation": roof.ridges_from_elevation, "view": view, "overhang": overhang}
+    report = None if roof is None else {
+        "pitch_deg": roof.pitch_deg, "pitch_range": roof.pitch_range, "pitch_source": roof.pitch_source,
+        "ridge_height": roof.ridge_height + cfg.wall_height, "faces": roof.faces,
+        "ridges_from_elevation": roof.ridges_from_elevation, "view": view, "overhang": overhang}
+    flat_report = None if flat is None else {
+        "area_m2": flat.slab.area, "bodies": flat.bodies, "thickness": flat.thickness, "view": view,
+        "parapet_height": flat.parapet_height if flat.parapet is not None else None, "parapet_source": flat.parapet_source}
+    return roof, flat, report, flat_report
 
 
 def convert(input_path: str | Path, output_path: str | Path | None = None,
@@ -401,7 +410,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if skirting_items(result.items):
         plan.skirting = skirting_strips(result.items, solid, openings, cfg)
 
-    plan.roof, roof_report = _build_roof(doc, cfg, result, solid, elevations, warnings)
+    plan.roof, plan.flat_roof, roof_report, flat_roof_report = _build_roof(doc, cfg, result, solid, elevations, warnings)
 
     footprint = building_footprint(solid)
     for o in openings:
@@ -471,6 +480,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         warnings=warnings,
         elevations=elevation_report,
         roof=roof_report,
+        flat_roof=flat_roof_report,
         origin_offset=offset,
         json_path=json_path,
         table_path=table_path,

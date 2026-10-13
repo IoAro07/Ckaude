@@ -20,11 +20,12 @@ from dataclasses import dataclass
 import numpy as np
 import shapely
 from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry.base import BaseGeometry
 from shapely.geometry.polygon import orient
 from shapely.ops import polygonize, unary_union
 
 from .config import Config
-from .geom import polygons_of
+from .geom import polygons_of, union
 from .reader import Item
 from .walls import _boundaries, closure_segments, thinness
 
@@ -43,6 +44,9 @@ WIDE_LINE = 0.9  # a line this share of the widest one of an elevation runs alon
 UPPER_EAVES = 1.5  # m: a long line this far above the walls in use is the eaves of a storey over the plan, not a cornice
 MAX_MEASURED_PITCH = 60.0  # degrees: ridge heights from an elevation that imply a steeper roof are not believed
 MAX_MEASURED_K = math.tan(math.radians(MAX_MEASURED_PITCH))
+FLAT_THICKNESS = 0.20  # m: a flat roof is a slab this thick on the walls
+PARAPET_HEIGHT = 0.5  # m: a parapet the plan draws and no elevation measures is this high above the slab
+PARAPET_RISE = (0.2, 1.5)  # m: a long line of an elevation this far over the walls in use is the top of a parapet
 STEP_TOL = 0.02  # neighbouring faces closer in height than this meet (no wall between them) (m)
 
 
@@ -58,6 +62,44 @@ class Roof:
     faces: int
     offset: tuple[float, float]  # translation applied to the roof plan (m)
     ridges_from_elevation: int
+
+
+@dataclass
+class FlatBody:
+    """One flat roof of a roof plan (a main roof, a canopy), in plan coordinates: its outline and, where the plan draws a
+    thin raised band along its edge (a parapet) and across it (ribs), that band."""
+
+    slab: BaseGeometry
+    parapet: BaseGeometry | None = None
+
+
+@dataclass
+class FlatRoof:
+    """The flat roofs of a plan: slabs on the walls, with a parapet where the plan draws one."""
+
+    slab: BaseGeometry  # the outlines of all the flat roofs
+    parapet: BaseGeometry | None
+    thickness: float  # m
+    parapet_height: float  # m, above the top of the slab
+    parapet_source: str  # "prospetto" (the elevations show its top) | "presunta" (the plan draws it, its height is a default)
+    bodies: int
+
+
+def build_flat_roof(bodies: list[FlatBody], elevations, wall_height: float) -> FlatRoof | None:
+    """A slab ``FLAT_THICKNESS`` thick on top of the walls under every flat body; with a parapet where the bodies have one,
+    as high as the highest long line the elevations draw over the walls (a parapet is a long line a little over the
+    eaves), else ``PARAPET_HEIGHT``."""
+    if not bodies:
+        return None
+    parapets = [b.parapet for b in bodies if b.parapet is not None and not b.parapet.is_empty]
+    rises = []
+    for ev in elevations:
+        widest = max((x1 - x0 for _, x0, x1 in ev.hlines), default=0.0)
+        rises += [y - ev.zero - wall_height for y, x0, x1 in ev.hlines
+                  if x1 - x0 >= WIDE_LINE * widest and PARAPET_RISE[0] <= y - ev.zero - wall_height <= PARAPET_RISE[1]]
+    height = max(rises) - FLAT_THICKNESS if rises else PARAPET_HEIGHT
+    return FlatRoof(union(b.slab for b in bodies), union(parapets) if parapets else None, FLAT_THICKNESS,
+                    max(height, 0.1), "prospetto" if rises else "presunta", len(bodies))
 
 
 def _key(x: float, y: float) -> tuple[int, int]:
