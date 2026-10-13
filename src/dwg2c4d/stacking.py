@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import math
 import statistics
-from collections import Counter
 from dataclasses import dataclass, field, replace
+from typing import Sequence
 
 import numpy as np
 import shapely
@@ -39,7 +39,7 @@ SIZE_RATIO = (0.5, 2.0)  # a floor of the same building is about as wide and as 
 MIN_IOU = 0.60  # the filled outline of a floor overlaps the one below at least this well (storeys have balconies and porticoes)
 FORCED_IOU = 0.45  # ... with --piani (the user says they are floors of one building) at least this well
 MIN_COVER = 0.70  # ... and this share of the floor stands over the one below (grown by what it may overhang)
-DEFAULT_SLAB = 0.30  # m: the slab between two storeys when the sections are not read and --spessore-solaio is not given
+DEFAULT_SLAB = 0.30  # m: the slab between two storeys when the elevations do not draw it and --spessore-solaio is not given
 MAX_STOREYS = 6  # no more floors than this are stacked
 RISE_RANGE = (2.0, 5.0)  # m: a height from one floor to the next that makes sense (the elevations may say otherwise: ignored)
 MIN_WALL = 1.8  # m: the walls of a storey are not lower than this once the slab is taken off the rise
@@ -131,9 +131,10 @@ def _distance(a: View, b: View) -> float:
 
 def find_storeys(a: Analysis) -> Stack | None:
     """The floors above the converted plan among the views of the sheet (``Stack.candidates``, none when the sheet shows no
-    other floor of its building), with the remarks about floors it cannot use; None when there is no plan. A candidate is a plan view of about the size of the plan that says which storey it is, is neither a copy
-    of the plan nor another state of the building (existing, project) nor drawn inside a bigger view; of the copies of one
-    floor the one nearest to the plan is taken (the calculation sheet repeats the floors far from the drawings). The
+    other floor of its building), with the remarks about floors it cannot use; None when there is no plan. A candidate is a
+    plan view of about the size of the plan that says which storey it is, is neither a copy of the plan (unless its own title
+    names another storey) nor another state of the building (existing, project) nor drawn inside a bigger view; of the copies
+    of one floor the one nearest to the plan is taken (the calculation sheet repeats the floors far from the drawings). The
     storeys must be consecutive: a PIANO SECONDO without a PIANO PRIMO is not stacked."""
     plan = a.plan
     if plan is None or plan.kind != "plan":
@@ -170,14 +171,12 @@ def find_storeys(a: Analysis) -> Stack | None:
 
 def stacking_on(cfg, a: Analysis | None, layer_storeys: bool) -> bool:
     """Is stacking on for this run? Not when the user said no (--no-piani), when the layers name the storeys (P1_, P2_: the
-    other way of drawing several floors), when this conversion is a storey of a stack already, or when the user chose
-    the view or the area (--vista, --area) unless --piani says the views are floors of one building."""
-    if cfg.stacking == "no" or cfg.part or a is None or a.plan is None or layer_storeys or cfg.floor is not None:
+    other way of drawing several floors), when this conversion is a storey of a stack already, when the sheet was not analysed,
+    or when the user chose the view or the area (--vista, --area) unless --piani says the views are floors of one building."""
+    if cfg.stacking == "no" or cfg.part or a is None or a.plan is None or layer_storeys or cfg.floor is not None \
+            or cfg.user is None:  # (the other storeys are converted from the options as the user gave them)
         return False
-    if cfg.stacking == "yes":
-        return True
-    user = cfg.user if cfg.user is not None else cfg
-    return user.view is None and user.area is None
+    return cfg.stacking == "yes" or (cfg.user.view is None and cfg.user.area is None)
 
 
 def outline(solid: BaseGeometry) -> BaseGeometry:
@@ -297,7 +296,7 @@ def consensus_levels(readings: list[list[float]]) -> list[float]:
         values = [r[i] for r in readings if len(r) > i]
         groups = [[v for v in values if abs(v - c) <= LEVEL_TOLERANCE] for c in values]
         best = max(groups, key=len)
-        if len(best) * 2 <= len(values) and len(values) > 1 and Counter(map(len, groups))[len(best)] > len(best):
+        if len({round(statistics.median(g), 2) for g in groups if len(g) == len(best)}) > 1:
             break  # two heights have as many votes: the elevations do not agree
         levels.append(statistics.median(best))
     return levels if len(levels) > 1 else []
@@ -317,7 +316,7 @@ def consensus_slabs(readings: list[list[float | None]]) -> list[float | None]:
 
 
 def place_storeys(floors: list[Floor], marks: list[float], slab: float, stated_height: bool,
-                  slabs: list[float | None] = ()) -> list[str]:
+                  slabs: Sequence[float | None] = ()) -> list[str]:
     """Set the level, the walls' height and the slab of every floor (``floors``: lowest first, ``height`` holding what its
     own conversion gave); returns the notes for the report. ``marks``: the heights of the floors of the storeys above the
     ground floor, from the elevations (indexed by the number of the storey). A storey's walls reach the underside of the slab
@@ -383,11 +382,11 @@ def _floor_shape(fl: Floor) -> BaseGeometry:
     return floor_footprint(fl.plan.solid_walls)
 
 
-def stack_mesh(floors: list[Floor], base: Mesh, roof_plan: Plan | None, roof_cfg: Config, roof_z: float,
-               warnings: list[str]) -> Mesh:
+def stack_mesh(floors: list[Floor], base: Mesh, roof_plan: Plan | None, roof_cfg: Config, warnings: list[str]) -> Mesh:
     """The model of the stack: the mesh of every storey moved to its place (plan shift, height of its floor), its groups under
     the name of the storey (P1_Muri...) except the garden, which belongs to the lot, the slab under every upper storey and
-    the roof on the top one. ``base`` is the mesh of the converted plan (``floors[0]``); the others are built here."""
+    the roof on the top one, its eaves at ``roof_cfg.wall_height``. ``base`` is the mesh of the converted plan (``floors[0]``);
+    the others are built here."""
     mesh = Mesh()
     for k, fl in enumerate(floors):
         tag = storey_tag(fl.index)
@@ -402,7 +401,7 @@ def stack_mesh(floors: list[Floor], base: Mesh, roof_plan: Plan | None, roof_cfg
             mesh.add_extrusion(f"{tag}_Solaio", pieces)
     if roof_plan is not None and (roof_plan.roof is not None or roof_plan.flat_roof is not None):
         roofs = Mesh()
-        add_roofs(roofs, roof_plan, roof_cfg, roof_z)
+        add_roofs(roofs, roof_plan, roof_cfg, roof_cfg.wall_height)
         top = storey_tag(floors[-1].index)
         mesh.add_mesh(roofs, rename=lambda name: f"{top}_{name}")
     return mesh

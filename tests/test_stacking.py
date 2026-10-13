@@ -166,6 +166,38 @@ def test_three_floors_are_three_storeys(tmp_path):
     assert {"P0_Muri", "P1_Muri", "P2_Muri", "P1_Solaio", "P2_Solaio"} <= set(Obj(out).groups)
 
 
+def test_a_floor_that_cannot_be_converted_is_left_out_and_the_report_says_why(tmp_path, monkeypatch):
+    from dwg2c4d import pipeline
+    from dwg2c4d.dwgfile import ConversionError
+
+    real = pipeline._read_walls
+
+    def no_walls_above(items, cfg, warnings):
+        if cfg.part:
+            raise ConversionError("Nessun muro riconosciuto.")
+        return real(items, cfg, warnings)
+
+    monkeypatch.setattr(pipeline, "_read_walls", no_walls_above)
+    report, out = run(two_floor_sheet(tmp_path / "s.dxf"), tmp_path)
+    assert report.floors == [] and "Muri" in Obj(out).groups  # the converted plan is delivered all the same
+    assert any(w.startswith("Piano 1 (vista 2") and "non impilato" in w and "Nessun muro" in w for w in report.warnings)
+
+
+def test_a_floor_that_does_not_register_ends_the_stack_and_the_ones_above_it_are_left_out(tmp_path):
+    doc, msp = new_sheet()
+    for k, (title, names, size) in enumerate((("PIANTA PIANO TERRA", ("CAMERA", "BAGNO", "CUCINA", "SOGGIORNO"), (1400, 900)),
+                                             ("PIANTA PIANO PRIMO", UPPER_ROOMS, (1400, 900)),
+                                             ("PIANTA PIANO SECONDO", ("MANSARDA", "LAVANDERIA", "DEPOSITO", "TERRAZZA"), (600, 900)))):
+        add_floor(msp, 3200 * k, 0, *size, names=names)
+        add_title(msp, title, 3200 * k + 100, -150)
+    doc.saveas(tmp_path / "s.dxf")
+    report, out = run(tmp_path / "s.dxf", tmp_path)
+    assert [f.index for f in report.floors] == [0, 1]  # the second floor is a sixth of the first: it hangs over nothing
+    assert any(w.startswith("Piano 2 (vista 3") and "non impilato" in w and "Il modello arriva fino al piano 1" in w
+               for w in report.warnings)
+    assert "P2_Muri" not in Obj(out).groups
+
+
 def test_a_sheet_with_a_single_plan_is_converted_as_before(tmp_path):
     doc, msp = new_sheet()
     add_floor(msp, 0, 0)

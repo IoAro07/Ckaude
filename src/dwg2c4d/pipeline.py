@@ -101,6 +101,9 @@ def _better_unit(span_m: float, declared: str) -> str | None:
     return best
 
 
+SURE_PAIRS = 3  # an elevation that pairs this many symbols with openings of the top storey is sure enough of its facade to give its eaves
+STOREY_OFF = dict(garden=False, roof=False, roof_auto=False, images=False, c4d_json=False, write_table=False,
+                  write_garden_table=False, garden_table_in=None, area=None, roof_area=None, roof_offset=None)  # what an upper storey leaves to the base
 GARDEN_SKIPPED_KINDS = ("elevation", "section", "roof", "detail")  # views whose contents are never garden, even with --area
 GROUP_GAP = 3.0  # m: wall pieces closer than this are one building
 MIN_GROUP_AREA = 1.0  # m2 of wall: smaller pieces are not worth a remark
@@ -215,11 +218,6 @@ def _room_rows(rooms: list[Room]) -> list[dict]:
     return [{"name": r.name, "area_m2": r.area, "height": r.height, "named": r.named} for r in rooms]
 
 
-SURE_PAIRS = 3  # an elevation that pairs this many symbols with openings of the top storey is sure enough of its facade to give its eaves
-STOREY_OFF = dict(garden=False, roof=False, roof_auto=False, elevations=[], images=False, c4d_json=False, write_table=False,
-                  write_garden_table=False, garden_table_in=None, area=None, roof_area=None, roof_offset=None)  # what an upper storey leaves to the base
-
-
 def _known_elevations(doc, up: "ConversionReport", view, cfg: Config, known: list[dict], offset: tuple[float, float]) -> list[dict]:
     """The elevations the plan below matched that the conversion of this storey did not: placed on its plan like on the one below
     (elevmatch.match_known), so a row of two or three windows an upper floor shows is not lost for lack of evidence."""
@@ -244,7 +242,7 @@ def _stack_storeys(doc, input_path: Path, output_path: Path, cfg: Config, stack:
     below, below_walls = outline(plan.solid_walls), plan.solid_walls
     seen = {v.id: v.matched for v in cfg.analysis.views}
     for cand in stack.candidates:
-        part_cfg = replace(cfg.user, view=cand.view.id, part=True, storey=cand.index, stacking="no", **STOREY_OFF)
+        part_cfg = replace(cfg.user, view=cand.view.id, part=True, storey=cand.index, stacking="no", elevations=[], **STOREY_OFF)
         label = f"Piano {cand.index} (vista {cand.view.id}, {cand.how})"
         try:
             up = convert(input_path, output_path, part_cfg, _doc=doc, _analysis=replace(cfg.analysis, plan=cand.view, notes=[]))
@@ -553,7 +551,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     mesh = build_mesh(plan, cfg, warnings, roof=not floors)
     garden = plan.garden  # (None when its mesh could not be built)
     if floors:
-        mesh = stack_mesh(floors, mesh, plan, roof_cfg, roof_cfg.wall_height, warnings)
+        mesh = stack_mesh(floors, mesh, plan, roof_cfg, warnings)
     every_opening = [o for fl in floors for o in fl.openings] if floors else openings
     offset = (0.0, 0.0)
     if cfg.origin != "drawing":
