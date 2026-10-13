@@ -16,7 +16,7 @@ from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
 from .model import OTHER_FLOOR, Plan, build_mesh, building_footprint, facing_sign, floor_footprint
 from .stacking import (DEFAULT_SLAB, Floor, Stack, consensus_levels, consensus_slabs, find_storeys, fit_openings, moved, outline,
-                       place_storeys, register, stack_mesh, stacking_on)
+                       place_storeys, register, stack_mesh, stacking_on, storey_of_view)
 from .objwriter import write_obj
 from .glazing import ribbon_windows
 from .thinwalls import THICKNESS, single_line_walls
@@ -30,7 +30,7 @@ from .table import apply_table, read_table, rows_of_storey, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
 from .texts import read_words
 from .passages import find_passages, wall_gaps
-from .elevmatch import agreed_height, match_known, match_views
+from .elevmatch import agreed_height, match_known, match_views, storey_stated
 from .garden import build_garden
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
 from .floors import extend_to_outer_faces, floor_left_over, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
@@ -324,6 +324,9 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     stack = find_storeys(cfg.analysis) if stacking_on(cfg, cfg.analysis, len(found) > 1) else None  # the other floors of the sheet
     if stack is not None and stack.candidates:
         cfg = replace(cfg, storey=stack.base_index)  # the elevations are read for this storey: the views said which it is
+    elif cfg.analysis is not None and cfg.analysis.plan is not None and not storey_stated(" ".join(cfg.analysis.plan.titles)):
+        index, _ = storey_of_view(cfg.analysis.views, cfg.analysis.plan)  # a plan titled through a copy of it (--vista N)
+        cfg = replace(cfg, storey=index)
     result = read_items(doc, cfg)
     warnings = list(cfg.analysis_notes) + list(result.warnings) + (stack.notes if stack is not None else [])
     if len(found) > 1 and cfg.floor is None:
