@@ -317,13 +317,15 @@ def test_what_the_layer_names_vouch_for_is_never_lowered():
 
 
 def test_the_report_says_how_many_and_how_to_undo_it():
-    items, false = separate_prims(house() + steps() + [wall(ring(2, 4.5, 2.5, 5.1))])
+    items, false = separate_prims(house() + steps() + [wall(ring(2, 4.5, 2.5, 5.1)), wall(ring(8, 1, 8.4, 1.4)),
+                                                         wall(ring(8, 5, 8.4, 5.4))])
     lower_far_walls(walls_of(hatched_house(), box(-2, -6, 10, -5.9)), hatched_house(), false)
     notes = " ".join(false.notes(0.5, 0.15))
     assert "1 gruppi di contorni chiusi" in notes and "1 scale (7 gradini" in notes and "1 elementi" in notes
     assert "--muri-tutti" in notes and "0.5 m (Muretti)" in notes and "0.15 m (Cordoli" in notes
     listing = "\n".join(false.listing(0.01, "cm"))
     assert "arredo" in listing and "scala" in listing and "basso" in listing and "7 gradini" in listing
+    assert listing.count("pilastro (quadrato isolato)") == 2 and "2 quadrati isolati" in notes
 
 
 # --- the conversion ---------------------------------------------------------------------------
