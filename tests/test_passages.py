@@ -123,6 +123,25 @@ def test_a_doorway_is_a_window_when_nothing_stands_beyond_it():
     assert op.kind == "window"  # the outside is behind it: a gap in the outside wall
 
 
+def test_two_aligned_stubs_too_far_apart_for_a_doorway_are_offered_not_closed(tmp_path):
+    """A partition drawn as two stubs from the south and the north wall, 3.4 m apart (y = 1.3 and 4.7): not a doorway."""
+    rep = run(plan(tmp_path, gap=(130, 470)), tmp_path)
+    assert rep.passages == 0 and not passages(rep)  # nothing was built from the gap
+    (note,) = [w for w in rep.warnings if "spezzoni di muro allineati" in w]
+    assert "3.4 m in x=505, y=300" in note and "non l'ho chiuso" in note  # where, in the units of the drawing
+    assert len(rep.room_objects) == 1  # the room is still one: the gap was not closed with a wall
+
+
+def test_a_doorway_and_a_gap_outside_any_room_get_no_such_offer(tmp_path):
+    assert not [w for w in run(plan(tmp_path), tmp_path).warnings if "spezzoni" in w]  # 1.2 m: a doorway (a passage)
+    from dwg2c4d.passages import wall_gaps
+
+    stubs = box(20, 0, 20.1, 1.0).union(box(20, 4.4, 20.1, 5.4))  # two aligned stubs 3.4 m apart
+    assert wall_gaps(stubs, Config()) == []  # no room around them
+    room = box(0, 0, 10, 6).difference(box(0.3, 0.3, 9.7, 5.7))
+    assert wall_gaps(room.union(stubs), Config()) == []  # a room, but the stubs stand outside it
+
+
 def test_a_doorway_to_a_space_the_walls_do_not_close_is_not_a_window():
     from dwg2c4d.passages import find_passages
 

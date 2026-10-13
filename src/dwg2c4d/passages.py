@@ -26,6 +26,8 @@ MIN_END = 0.04  # m: shorter edges are noise
 LONG_SIDE = 0.25  # m: the two edges next to an end must be at least this long
 LINE_UP = 0.6  # the ends must overlap at least this fraction of the shorter one
 SAME_THICKNESS = 0.35  # the two ends' lengths differ by less than this fraction
+PROPOSAL_GAP = 6.0  # m: two aligned wall ends inside a room this far apart or less may be one partition with its middle not drawn
+PROPOSAL_ROOM = 8.0  # m2: ... in a closed room at least this big
 OUTSIDE_FREE = 12.0  # m: the outside of a building has no wall of it this far across (a doorway between two rooms, one of which the walls do not close, is no window)
 
 
@@ -75,14 +77,10 @@ def wall_ends(walls: BaseGeometry, max_thickness: float) -> list[End]:
     return ends
 
 
-def find_passages(walls: BaseGeometry, cfg: Config, openings: list[Opening]) -> list[Opening]:
-    """Passages between facing free ends. ``walls`` already contain the openings' fills."""
-    if walls.is_empty:
-        return []
-    ends = wall_ends(walls, cfg.max_wall_thickness)
-    taken = union([o.fill.buffer(0.05) for o in openings]) if openings else Polygon()
-    found: list[Opening] = []
-    used: set[int] = set()
+def _facing_ends(ends: list[End], walls: BaseGeometry, taken: BaseGeometry, lo: float,
+                 hi: float) -> list[tuple[float, int, int, np.ndarray, np.ndarray, float]]:
+    """(gap, i, j, centre, direction from i to j, thickness) of every two ends that look at each other, line up and
+    leave a gap between ``lo`` and ``hi`` with nothing in it (no wall, nothing of ``taken``)."""
     candidates = []
     for i, a in enumerate(ends):
         for j in range(i + 1, len(ends)):
@@ -91,7 +89,7 @@ def find_passages(walls: BaseGeometry, cfg: Config, openings: list[Opening]) -> 
                 continue  # must look at each other
             u = a.out  # from a towards b
             gap = float(np.dot(b.mid - a.mid, u))
-            if not MIN_GAP <= gap <= cfg.passage_max:
+            if not lo <= gap <= hi:
                 continue
             t = np.array([-u[1], u[0]])  # along the ends
             a0, a1 = sorted(float(np.dot(p, t)) for p in (a.a, a.b))
@@ -110,6 +108,34 @@ def find_passages(walls: BaseGeometry, cfg: Config, openings: list[Opening]) -> 
             if rect.buffer(-0.02).intersects(walls) or rect.intersects(taken):
                 continue
             candidates.append((gap, i, j, centre, u, thickness))
+    return candidates
+
+
+def wall_gaps(walls: BaseGeometry, cfg: Config) -> list[tuple[float, tuple[float, float]]]:
+    """(gap, centre) of the pairs of facing free ends that are too far apart for a doorway (more than
+    ``cfg.passage_max``, up to ``PROPOSAL_GAP``) and have nothing between them, inside a closed room of at least
+    ``PROPOSAL_ROOM`` m2: a partition whose middle part is not drawn. Nothing is built from them (whether it is
+    one wall is for the user to say); the report shows where they are."""
+    rooms = [Polygon(r) for poly in polygons_of(walls) for r in poly.interiors]
+    rooms = [r for r in rooms if r.area >= PROPOSAL_ROOM]
+    if not rooms:
+        return []
+    ends = wall_ends(walls, cfg.max_wall_thickness)
+    found = [(gap, (float(centre[0]), float(centre[1]))) for gap, _, _, centre, _, _ in
+             _facing_ends(ends, walls, Polygon(), cfg.passage_max, PROPOSAL_GAP)
+             if gap > cfg.passage_max and any(room.contains(Point(float(centre[0]), float(centre[1]))) for room in rooms)]
+    return sorted(found, key=lambda g: (-g[1][1], g[1][0]))
+
+
+def find_passages(walls: BaseGeometry, cfg: Config, openings: list[Opening]) -> list[Opening]:
+    """Passages between facing free ends. ``walls`` already contain the openings' fills."""
+    if walls.is_empty:
+        return []
+    ends = wall_ends(walls, cfg.max_wall_thickness)
+    taken = union([o.fill.buffer(0.05) for o in openings]) if openings else Polygon()
+    found: list[Opening] = []
+    used: set[int] = set()
+    candidates = _facing_ends(ends, walls, taken, MIN_GAP, cfg.passage_max)
     for gap, i, j, centre, u, thickness in sorted(candidates, key=lambda c: c[0]):
         if i in used or j in used:
             continue

@@ -6,7 +6,7 @@ import math
 from typing import Iterable
 
 import shapely
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPoint, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 from shapely.strtree import STRtree
@@ -35,6 +35,28 @@ def fix(geom: BaseGeometry) -> BaseGeometry:
 def union(geoms: Iterable[BaseGeometry]) -> BaseGeometry:
     geoms = [g for g in geoms if g is not None and not g.is_empty]
     return unary_union(geoms) if geoms else Polygon()
+
+
+def grown_by_square(shape: BaseGeometry, half: float) -> BaseGeometry:
+    """``shape`` grown by the square of half-side ``half`` (the Minkowski sum): itself plus every edge swept by the
+    square. A mitred buffer does the same on square-cornered plans but is not monotone on others: one more thin wall
+    can make it drop a whole room from a closed outline. This one never takes anything away when a wall is added."""
+    corners = ((-half, -half), (-half, half), (half, -half), (half, half))
+    parts = [shape]
+    for poly in polygons_of(shape):
+        for ring in (poly.exterior, *poly.interiors):
+            pts = ring.coords
+            for (ax, ay), (bx, by) in zip(pts[:-1], pts[1:]):
+                parts.append(MultiPoint([(x + dx, y + dy) for x, y in ((ax, ay), (bx, by)) for dx, dy in corners]).convex_hull)
+    return unary_union(parts)
+
+
+def closed_by_square(shape: BaseGeometry, half: float) -> BaseGeometry:
+    """``shape`` with the gaps up to ``2 * half`` filled: grown by the square, then shrunk by it (the free space around
+    it grown, and taken from a frame that holds it)."""
+    grown = grown_by_square(shape, half)
+    frame = box(*grown.bounds).buffer(half + 1.0)
+    return frame.difference(grown_by_square(frame.difference(grown), half))
 
 
 INSIDE = 0.75  # share of a shape's area that must lie in another one to count as nested in it

@@ -30,6 +30,8 @@ OVERLAP = 0.005  # a gap filler reaches this far into the wall on each side, so 
 STATION_OFFSETS = (0.03, 0.10, 0.25)  # where to look for the wall just outside the symbol
 DUPLICATE_CENTRE = 0.02  # m: two openings of one kind whose centres lie this close and whose widths differ by less than
 DUPLICATE_WIDTH = 0.02  # m: ... this are one opening drawn twice (two symbols on top of each other)
+MANUAL_REACH = 0.30  # m: an opening the user places lies this close to a wall at most, beyond its own half width (a wall's centre is within half its thickness)
+ID_PREFIX = {"window": "F", "door": "P", "passage": "V"}  # the first letter of the sigla of each kind
 
 
 @dataclass
@@ -427,10 +429,52 @@ def merge_duplicates(openings: list[Opening]) -> tuple[list[Opening], int]:
     return kept, twice
 
 
+def opening_at(centre: tuple[float, float], width: float, kind: str, walls: BaseGeometry, cfg: Config) -> Opening | None:
+    """An opening of ``kind`` and ``width`` placed where the user says (``centre``, metres): in the wall nearest to that
+    point, whose direction and thickness are measured there, centred on the wall's middle. None when no wall is within
+    ``MANUAL_REACH``. ``walls`` must be the filled walls (the opening is cut out of them, so a missing symbol leaves no gap)."""
+    point = Point(centre)
+    reach = MANUAL_REACH + width / 2.0  # a point in the middle of a gap in the wall (no symbol, no wall lines) is half the gap from the wall
+    if walls.is_empty or walls.distance(point) > reach:
+        return None
+    edges = _WallEdges(walls)
+    fallback = None
+    for ux, uy in edges.directions_near(point.buffer(reach + REGION)):
+        if ux < -1e-9 or (abs(ux) <= 1e-9 and uy < 0):
+            ux, uy = -ux, -uy  # a fixed sense (east / north), as for the openings found
+        found = _try_direction(oriented_rect(centre[0], centre[1], ux, uy, width, -0.005, 0.005), walls, ux, uy,
+                               cfg.max_wall_thickness)
+        if not found:
+            continue
+        if found[5] - found[4] <= cfg.max_wall_thickness:
+            fallback = found
+            break
+        fallback = fallback or found
+    if fallback is None:
+        return None
+    ux, uy, a0, a1, s0, s1 = fallback
+    vx, vy = -uy, ux
+    mid, vm = (a0 + a1) / 2.0, (s0 + s1) / 2.0
+    z0 = 0.0 if kind != "window" else cfg.window_sill
+    z1 = min(cfg.door_height if kind != "window" else cfg.window_sill + cfg.window_height, cfg.wall_height)
+    if z1 <= z0:
+        return None
+    op = Opening(kind, Polygon(), Polygon(), z0, z1, None, axis=(ux, uy), center=(mid * ux + vm * vx, mid * uy + vm * vy),
+                 width=a1 - a0, thickness=s1 - s0)
+    op.rebuild(cfg)
+    return op
+
+
+def next_id(openings: list[Opening], kind: str) -> str:
+    """The sigla after the highest one of its kind (F01, F02 -> F03): the openings that exist keep theirs, so a table
+    written earlier still fits."""
+    taken = [int(o.id[1:]) for o in openings if o.kind == kind and o.id[1:].isdigit()]
+    return f"{ID_PREFIX[kind]}{max(taken, default=0) + 1:02d}"
+
+
 def assign_ids(openings: list[Opening]) -> None:
     """F01, F02 (windows), P01 (doors), V01 (passages): reading order, top to bottom then left to right."""
-    prefix = {"window": "F", "door": "P", "passage": "V"}
     count = {"window": 0, "door": 0, "passage": 0}
     for o in sorted(openings, key=lambda o: (-round(o.center[1], 1), o.center[0])):
         count[o.kind] += 1
-        o.id = f"{prefix[o.kind]}{count[o.kind]:02d}"
+        o.id = f"{ID_PREFIX[o.kind]}{count[o.kind]:02d}"

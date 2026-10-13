@@ -12,8 +12,10 @@ import csv
 import math
 from pathlib import Path
 
+from shapely.geometry.base import BaseGeometry
+
 from .config import Config
-from .openings import Opening
+from .openings import MANUAL_REACH, Opening, next_id, opening_at
 
 COLUMNS = [
     "id", "tipo", "x", "y", "larghezza", "spessore_muro", "davanzale", "altezza", "ante", "cerniera",
@@ -100,13 +102,64 @@ def read_table(path: str | Path) -> list[dict[str, str]]:
         return list(csv.DictReader(fh, delimiter=delimiter))
 
 
+NEW_ROW_CELLS = ("tipo", "larghezza", "davanzale", "altezza", "ante", "cerniera")  # what a row with no sigla may say about the opening it adds
+NEW_ROW_HELP = ("per aggiungere un'apertura scrivi x e y (centro, come nelle altre righe), MODIFICA_tipo (finestra, porta, "
+                "vano) e MODIFICA_larghezza (cm)")
+
+
+def _add_opening(row: dict[str, str], openings: list[Opening], walls: BaseGeometry | None, unit_scale: float,
+                 cfg: Config, warnings: list[str]) -> bool:
+    """Add the opening a row with no sigla describes: its centre x, y (drawing units), its kind and width (the
+    ``MODIFICA_`` cell wins over the plain one). It goes in the wall nearest to the point, thick as that wall, and is
+    given the next free sigla; the other cells (sill, height, sashes, hinge) work as for an opening that exists.
+    True when it was added."""
+    cells = {name: ((row.get("MODIFICA_" + name) or row.get(name) or "").strip()) for name in NEW_ROW_CELLS}
+    where = f"({(row.get('x') or '').strip()}, {(row.get('y') or '').strip()})"
+    try:
+        x, y = _parse(row.get("x") or ""), _parse(row.get("y") or "")
+        kind = NAME_KIND[cells["tipo"].lower()]
+        width = _parse(cells["larghezza"]) / 100.0
+    except (ValueError, KeyError):
+        warnings.append(f"Tabella, riga senza sigla in {where}: mancano x, y, il tipo o la larghezza, o non sono validi; "
+                        f"{NEW_ROW_HELP}: riga ignorata.")
+        return False
+    if width < 0.2:
+        warnings.append(f"Tabella, riga senza sigla in {where}: larghezza troppo piccola (minimo 20 cm): riga ignorata.")
+        return False
+    op = opening_at((x * unit_scale, y * unit_scale), width, kind, walls, cfg) if walls is not None else None
+    if op is None:
+        warnings.append(f"Tabella, riga senza sigla in {where}: nessun muro a meno di {MANUAL_REACH * 100:.0f} cm dai lati "
+                        "dell'apertura (x e y sono le coordinate del centro nel disegno, come nelle altre righe): riga ignorata.")
+        return False
+    op.id = next_id(openings, kind)
+    op.src = {"width": "tabella", "height": "default", "sill": "default", "kind": "tabella"}
+    op.notes.append("aggiunta dalla tabella (riga senza sigla): controlla la posizione")
+    if kind == "door":
+        op.leaves = [{"hinge": -1, "width": op.width, "swing": 1}]
+        op.hinge = -1
+        op.src["leaves"] = "default"
+    elif kind == "window":
+        op.src["sashes"] = "nessuna linea di taglio: un'anta"
+    extra = {k: v for k, v in cells.items() if v and k not in ("tipo", "larghezza")}
+    try:
+        _apply_row(op, extra, cfg, warnings)
+    except ValueError as exc:
+        warnings.append(f"Tabella, riga senza sigla in {where}: {exc} (l'apertura e' stata aggiunta con le misure predefinite).")
+    openings.append(op)
+    return True
+
+
 def apply_table(openings: list[Opening], rows: list[dict[str, str]], cfg: Config,
-                warnings: list[str]) -> int:
-    """Apply the MODIFICA_* cells. Returns how many openings were changed."""
+                warnings: list[str], walls: BaseGeometry | None = None, unit_scale: float = 1.0) -> int:
+    """Apply the MODIFICA_* cells. Returns how many openings were changed or added. A row with no sigla adds an
+    opening (see ``_add_opening``; ``walls``: the filled walls, ``unit_scale``: metres per drawing unit, for its x, y)."""
     by_id = {o.id: o for o in openings}
     changed = 0
     for row in rows:
         oid = (row.get("id") or "").strip()
+        if not oid and any((row.get(k) or "").strip() for k in ("x", "y", "MODIFICA_tipo", "MODIFICA_larghezza")):
+            changed += _add_opening(row, openings, walls, unit_scale, cfg, warnings)
+            continue
         edits = {k[len("MODIFICA_"):]: (v or "").strip() for k, v in row.items()
                  if k and k.startswith("MODIFICA_") and (v or "").strip()}
         if not oid or not edits:

@@ -17,6 +17,7 @@ from .geom import union, polygons_of
 from .model import OTHER_FLOOR, Plan, build_mesh, building_footprint, facing_sign, floor_footprint
 from .objwriter import write_obj
 from .glazing import ribbon_windows
+from .thinwalls import THICKNESS, single_line_walls
 from .openings import assign_ids, build_openings
 from .reader import layer_used, storeys, read_items
 from .roof import build_roof, ridge_hints_from
@@ -25,7 +26,7 @@ from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
 from .texts import read_words
-from .passages import find_passages
+from .passages import find_passages, wall_gaps
 from .elevmatch import match_views
 from .garden import build_garden
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
@@ -201,6 +202,14 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     columns = union([build_columns(result.items, cfg), false.columns])
     if not columns.is_empty:
         columns = columns.difference(walls)
+    if cfg.pair_layers:  # walls drawn in pairs of lines: a single line that closes a space the others leave open is a thin wall
+        thin, thin_lines, closed = single_line_walls(items, walls, cfg.pair_layers, cfg.max_wall_thickness)
+        if thin_lines:
+            walls = clean_footprint(union([walls, thin]), cfg.merge_tolerance)
+            warnings.append(f"{len(thin_lines)} linee singole lunghe in tutto {sum(l.length for l in thin_lines):.1f} m (senza una linea "
+                            f"parallela vicina: di solito non sono muri) sono state trattate come muri sottili di "
+                            f"{THICKNESS * 100:.0f} cm perche' chiudono {closed:.0f} m2 di locali che nessun altro muro chiude: "
+                            "controlla nella pianta di controllo e, se non sono muri, escludile con --muri.")
     ribbon: list = []
     if cfg.shape_openings and len(result.thin):  # windows drawn as thin glazing strips along the outside wall
         ribbon, cleared = ribbon_windows(result.thin, walls, result.items, cfg)
@@ -269,6 +278,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             assign_ids(openings)
             plan.__dict__.pop("solid_walls", None)  # the lintels over the passages close the footprint
             solid = plan.solid_walls
+        gaps = wall_gaps(solid, cfg)
+        if gaps:  # a partition with its middle not drawn: offered, never closed
+            where = "; ".join(f"{gap:.1f} m in x={gx / result.unit_scale:.0f}, y={gy / result.unit_scale:.0f}" for gap, (gx, gy) in gaps[:5])
+            many = len(gaps) > 1
+            warnings.append(f"{len(gaps)} {'coppie' if many else 'coppia'} di spezzoni di muro allineati {'stanno' if many else 'sta'} in "
+                            f"uno stesso locale a una distanza maggiore di un vano ({where}{', ...' if len(gaps) > 5 else ''}): "
+                            "se e' un muro unico a cui manca la parte di mezzo, completalo nel disegno; non l'ho chiuso io.")
 
     words = read_words(doc, cfg, result.unit_scale) if cfg.texts else []
     text_unit = text_scale(words)
@@ -323,7 +339,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
 
     if cfg.table_in:
         rows = read_table(cfg.table_in)
-        changed = apply_table(openings, rows, cfg, warnings)
+        changed = apply_table(openings, rows, cfg, warnings, solid, result.unit_scale)
         if changed:
             plan.__dict__.pop("solid_walls", None)  # widths/kinds changed: the filled walls too
             solid = plan.solid_walls
