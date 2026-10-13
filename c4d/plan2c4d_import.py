@@ -78,10 +78,10 @@ def make_material(doc, key, spec, use_corona=True):
         mat = c4d.BaseMaterial(c4d.Mmaterial)
         mat.SetName(spec["name"])
         mat[c4d.MATERIAL_COLOR_COLOR] = color
-        if key in ("glass", "water"):
+        if key in ("glass", "water", "fence_mesh"):
             mat[c4d.MATERIAL_USE_TRANSPARENCY] = True
-            mat[c4d.MATERIAL_TRANSPARENCY_BRIGHTNESS] = 0.85 if key == "glass" else 0.6
-            mat[c4d.MATERIAL_TRANSPARENCY_REFRACTION] = 1.52 if key == "glass" else 1.33
+            mat[c4d.MATERIAL_TRANSPARENCY_BRIGHTNESS] = {"glass": 0.85, "water": 0.6}.get(key, 0.7)
+            mat[c4d.MATERIAL_TRANSPARENCY_REFRACTION] = {"glass": 1.52, "water": 1.33}.get(key, 1.0)
     doc.InsertMaterial(mat)
     return mat
 

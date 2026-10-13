@@ -36,6 +36,7 @@ from .passages import find_passages, wall_gaps
 from .elevmatch import agreed_height, match_known, match_views, storey_stated
 from .garden import build_garden, place_on_terrain
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
+from .lotfence import build_lot_fence
 from .floors import extend_to_outer_faces, floor_left_over, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
 from .qa import plan_overlay, preview_3d, write_report
 from .mesh import storey_tag
@@ -78,6 +79,7 @@ class ConversionReport:
     roof: dict | None = None  # pitch_deg, pitch_source, ridge_height, faces
     flat_roof: dict | None = None  # area_m2, bodies, thickness, parapet_height
     garden: object | None = None  # the Garden: ground, pools, plants, furniture
+    lot: object | None = None  # the lotfence.LotFence: wall, pillars, railing and wire fence round the lot
     terrain: dict | None = None  # the terrain from the contour lines: layer, levels, step, floor level, size...
     garden_table_path: Path | None = None
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
@@ -483,6 +485,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         specs = [(zone, layers) for layers, zone, _ in found_zones]
         garden_zones = [core for _, _, core in found_zones]
     read_zones: list[tuple[float, float, float, float]] = []  # the zones that gave an elevation, read in line with the plan
+    elevation_items: list[list] = []  # what each of them holds: the fence of the lot is read there too
     for i, (spec, found_on) in enumerate(specs):
         er = read_items(doc, cfg, area=tuple(spec[:4]), ignore_veto=True, keep_other=True,
                         unit=result.unit)
@@ -490,6 +493,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         if ev is None:
             continue
         read_zones.append(tuple(spec[:4]))
+        elevation_items.append(er.items)
         elevations.append(ev)
         matched, total = apply_elevation(ev, openings, solid, cfg, warnings)
         elevation_report.append({"side": ev.side, "matched": matched, "total": total,
@@ -564,6 +568,11 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             roof_solid = moved(top.plan.solid_walls, top.shift)
     plan.roof, plan.flat_roof, roof_report, flat_roof_report = _build_roof(doc, roof_cfg, result, roof_solid, elevations, warnings)
 
+    lot = None
+    if cfg.fences:
+        skip = [*garden_zones, *(other_view_boxes(cfg.analysis) if cfg.analysis is not None else [])]
+        lot = build_lot_fence(doc, cfg, result.unit_scale, footprint, list(zip(elevations, elevation_items)), skip, warnings)
+    plan.lot = lot
     garden = None
     if cfg.garden:
         # the walls may have a gap (a doorway wider than a passage): what the floor bridges is inside as well
@@ -574,7 +583,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             if cfg.analysis is not None else []
         try:
             garden = build_garden(doc, replace(cfg, garden_exclude=[*cfg.garden_exclude, *others]),
-                                  result.unit_scale, outside_of, garden_zones, warnings)
+                                  result.unit_scale, outside_of, garden_zones, warnings, lot.footprint if lot else None)
         except Exception as exc:  # the garden is a help: whatever goes wrong in it is never the reason a conversion fails
             garden = None
             warnings.append(f"Giardino non costruito: {type(exc).__name__}: {exc}. Il resto della conversione e' "
@@ -642,6 +651,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         false_walls=false,
         room_objects=rooms,
         garden=garden,
+        lot=plan.lot,
         terrain=plan.terrain.info if plan.terrain is not None else None,
         garden_table_path=garden_table_path,
         analysis=cfg.analysis,

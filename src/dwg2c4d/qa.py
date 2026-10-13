@@ -123,6 +123,10 @@ def summary_lines(report) -> list[str]:
                 srcs = sorted(heights[kind])
                 text = ", ".join(f"{h:g} m ({how})" for how, h in srcs[:3])
                 out.append(f"    altezza {label:<9}: {text}")
+    if report.lot is not None:
+        from .lotfence import summary as lot_summary
+
+        out.append(f"  Recinzione del lotto: {lot_summary(report.lot)}")
     if report.terrain:
         t = report.terrain
         out.append(f"  Terreno            : {t['levels']} curve di livello (layer {t['layer']}, ogni {t['step']:g} m, da {t['low']:.1f} "

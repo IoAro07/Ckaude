@@ -251,6 +251,11 @@ class Config:
     groups_cut: bool = False  # internal: the groups of walls without doors or windows were left out once already (no endless loop)
     garden_exclude: list[tuple[float, float, float, float]] = field(default_factory=list)  # internal: drawing units
 
+    # The fence of the lot (lotfence.py): a low wall with a cap, pillars, a railing, a thin wire fence, from the shapes of the plan and
+    # the heights of the elevation. The library leaves it off (the command line turns it on).
+    fences: bool = False
+    lot_wall_height: float | None = None  # metres: the top of the wall of the lot as the user gave it (the elevation and the defaults do not decide then)
+
     # The terrain, from the contour lines the sheet draws (polylines, each at its own elevation, evenly spaced): the house on
     # a flat platform, the ground sloping away from it, the garden laid on it. Heights in metres.
     terrain: bool = False  # build it even when the evidence is weak (the command line: --terreno)
@@ -322,6 +327,8 @@ class Config:
             "skirting_thickness", "garden_thickness", "garden_lawn_drop", "pool_depth", "pool_wall",
             "pool_water_drop", "tree_height", "shrub_height", "hedge_height", "furniture_height",
             "low_wall_height", "curb_height", "terrain_thickness")]
+        if self.lot_wall_height is not None:
+            numbers.append(self.lot_wall_height)
         numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset, self.garden_area) if box_ for v in box_]
         numbers += [v for ev in self.elevations for v in ev]
         if self.roof_pitch is not None:
@@ -348,6 +355,8 @@ class Config:
                 raise ValueError(f"{name} deve essere positivo")
         if self.label_radius <= 0:
             raise ValueError("label_radius deve essere positivo")
+        if self.lot_wall_height is not None and self.lot_wall_height <= 0:
+            raise ValueError("lot_wall_height deve essere positivo")
         if self.window_sill < 0 or self.floor_thickness < 0:
             raise ValueError("davanzale e spessore pavimento non possono essere negativi")
         for name in ("garden_thickness", "pool_depth", "pool_wall", "tree_height", "shrub_height", "hedge_height",

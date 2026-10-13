@@ -586,9 +586,10 @@ def place_on_terrain(objects: list[GardenObject], ground) -> None:
 # --- building the garden ----------------------------------------------------------------------
 
 def build_garden(doc, cfg: Config, unit_scale: float, footprint: BaseGeometry, zones: list[tuple],
-                 warnings: list[str]) -> Garden | None:
+                 warnings: list[str], lot: BaseGeometry | None = None) -> Garden | None:
     """Read the garden of the drawing. ``zones``: the elevations (drawing units), whose hatches and blocks are
-    not the garden. ``footprint``: the building, walls included, in metres."""
+    not the garden. ``footprint``: the building, walls included, in metres. ``lot``: what the fence of the lot covers (its
+    wall, its pillars): the ground is not laid there, and the hatch that fills the wall is no paving."""
     dist = cfg.arc_tolerance / unit_scale
     user_window = cfg.garden_area or (cfg.area if cfg.area and not cfg.area_auto else None)
     fills, blocks, e_fills, e_blocks, left_out = _scan(doc, cfg, dist, [tuple(z[:4]) for z in zones],
@@ -611,7 +612,7 @@ def build_garden(doc, cfg: Config, unit_scale: float, footprint: BaseGeometry, z
         warnings.append(f"Giardino: {near - len(fills)} campiture fuori dai muri sono a piu' di {GAP:g} m dalla casa e "
                         "dal resto del giardino e le ho ignorate (retini della pianta del tetto, di un altro disegno?). "
                         "Se sono giardino indica dove con --area-giardino.")
-    ground, pools, shells = build_ground(fills, footprint, cfg)
+    ground, pools, shells = build_ground(fills, footprint if lot is None or lot.is_empty else union([footprint, lot]), cfg)
     garden = Garden(ground, pools, shells, [], window.bounds)
     garden.objects = _objects(blocks, e_blocks, e_fills, footprint, window, ground, cfg)
     if garden.empty:

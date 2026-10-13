@@ -202,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--altezza-cespugli", type=float, metavar="M",
                    help="altezza dei cespugli se il prospetto non la da' (default 0,9)")
 
+    g = p.add_argument_group("recinzione del lotto (muretto, pilastri, ringhiera, rete)")
+    g.add_argument("--no-recinzioni", action="store_true",
+                   help="non costruire la recinzione del lotto (muretto con copertina, pilastri, ringhiera, rete): resta com'e' nel disegno")
+    g.add_argument("--altezza-muretto-lotto", type=float, metavar="M",
+                   help="altezza del muretto del lotto, copertina compresa (default: dal prospetto, altrimenti 0,80 m)")
+
     g = p.add_argument_group("terreno (dalle curve di livello del foglio)")
     ex = g.add_mutually_exclusive_group()
     ex.add_argument("--terreno", action="store_true",
@@ -279,7 +285,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
         "tree_height": args.altezza_alberi, "hedge_height": args.altezza_siepi, "shrub_height": args.altezza_cespugli,
         "low_wall_height": args.altezza_muretti, "curb_height": args.altezza_cordoli,
         "slab_thickness": args.spessore_solaio,
-        "terrain_thickness": args.spessore_terreno,
+        "terrain_thickness": args.spessore_terreno, "lot_wall_height": args.altezza_muretto_lotto,
     }
     for name, value in simple.items():
         if value is not None:
@@ -343,6 +349,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
     cfg.garden = False if args.no_giardino else (True if in_config is None else bool(in_config))
     if args.altezza_muretti is not None or args.altezza_cordoli is not None:
         cfg.low_heights_auto = False  # the user's height beats the one written in the drawing
+    in_config = _config_value(args.config, "fences")  # --config {"fences": false} turns it off, as --no-recinzioni
+    cfg.fences = False if args.no_recinzioni else (True if in_config is None else bool(in_config))
     cfg.terrain = args.terreno
     cfg.terrain_auto = not args.no_terreno
     cfg.auto = not args.no_analisi

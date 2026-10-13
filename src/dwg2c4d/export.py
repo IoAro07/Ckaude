@@ -46,8 +46,15 @@ GROUPS = {
     "Siepe": ("Siepi", "hedge"),
     "Cespuglio": ("Cespugli", "shrub"),
     "Arredo": ("Arredi_esterni", "outdoor_furniture"),
+    # the fence of the lot: wall, cap, pillars, railing, wire fence (lotfence.py)
+    "Muretto": ("Recinzione", "lot_wall"),
+    "Copertina": ("Recinzione", "lot_cap"),
+    "Pilastri_lotto": ("Recinzione", "lot_pillar"),
+    "Ringhiera": ("Recinzione", "railing"),
+    "Recinzione_pali": ("Recinzione", "fence_post"),
+    "Recinzione_rete": ("Recinzione", "fence_mesh"),
 }
-SITE_NULLS = ("Giardino", "Piscina", "Alberi", "Siepi", "Cespugli", "Arredi_esterni")  # what belongs to the lot, not to a storey
+SITE_NULLS = ("Giardino", "Piscina", "Alberi", "Siepi", "Cespugli", "Arredi_esterni", "Recinzione")  # what belongs to the lot, not to a storey
 TERRAIN_GROUP = ("Terreno", "terrain")  # the ground of the site (the soil of the garden, when the sheet has no terrain, is "soil")
 FIXTURE_PARTS = ("Telai", "Ante", "Vetri", "Maniglie")
 GARDEN_PARTS = ("Tronco", "Chioma", "Siepe", "Cespuglio", "Arredo")  # parts of a plant / piece of furniture
@@ -89,6 +96,12 @@ MATERIALS = {
     "hedge": {"name": "Siepe", "color": [0.16, 0.36, 0.15], "rough": 0.95},
     "shrub": {"name": "Cespuglio", "color": [0.27, 0.50, 0.22], "rough": 0.95},
     "outdoor_furniture": {"name": "Arredi esterni", "color": [0.82, 0.72, 0.52], "rough": 0.6},
+    "lot_wall": {"name": "Muretto di recinzione", "color": [0.46, 0.43, 0.40], "rough": 0.95},
+    "lot_cap": {"name": "Copertina del muretto", "color": [0.84, 0.82, 0.77], "rough": 0.7},
+    "lot_pillar": {"name": "Pilastro di recinzione", "color": [0.80, 0.78, 0.74], "rough": 0.8},
+    "railing": {"name": "Ringhiera", "color": [0.06, 0.06, 0.07], "rough": 0.4},
+    "fence_post": {"name": "Paletti della rete", "color": [0.18, 0.18, 0.19], "rough": 0.5},
+    "fence_mesh": {"name": "Rete metallica", "color": [0.25, 0.27, 0.25], "rough": 0.5},
 }
 
 

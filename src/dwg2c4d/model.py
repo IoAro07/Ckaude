@@ -15,6 +15,7 @@ from .falsewalls import split_low
 from .geom import polygons_of, union
 from .fixtures import add_fixtures
 from .garden import add_garden
+from .lotfence import add_lot_fence
 from .mesh import Mesh, Slab
 from .openings import Opening
 from .roof import MODULE_HEIGHT, FlatRoof, Roof
@@ -40,6 +41,7 @@ class Plan:
     low: BaseGeometry = field(default_factory=Polygon)  # curbs, low walls and lot lines outside the building (falsewalls)
     low_written: list[tuple[BaseGeometry, float]] = field(default_factory=list)  # (body, height m) of those whose height the drawing writes
     garden: object | None = None  # the ground, pools, plants and furniture outside (garden.Garden)
+    lot: object | None = None  # the wall, pillars, railing and wire fence round the lot (lotfence.LotFence)
     terrain: object | None = None  # the ground under it all, with the house on a platform (terrain.Terrain)
 
     @cached_property
@@ -232,6 +234,16 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str], roof: bool = True) 
                 del mesh.groups[name]
             plan.garden = None
             warnings.append(f"Giardino non costruito: {type(exc).__name__}: {exc}. Il resto del modello e' completo.")
+
+    if plan.lot is not None:
+        before = set(mesh.groups)
+        try:
+            add_lot_fence(mesh, plan.lot, cfg, ground, cfg.lot_wall_height)
+        except Exception as exc:  # the fence is a help: what it had made is taken out again, the house stays
+            for name in set(mesh.groups) - before:
+                del mesh.groups[name]
+            plan.lot = None
+            warnings.append(f"Recinzione del lotto non costruita: {type(exc).__name__}: {exc}. Il resto del modello e' completo.")
 
     by_room = cfg.floor_thickness > 0 and bool(plan.floors)
     for name, shape in plan.floors if by_room else []:
