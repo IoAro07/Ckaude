@@ -72,6 +72,8 @@ class Opening:
     label: str = ""
     layer: str = ""
     block: str = ""
+    storey: int | None = None  # the storey it belongs to when the model stacks several (None: a single plan)
+    shift: tuple[float, float] = (0.0, 0.0)  # m: from the frame of its own plan to the frame of the model (stacked storeys)
 
     @property
     def u(self) -> tuple[float, float]:

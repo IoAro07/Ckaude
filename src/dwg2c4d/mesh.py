@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass, field
+from typing import Callable
 
 import shapely
 from shapely.geometry import Polygon
@@ -16,6 +18,19 @@ WELD = 1e-5  # metres
 GRID = 1e-5  # footprints are snapped to this grid so neighbours share exact coordinates
 
 Vec3 = tuple[float, float, float]
+
+STOREY_TAG = re.compile(r"^(PM?\d+)_(.+)$")  # P0_Muri, P1_Telai_F01, PM1_Muri: the group of a stacked storey
+
+
+def storey_tag(index: int) -> str:
+    """P0 for the ground floor, P1, P2... above it, PM1 for the first storey under the ground."""
+    return f"P{index}" if index >= 0 else f"PM{-index}"
+
+
+def split_storey(group: str) -> tuple[str, str]:
+    """(tag, name) of a group of a stacked model ('P1_Telai_F01' -> ('P1', 'Telai_F01')); ('', name) for any other."""
+    m = STOREY_TAG.match(group)
+    return (m.group(1), m.group(2)) if m else ("", group)
 
 
 @dataclass
@@ -66,6 +81,15 @@ class Mesh:
         """Move the whole model in the plan (heights unchanged)."""
         self.vertices = [(x + dx, y + dy, z) for x, y, z in self.vertices]
         self._vkeys = {}  # welding keys are stale; nothing more is added after this
+
+    def add_mesh(self, other: "Mesh", shift: Vec3 = (0.0, 0.0, 0.0), rename: Callable[[str], str] = lambda name: name) -> None:
+        """Copy the faces of ``other`` into this mesh, moved by ``shift`` (metres) and under the names ``rename`` gives their
+        groups: the storeys of a stack are put in one model this way."""
+        dx, dy, dz = shift
+        for name, faces in other.groups.items():
+            for ids, ni in faces:
+                points = [(other.vertices[i][0] + dx, other.vertices[i][1] + dy, other.vertices[i][2] + dz) for i in ids]
+                self.add_face(rename(name), points, other.normals[ni])
 
     @property
     def face_count(self) -> int:

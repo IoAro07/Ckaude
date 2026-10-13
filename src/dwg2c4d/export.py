@@ -12,7 +12,7 @@ import json
 import math
 from pathlib import Path
 
-from .mesh import Mesh
+from .mesh import Mesh, split_storey, storey_tag
 
 # mesh group -> (null name, material key)
 GROUPS = {
@@ -46,9 +46,16 @@ GROUPS = {
     "Cespuglio": ("Cespugli", "shrub"),
     "Arredo": ("Arredi_esterni", "outdoor_furniture"),
 }
+SITE_NULLS = ("Giardino", "Piscina", "Alberi", "Siepi", "Cespugli", "Arredi_esterni")  # what belongs to the lot, not to a storey
 FIXTURE_PARTS = ("Telai", "Ante", "Vetri", "Maniglie")
 GARDEN_PARTS = ("Tronco", "Chioma", "Siepe", "Cespuglio", "Arredo")  # parts of a plant / piece of furniture
 FRAME_PARTS = FIXTURE_PARTS + GARDEN_PARTS  # groups named PART_ID (Telai_F01, Chioma_A01) hang under a null ID
+
+
+def is_site_group(name: str) -> bool:
+    """Does a mesh group belong to the lot (garden, pool, plants) rather than to a storey of the building?"""
+    null = GROUPS.get(name) or GROUPS.get(name.partition("_")[0])
+    return null is not None and null[0] in SITE_NULLS
 MATERIALS = {
     "wall": {"name": "Muro", "color": [0.90, 0.89, 0.86], "rough": 0.85},
     "wall_outer": {"name": "Muro esterno", "color": [0.85, 0.78, 0.68], "rough": 0.9},
@@ -88,20 +95,23 @@ def _frames(mesh: Mesh, openings, origin_offset: tuple[float, float], garden_obj
     with its objects' points relative to it."""
     low: dict[str, float] = {}
     for gname, faces in mesh.groups.items():
-        base, _, oid = gname.partition("_")
+        tag, rest = split_storey(gname)
+        base, _, oid = rest.partition("_")
         if oid and base in FRAME_PARTS:
+            key = f"{tag}_{oid}" if tag else oid
             for ids, _n in faces:
                 for vid in ids:
-                    low[oid] = min(low.get(oid, math.inf), mesh.vertices[vid][2])
+                    low[key] = min(low.get(key, math.inf), mesh.vertices[vid][2])
     frames = {}
     for o in openings or []:
-        if o.id not in low:
+        key = o.id if o.storey is None else f"{storey_tag(o.storey)}_{o.id}"
+        if key not in low:
             continue
         sign = o.face_sign or 1
         ux, uy = o.axis
-        frames[o.id] = {
-            "origin": [round((o.center[0] + origin_offset[0]) * 100, 3), round((o.center[1] + origin_offset[1]) * 100, 3),
-                       round(low[o.id] * 100, 3)],
+        frames[key] = {
+            "origin": [round((o.center[0] + o.shift[0] + origin_offset[0]) * 100, 3),
+                       round((o.center[1] + o.shift[1] + origin_offset[1]) * 100, 3), round(low[key] * 100, 3)],
             "ex": [round(sign * ux, 6) + 0.0, round(sign * uy, 6) + 0.0],  # "+ 0.0": no -0.0 in the file
             "ey": [round(-sign * uy, 6) + 0.0, round(sign * ux, 6) + 0.0],
         }
@@ -127,18 +137,27 @@ def to_model_dict(mesh: Mesh, name: str, origin_offset: tuple[float, float] = (0
     frames = _frames(mesh, openings, origin_offset, garden_objects)
     groups, objects, used = [], [], set()
     for gname, faces in mesh.groups.items():
-        base, _, opening = gname.partition("_")
-        null, mat = GROUPS.get(gname) or GROUPS.get(base, (gname, "wall"))
+        tag, rest = split_storey(gname)  # a model of several storeys: P1_Telai_F01 under the null P1_F01 inside P1_Infissi
+        base, _, opening = rest.partition("_")
+        null, mat = GROUPS.get(rest) or GROUPS.get(base, (rest, "wall"))
+        parent = name
+        if tag:
+            if tag not in used:
+                used.add(tag)
+                groups.append({"name": tag, "label": tag, "parent": name})
+            parent, kind = tag, null
+            null = f"{tag}_{null}"
         if null not in used:
             used.add(null)
-            groups.append({"name": null, "label": null, "parent": name})
+            groups.append({"name": null, "label": kind if tag else null, "parent": parent, **({"layer": kind} if tag else {})})
         frame = None
         if opening and base in FRAME_PARTS:  # Telai_F01: under a null F01 inside Infissi; Chioma_A01 inside Alberi
-            frame = frames.get(opening)
-            if opening not in used:
-                used.add(opening)
-                groups.append({"name": opening, "label": opening, "parent": null, **(frame or {})})
-            null = opening
+            key = f"{tag}_{opening}" if tag else opening
+            frame = frames.get(key)
+            if key not in used:
+                used.add(key)
+                groups.append({"name": key, "label": opening, "parent": null, **(frame or {})})
+            null = key
         index: dict[int, int] = {}
         points: list[float] = []
         polys: list[int] = []

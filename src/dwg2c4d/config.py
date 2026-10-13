@@ -258,6 +258,14 @@ class Config:
     pair_layers: tuple[str, ...] = ()  # internal: wall layers chosen by their shape: two parallel lines make a wall
     shape_openings: bool = False  # internal: openings by their shape: a swing arc at a wall is a door, a gap in an outside wall a window
 
+    # Storeys drawn as plan views of their own on the sheet (PIANTA PIANO TERRA, PIANTA PIANO PRIMO): laid one over the other
+    # in one model (stacking.py).
+    stacking: str = "auto"  # auto: when the titles name consecutive storeys and the outlines register | yes: also with --vista/--area | no
+    slab_thickness: float | None = None  # metres: the slab between two stacked storeys (default: stacking.DEFAULT_SLAB)
+    storey: int | None = None  # internal: the storey (0 = ground) of the plan being converted, when it is one of a stack
+    part: bool = False  # internal: this conversion is an upper storey of a stack: the caller puts the storeys together
+    user: object | None = field(default=None, repr=False, compare=False)  # internal: the Config as given, before the analysis changed it
+
     # Input / output.
     units: str | None = None  # force drawing units: mm, cm, m, in, ft
     out_units: str = "m"
@@ -313,6 +321,10 @@ class Config:
             raise ValueError(f"wall_mode deve essere uno di {WALL_MODES}")
         if self.units is not None and self.units not in UNIT_TO_METERS:
             raise ValueError(f"unita' del disegno non valida: {self.units!r}")
+        if self.stacking not in ("auto", "yes", "no"):
+            raise ValueError("stacking deve essere auto, yes o no")
+        if self.slab_thickness is not None and not 0.05 <= self.slab_thickness <= 1.5:
+            raise ValueError("spessore del solaio: tra 0,05 e 1,5 m")
         if self.fixtures not in ("simple", "detailed"):
             raise ValueError("fixtures deve essere simple o detailed")
         if self.origin not in ("drawing", "center", "min"):
