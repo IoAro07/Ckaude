@@ -4,6 +4,27 @@ La versione in uso la dice `python -m dwg2c4d --version` (e la prima riga di `co
 deve coincidere con quella di `pyproject.toml` e con la riga in testa al [README](README.md). Dopo ogni aggiornamento
 decomprimi il progetto in una **cartella nuova** e controlla che la versione sia quella attesa.
 
+## [0.7.0] — 2026-10-13
+
+**Dal confronto con i modelli 3D fatti a mano** (Test2, Test3, Test6, Test7): lo strumento usa tutta la tavola.
+
+- **Piani sovrapposti**: le piante dei piani della tavola sono convertite, sovrapposte per il contorno dei muri, messe
+  alla loro quota (prospetti, sezioni) e riunite in un modello (`P0_Muri`, `P1_Muri`, `P1_Solaio`...);
+  `--piani`/`--no-piani`/`--spessore-solaio`; tabella delle aperture e JSON con il piano.
+- **Tetto dalla vista della copertura** (modulo `roofview`): pulita e messa sulla pianta (4 rotazioni, sovrapposizione
+  dei contorni), pendenza scritta nel foglio, sporto dal muro disegnato sotto la gronda; **tetto piano** con lastra,
+  parapetto e **pannelli fotovoltaici**; `--spessore-tetto`, `--sposta-tetto`.
+- **Terreno dalle curve di livello** (`terrain`, `sitefit`): rilievo messo sulla pianta, piattaforma sotto la casa,
+  pendio raccordato, lastra chiusa; il giardino e i bassi seguono il terreno; `--terreno`/`--no-terreno`/`--spessore-terreno`.
+- **Muri finti** (`falsewalls`): arredi, scale, cordoli e contorni di lotti non sono più estrusi come muri;
+  muretti e cordoli a parte con l'altezza scritta o predefinita; `--muri-tutti`, `--altezza-muretti`, `--altezza-cordoli`.
+- **Finestre a nastro** dalle strisce sottili del vetro (`glazing`); **pavimento unico** sull'impronta dove nessun
+  locale ha il suo; porte negli archi di blocchi annidati; **muri sottili a linea singola** (`thinwalls`); tronconi
+  allineati proposti; aperture doppie fuse; **righe che aggiungono aperture** nella tabella.
+- **Difetti**: il giardino non si blocca più su una planimetria generale e non prende le campiture di altre viste; i
+  layer del terreno e delle strade non sono proposti come muri; un errore del giardino, del terreno o del tetto dalla
+  vista è un avviso e mai la fine della conversione.
+
 ## [0.6.0] — 2026-10-09
 
 **Prospetti disegnati altrove** e tavole con più disegni.

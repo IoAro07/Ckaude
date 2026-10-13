@@ -1,6 +1,6 @@
 # dwg2c4d — da planimetria 2D (DWG/DXF) a modello 3D per Cinema 4D
 
-**Versione 0.6.0** (9 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
+**Versione 0.7.0** (13 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
 
 Legge una pianta 2D, ne **estrude i muri** (con i tramezzi a parte), **apre porte, finestre e vani** con le
 quote che trova (scritte del disegno, prospetti), costruisce **infissi dettagliati** (imbotto, cornice, telai, ante,
@@ -27,14 +27,14 @@ Il codice sta nel repository pubblico <https://github.com/IoAro07/Ckaude> (il ra
   qualsiasi (per esempio `C:\dwg2c4d`).
 - **Con git**: `git clone https://github.com/IoAro07/Ckaude.git`
 
-In alternativa il file `dwg2c4d-0.6.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
-dwg2c4d-0.6.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+In alternativa il file `dwg2c4d-0.7.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.7.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
 script di Cinema 4D, che stanno nella cartella del progetto.
 
 **Per aggiornare** a una versione nuova: scarica di nuovo il progetto in una **cartella nuova** (o `git pull`) e rifai
 `installa.bat`. I file `converti.bat` ed `elenca_layer.bat` usano comunque sempre il codice della cartella in cui stanno
 (`src`), anche se in Python è rimasta installata una copia vecchia. Quando parte, `converti.bat` stampa la riga
-`dwg2c4d 0.6.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
+`dwg2c4d 0.7.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
 usando una cartella vecchia. `python -m dwg2c4d --version` fa lo stesso da terminale.
 
 *Perché la cartella nuova*: pip lascia dentro il progetto una cartella `build`; uno ZIP non porta il fuso orario, quindi
@@ -534,6 +534,73 @@ a mano la vista (`--vista`), i layer (`--muri`) o l'area (`--area`).
 
 I prospetti riconosciuti dall'analisi, ovunque stiano nel foglio, servono per le quote delle aperture: vedi
 *Prospetti disegnati altrove* qui sopra.
+
+## Tutto il resto della tavola: piani, tetto, terreno, muri veri e finti
+
+Dalla 0.7.0 lo strumento non si ferma alla pianta di un piano: usa anche le altre viste della stessa tavola.
+Tutto parte dall'analisi del foglio (da riga di comando è automatica; `--no-analisi` la spegne) e **tutto ciò che
+viene dedotto lo dice nel riepilogo** (`*_report.txt`) con un avviso da controllare.
+
+**Piani sovrapposti** (`--piani` / `--no-piani`, `--spessore-solaio`). Se la tavola ha una pianta per piano
+(titolo `PIANTA PIANO TERRA`, `PIANTA PIANO PRIMO`, `1° PIANO`...) i piani vengono convertiti uno per uno, sovrapposti
+per il contorno dei muri (la pianta di sopra viene spostata sulla pianta di sotto: il riepilogo dice di quanto e quanto
+combaciano), messi alla loro quota (da `+3,20` e dai solai dei prospetti e delle sezioni, altrimenti altezza dei muri +
+solaio di 30 cm) e riuniti in un modello solo: i gruppi si chiamano `P0_Muri_esterno`, `P1_Muri_esterno`,
+`P1_Telai_F01`..., con il solaio `P1_Solaio`. Le aperture di ogni piano prendono le quote dalla riga di prospetto del
+piano. Un piano che non combacia non viene impilato e lo si dice. Con `--vista`/`--area` si converte solo la pianta
+indicata, a meno di `--piani`; i fogli con un solo piano restano come prima.
+
+**Tetto dalla vista della copertura.** Molti fogli disegnano la pianta della copertura come vista a parte (titolo
+`PLANIMETRIA COPERTURA`, o campiture di coppi), lontana dalla pianta e spesso ruotata di un quarto di giro, sul layer
+`0`. Se nessun layer `Tetto`/`Roof`/`Copertura` dà un tetto, il programma usa quella vista: 1) la pulisce (quote, testi,
+linee di sezione, tratteggi di coppi disegnati a linee, pannelli, lucernari, grondaie, frecce, e il muro disegnato sotto
+la gronda, da cui legge lo sporto); 2) la mette sulla pianta: prova le 4 rotazioni e cerca lo spostamento che fa
+combaciare il contorno del tetto con il perimetro dei muri allargato dello sporto; la accetta solo con una
+sovrapposizione di almeno il 45 % e il 60 % del tetto sull'edificio, altrimenti **non mette nessun tetto** e lo scrive
+(mai un tetto nel posto sbagliato; allora `--layer-tetto`, `--area-tetto`, `--sposta-tetto`); se due posizioni vanno
+quasi ugualmente bene sceglie quella dove i corpi del tetto stanno sui muri e lo avvisa; 3) costruisce le falde dai colmi.
+La pendenza è `--pendenza`, altrimenti quella scritta nel foglio (`Pendenza 25 %`, `30 gradi`), altrimenti dai colmi dei
+prospetti, altrimenti 25 gradi con un avviso. Un corpo del tetto senza colmi né displuvi è un **tetto piano**: una
+lastra (`--spessore-tetto`, 15 cm, gruppo `Copertura`) con il parapetto dove la pianta disegna il doppio filo; 12 o più
+campiture uguali della misura di un pannello sopra la lastra diventano **blocchi fotovoltaici** alti 35 cm
+(gruppo `Pannelli`). Con più piani impilati il tetto sta sul piano più alto.
+
+**Terreno dalle curve di livello** (`--terreno` / `--no-terreno`, `--spessore-terreno`). Se la tavola ha le curve di
+livello (polilinee ciascuna a una quota, a intervalli regolari: almeno 10 quote sotto la casa, o almeno 3 con
+`--terreno`) il programma costruisce il terreno: legge le quote dal disegno e non dal nome del layer, mette la pianta sul
+rilievo (che sta quasi sempre in un'altra vista della tavola), prende come quota 0 il pavimento finito scritto nel foglio
+(`+0,00 (297.40)`, `QUOTA PIANO 297.40`) o l'altezza del terreno sotto la casa, appiana una **piattaforma** sotto la casa
+e una fascia intorno, e raccorda il pendio (mai più ripido di una scarpata). È una lastra chiusa, gruppo `Terreno`, spessa
+`--spessore-terreno` sotto il suo punto più basso; il giardino, la piscina, i muretti e i cordoli seguono il terreno.
+Senza prove sufficienti non costruisce niente e il giardino resta piatto a quota 0.
+
+**Muri veri e muri finti** (`--muri-tutti`, `--altezza-muretti`, `--altezza-cordoli`). Sui layer scelti dal programma
+(non su quelli che indichi tu con `--muri`) ci sono anche arredi, scale, cordoli e contorni di lotti. Tre regole, ognuna
+con la sua prova nel disegno: 1) un piccolo contorno chiuso che non tocca nessun muro è un **arredo** e non viene
+estruso (un quadrato della misura di un pilastro, ripetuto, diventa un pilastro); 2) quando i muri del disegno sono
+marcati con campiture, un corpo fuori dall'edificio e senza porte né finestre è un **basso**: muretto (0,5 m, o l'altezza
+scritta accanto, `Hmuro= 1,00 ml.`) o cordolo se sottile (0,15 m); 3) un contorno lungo e sottile che non tocca nulla e
+non chiude una stanza è un muretto. Le scale disegnate a righe non diventano blocchi alti come i muri. Quello che viene
+tolto o abbassato è elencato nel riepilogo; `--muri-tutti` spegne tutto (tutto ciò che sta sui layer dei muri è muro).
+Un layer di terreno o di strade (`calpestabile`, `terreno`, `coppi`, `curve di livello`) non viene mai proposto come
+muri; una planimetria generale chiesta con `--vista` viene costruita bassa e lo dice.
+
+**Finestre a nastro.** Una finestra disegnata solo dal suo vetro (due o più linee parallele a meno di 6 cm, lunghe
+almeno 60 cm, nel muro esterno, su un layer che si chiama `Linee`) è riconosciuta come finestra: le campate vicine
+formano un'unica finestra a nastro, il muro viene rifatto intorno e le linee del vetro non fanno più un muro pieno. Le
+finestre dedotte così sono segnate nella tabella (*riconosciuta dalla forma*).
+
+**Pavimento su tutto l'edificio.** Dove nessun locale chiuso dai muri ha il suo pavimento, il programma stende un
+pavimento unico (`Pavimento`) sull'impronta dei muri (varchi fino a 4 m ponticellati, muri a cui manca un pezzo di
+angolo ricongiunti) meno i muri, e lo dice.
+
+**Altro.** Le porte con l'arco di rotazione dentro blocchi annidati si leggono; una linea singola lunga che chiude uno
+spazio che nessun muro chiude, su un layer letto a coppie di linee, è un muro sottile (con avviso; le linee tratteggiate
+mai); tronconi di muro allineati a 2-6 m uno dall'altro dentro la stessa stanza vengono **proposti**, non chiusi;
+aperture doppie nello stesso punto con la stessa misura si fondono; nella tabella delle aperture una **riga senza sigla**
+con `x`, `y`, tipo e larghezza **aggiunge** un'apertura che il programma non ha trovato; il giardino non prende più le
+campiture di altre viste della tavola (un altro piano, il tetto, le sezioni) e un suo errore è un avviso, mai la fine
+della conversione.
 
 ## Importare in Cinema 4D
 
