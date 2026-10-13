@@ -262,7 +262,7 @@ def fake_roof(ridge=2.0):
 
 def fake_found():
     reg = rv.Registration(0, False, (-54.0, 0.0), 0.72, 0.6)
-    return rv.ViewRoof([], [], 6, reg, 0.6, (16.9, 16.8), False)
+    return rv.ViewRoof([], [], 6, reg, 0.6, (16.9, 16.8), False, 54.0)
 
 
 def test_elevations_that_reach_far_above_the_roof_are_said_to_show_more_storeys():
@@ -279,7 +279,7 @@ def test_elevations_that_end_at_the_roof_say_nothing_about_storeys():
 
 def test_the_notes_tell_where_the_roof_came_from_and_how_it_was_put_on_the_plan():
     note = rv.view_roof_notes(fake_found(), fake_roof(), (14.04, "25 %"), [], 3.2)
-    assert "vista 6" in note[0] and "-54.00" in note[0] and "72 %" in note[0] and "0.60 m" in note[0]
+    assert "vista 6" in note[0] and "54 m" in note[0] and "72 %" in note[0] and "0.60 m" in note[0]
     assert any("25 %" in n for n in note)
 
 
@@ -398,3 +398,14 @@ def test_there_is_no_flat_roof_without_flat_bodies_and_no_parapet_without_the_do
     assert build_flat_roof([], [], 3.0) is None
     flat = build_flat_roof([FlatBody(box(0, 0, 5, 5))], [], 3.0)
     assert flat.parapet is None
+
+
+def test_an_eave_drawn_in_pieces_by_stray_lines_is_still_the_whole_eave():
+    """A gable roof 12 x 6 m whose south side is cut into pieces of 2.5 m by four strokes that touch it: each piece is
+    shorter than the gable end (3 m), but the eave is the whole side, so the ridge stands 3 m x tan(25) over it."""
+    items = [item("Tetto", LineString(box(0, 0, 12, 6).exterior.coords)), item("Tetto", LineString([(0, 3), (12, 3)]))]
+    items += [item("Tetto", LineString([(x, 0), (x, -1)])) for x in (2.5, 5.0, 7.5, 10.0)]
+    for it in items:
+        it.category = "roof"
+    roof = build_roof(items, Config(units="m", roof=True, roof_offset=(0.0, 0.0)), 1.0, (0, 0, 12, 6), [], [])
+    assert roof.ridge_height == pytest.approx(3.0 * math.tan(math.radians(25.0)), abs=0.01)

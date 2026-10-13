@@ -113,6 +113,12 @@ def _edges(poly: Polygon):
         yield from zip(c, c[1:])
 
 
+def _collinear(a, b, c) -> bool:
+    """Do the points lie on one straight line, b between a and c or not (within the node grid)?"""
+    cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+    return abs(cross) <= NODE_GRID * max(math.hypot(c[0] - a[0], c[1] - a[1]), 1.0)
+
+
 def _line_dist(p, a, b) -> float:
     dx, dy = b[0] - a[0], b[1] - a[1]
     n = math.hypot(dx, dy)
@@ -222,7 +228,7 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
     for i, face in enumerate(faces):
         face = orient(face, 1.0)
         oriented.append(face)
-        best = None
+        runs: list[list[tuple[float, float]]] = []  # the outline edges of the face, collinear neighbours joined: [start, end]
         for a, b in _edges(face):
             for pt in (a, b):
                 k = _key(*pt)
@@ -232,11 +238,15 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
             mid = Point((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
             if outline_boundary.distance(mid) < ON_OUTLINE:
                 outline_edges.append((a, b))
-                length = math.hypot(b[0] - a[0], b[1] - a[1])
-                if best is None or length > best[0]:
-                    best = (length, a, b)
-        if best:
-            eave[i] = (best[1], best[2])
+                if runs and runs[-1][1] == a and _collinear(runs[-1][0], a, b):
+                    runs[-1][1] = b
+                else:
+                    runs.append([a, b])
+        if len(runs) > 1 and runs[-1][1] == runs[0][0] and _collinear(runs[-1][0], runs[0][0], runs[0][1]):
+            runs[0][0] = runs.pop()[0]  # the run goes on across the start of the ring
+        if runs:  # the eave is the longest side of the face on the outline (a side drawn in pieces counts once, whole)
+            a, b = max(runs, key=lambda r: math.hypot(r[1][0] - r[0][0], r[1][1] - r[0][1]))
+            eave[i] = (a, b)
 
     dist: dict[tuple[int, int, int], float] = {}  # (face, node) -> distance to the face's eave line
     for k, fs in faces_at.items():

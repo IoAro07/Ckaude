@@ -533,6 +533,7 @@ class ViewRoof:
     overhang: float | None  # m: from the wall line the view draws under the eaves, else from the registration
     size: tuple[float, float]  # m: the outline of the roof
     ambiguous: bool  # the roof fits the plan in another pose too, and the lines of the roof do not look the same in it
+    moved: float = 0.0  # m: how far the middle of the roof was carried from where the sheet draws it
 
 
 def pitch_from_texts(texts: list[str]) -> tuple[float, str] | None:
@@ -613,8 +614,9 @@ def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale:
         ambiguous = any(place(drawn, alt).difference(place(drawn, reg).buffer(SAME_LINES)).length > 0.02 * drawn.length
                         for alt in reg.alternatives)
         bx0, by0, bx1, by1 = clean.outline.bounds
+        middle = clean.outline.centroid
         found = ViewRoof(placed, flats, v.id, reg, clean.overhang if clean.overhang is not None else reg.overhang,
-                         (bx1 - bx0, by1 - by0), ambiguous)
+                         (bx1 - bx0, by1 - by0), ambiguous, middle.distance(place(middle, reg)))
         if best is None or reg.iou > best.registration.iou:
             best = found
     if best is not None:
@@ -643,7 +645,7 @@ def view_roof_notes(found: ViewRoof, roof: "Roof | None", pitch: tuple[float, st
     if reg.mirror:
         moved += " e rovesciato (era speculare alla pianta)"
     notes = [f"Tetto: costruito dalla vista della copertura (vista {found.view}, {w:.1f} x {h:.1f} m, disegnata altrove nel foglio): "
-             f"messo sulla pianta {moved} e spostato di {reg.shift[0]:.2f}, {reg.shift[1]:.2f} m, facendo combaciare il suo contorno "
+             f"messo sulla pianta {moved} e portato {found.moved:.0f} m piu' in la', facendo combaciare il suo contorno "
              f"con i muri (sovrapposizione {reg.iou * 100:.0f} %, sporto {found.overhang:.2f} m). Controlla nell'anteprima 3D "
              "che sia al suo posto."]
     if found.ambiguous:

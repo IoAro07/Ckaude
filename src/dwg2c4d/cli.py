@@ -136,17 +136,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="non cercare da solo i prospetti dai layer chiamati 'Prospetto...' "
                         "(vale solo se non indichi --prospetto)")
     g.add_argument("--no-tetto", action="store_true",
-                   help="non costruire il tetto anche se c'e' un layer Tetto/Roof/Copertura")
+                   help="non costruire il tetto anche se c'e' un layer Tetto/Roof/Copertura o la pianta della copertura "
+                        "disegnata nel foglio")
     g.add_argument("--tetto", action="store_true",
                    help="costruisci il tetto dalla pianta del tetto (layer Tetto/Roof/Copertura): contorno + "
-                        "colmi/displuvi. Se il layer c'e' il tetto si fa da solo (--no-tetto lo evita); con "
-                        "--tetto si avvisa anche quando non si trova nulla")
+                        "colmi/displuvi. Se il layer c'e' il tetto si fa da solo (--no-tetto lo evita); se non c'e' e il "
+                        "foglio disegna la pianta della copertura come vista a parte, il tetto si fa da quella (pulita e "
+                        "messa sulla pianta; un contorno senza colmi e' un tetto piano); con --tetto si avvisa anche "
+                        "quando non si trova nulla")
     g.add_argument("--layer-tetto", help="layer della pianta del tetto (virgole, * jolly)")
     g.add_argument("--area-tetto", type=_area, metavar="XMIN,YMIN,XMAX,YMAX",
                    help="dove e' disegnata la pianta del tetto (default: tutto il disegno)")
     g.add_argument("--pendenza", type=float, metavar="GRADI",
-                   help="pendenza delle falde; se manca viene dedotta dai colmi del prospetto, "
-                        "altrimenti 25 gradi")
+                   help="pendenza delle falde; se manca viene letta dal foglio (\"Pendenza 25 %%\"), dedotta dai colmi del "
+                        "prospetto, altrimenti 25 gradi")
     g.add_argument("--spessore-tetto", type=float, help="spessore del tetto (default 0.15 m)")
     g.add_argument("--sposta-tetto", type=_pair, metavar="DX,DY",
                    help="spostamento della pianta del tetto sulla pianta, in unita' del disegno "

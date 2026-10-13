@@ -167,8 +167,13 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
         roof = build_roof(items, cfg, result.unit_scale, solid.bounds, ridge_hints_from(elevations, cfg.wall_height), own)
     stated = "roof" in cfg.layers.overrides or cfg.roof_area is not None or cfg.roof_offset is not None
     if roof is None and not stated and cfg.analysis is not None and not site_plan_asked(cfg.analysis, cfg):
-        found = roof_from_view(doc, cfg, cfg.analysis, union([building_footprint(solid), floor_footprint(solid)]), result.unit,
-                               result.unit_scale, own)
+        try:
+            found = roof_from_view(doc, cfg, cfg.analysis, union([building_footprint(solid), floor_footprint(solid)]), result.unit,
+                                   result.unit_scale, own)
+        except Exception as exc:  # the roof plan of the sheet is a help: whatever goes wrong in it is never the reason a conversion fails
+            found = None
+            own.append(f"Tetto dalla vista della copertura non costruito: {type(exc).__name__}: {exc}. Il resto della conversione e' "
+                       "completo; per il tetto indica i layer con --layer-tetto.")
         if found is not None:
             pitch = written_pitch(cfg.analysis)
             if found.items:
@@ -177,7 +182,7 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
             flat = build_flat_roof(found.flats, elevations, cfg.wall_height)
             if roof is not None or flat is not None:
                 view, overhang = found.view, found.overhang
-                own = [n for n in own if not n.startswith("Tetto: le linee del tetto non formano")]
+                own = [n for n in own if not n.startswith(("Tetto: le linee del tetto non formano", "Tetto: nessuna linea trovata"))]
                 own.extend(view_roof_notes(found, roof, pitch, elevations, cfg.wall_height))
                 if flat is not None:
                     own.extend(flat_roof_notes(flat))

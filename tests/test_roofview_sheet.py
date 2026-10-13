@@ -158,3 +158,21 @@ def test_the_double_line_along_the_edge_of_a_flat_roof_is_a_parapet_in_the_model
 def test_a_roof_with_ridges_makes_no_flat_slab(tmp_path):
     report, obj = converted(tmp_path)
     assert report.flat_roof is None and "Copertura" not in obj.groups
+
+
+def test_a_failure_in_the_roof_view_never_stops_the_conversion(tmp_path, monkeypatch):
+    import dwg2c4d.pipeline as pipeline
+
+    def boom(*args, **kwargs):
+        raise ValueError("rotto")
+
+    monkeypatch.setattr(pipeline, "roof_from_view", boom)
+    report, obj = converted(tmp_path)
+    assert report.roof is None and any("non costruito: ValueError" in w for w in report.warnings)
+    assert "Muri" in obj.groups
+
+
+def test_a_roof_asked_for_with_no_roof_layer_is_taken_from_the_roof_view_without_complaints_about_layers(tmp_path):
+    report, _ = converted(tmp_path, Config(auto=True, roof=True, roof_auto=True, images=False))
+    assert report.roof is not None and report.roof["view"] is not None
+    assert not any("nessuna linea trovata" in w for w in report.warnings)
