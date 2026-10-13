@@ -203,7 +203,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if not columns.is_empty:
         columns = columns.difference(walls)
     if cfg.pair_layers:  # walls drawn in pairs of lines: a single line that closes a space the others leave open is a thin wall
-        thin, thin_lines, closed = single_line_walls(items, walls, cfg.pair_layers, cfg.max_wall_thickness)
+        thin, thin_lines, closed = single_line_walls(result.items, walls, cfg.pair_layers, cfg.max_wall_thickness)
         if thin_lines:
             walls = clean_footprint(union([walls, thin]), cfg.merge_tolerance)
             warnings.append(f"{len(thin_lines)} linee singole lunghe in tutto {sum(l.length for l in thin_lines):.1f} m (senza una linea "
