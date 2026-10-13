@@ -41,8 +41,8 @@ def add_pair(msp, x0, x1, y0, y1):
         msp.add_line((OX + x0 * 100, y * 100), (OX + x1 * 100, y * 100))
 
 
-def add_hatch(msp, x0, y0, x1, y1, color):
-    h = msp.add_hatch(color=color)
+def add_hatch(msp, x0, y0, x1, y1, color, layer="0"):
+    h = msp.add_hatch(color=color, dxfattribs={"layer": layer})
     h.paths.add_polyline_path([(OX + x * 100, y * 100) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1))], is_closed=True)
     return h
 
@@ -51,7 +51,7 @@ def add_word(msp, text, x, y):
     msp.add_text(text, height=40, dxfattribs={"insert": (OX + x * 100, y * 100)})
 
 
-def site_sheet(path, turn=0, ground=True, bands=0, band_width=3.0):
+def site_sheet(path, turn=0, ground=True, bands=0, band_width=3.0, band_layers=("0",)):
     """The plan (view A) and the site plan (view B): the lot, a copy of the plan (turned ``turn`` quarters about its corner)
     and, when ``ground``: a lawn drawn with gaps at its corners and written PRATO, a paving that is a grey hatch, a road
     between two long lines written STRADA, a room with nothing to say what it is, and a tree (a small circle) in the lawn."""
@@ -83,14 +83,14 @@ def site_sheet(path, turn=0, ground=True, bands=0, band_width=3.0):
         add_word(msp, "MURO DI CONTENIMENTO H= 120 cm", 43, 39)
         add_pair(msp, 50, 53, 5.0, 5.2)  # 3 m: the joint of a paving, no curb
     for k in range(bands):  # a flight of steps: green hatches ``band_width`` m long and 40 cm deep, 50 cm apart, in a row
-        add_hatch(msp, 44, 32 + 0.5 * k, 44 + band_width, 32.4 + 0.5 * k, 3)
+        add_hatch(msp, 44, 32 + 0.5 * k, 44 + band_width, 32.4 + 0.5 * k, 3, band_layers[k % len(band_layers)])
     add_title(msp, "PLANIMETRIA GENERALE", OX + 100, -150)
     doc.saveas(path)
     return path
 
 
-def converted(tmp_path, turn=0, bands=0, band_width=3.0, **cfg):
-    path = site_sheet(tmp_path / "s.dxf", turn=turn, bands=bands, band_width=band_width)
+def converted(tmp_path, turn=0, bands=0, band_width=3.0, band_layers=("0",), **cfg):
+    path = site_sheet(tmp_path / "s.dxf", turn=turn, bands=bands, band_width=band_width, band_layers=band_layers)
     config = dict(auto=True, site_surfaces=True, images=False, floors_to_outer_face=False)
     config.update(cfg)
     return convert(path, tmp_path / "s.obj", Config(**config))
@@ -393,7 +393,105 @@ def test_two_bands_are_no_flight_and_squares_in_a_row_are_no_steps(tmp_path):
     assert converted(tmp_path, bands=5, band_width=0.5).site_surfaces.stairs == []  # 50 x 40 cm: tiles, not treads
 
 
+def test_hatches_that_are_not_all_alike_are_no_flight_the_joints_of_a_paving_are_not_steps(tmp_path):
+    assert converted(tmp_path, bands=6, band_layers=("0", "GIUNTI")).site_surfaces.stairs == []  # two layers, one band in two: no row
+
+
 def test_the_json_has_the_flight_in_the_null_of_the_site(tmp_path):
     converted(tmp_path, bands=5, c4d_json=True)
     objects = {o["name"]: o for o in json.loads((tmp_path / "s_model.json").read_text())["objects"]}
     assert objects["Sito_Gradinata_01"]["group"] == "Superfici_sito" and objects["Sito_Gradinata_01"]["material"] == "site_steps"
+
+
+# --- the terrain under the surfaces ------------------------------------------------------------------
+
+WIDE_LOT = [(0, 0), (12000, 0), (12000, 3100), (10000, 4800), (700, 4800), (0, 2600)]  # a lot 120 m wide: far from the house
+
+
+def terrain_sheet(path):
+    """The plan and the site plan of a wide lot with the contour lines of a slope (every 20 cm, rising 5 % eastwards) drawn in it
+    and a lawn 55 m east of the house, written PRATO."""
+    doc, msp = new_sheet()
+    doc.layers.add("CURVE-LIV")
+    add_plan(msp, 0, 0)
+    add_title(msp, "PIANTA PIANO TERRA", 100, -150)
+    msp.add_lwpolyline([(x + OX, y) for x, y in WIDE_LOT], close=True)
+    hx, hy = OX + HOUSE[0], HOUSE[1]
+    add_plan(msp, hx, hy)
+    for dx in (500, 700):
+        msp.add_line((hx + dx, 0), (hx + dx, hy))
+    for k in range(-14, 24):
+        c = 0.2 * k  # the height above the floor of this contour line: x = 25 m + c / 0.05
+        x = OX + HOUSE[0] + c / 0.05 * 100
+        if OX <= x <= OX + 12000:
+            msp.add_lwpolyline([(x, 0), (x, 4800)], dxfattribs={"layer": "CURVE-LIV", "elevation": round((100.0 + c) * 100.0)})
+    add_room(msp, 80, 20, 95, 40)
+    add_word(msp, "PRATO", 85, 30)
+    msp.add_text("+0.00 (100.00)", height=20, dxfattribs={"insert": (OX + 1600, 1000)})
+    add_title(msp, "PLANIMETRIA GENERALE", OX + 100, -150)
+    doc.saveas(path)
+    return path
+
+
+def test_the_terrain_reaches_the_surfaces_however_far_they_are_from_the_house(tmp_path):
+    report = convert(terrain_sheet(tmp_path / "t.dxf"), tmp_path / "t.obj",
+                     Config(auto=True, site_surfaces=True, terrain_auto=True, images=False, floors_to_outer_face=False))
+    ground = report.plan.terrain
+    assert ground is not None
+    lawn = next(s for s in report.site_surfaces.surfaces if s.kind == "prato")
+    x0, y0, x1, y1 = lawn.geom.bounds
+    assert x1 - x0 == pytest.approx(15.0, abs=0.5) and x0 - report.plan.solid_walls.bounds[2] > 40.0
+    wx0, wy0, wx1, wy1 = ground.window
+    assert wx0 <= x0 and x1 <= wx1 and wy0 <= y0 and y1 <= wy1  # the grid of the terrain covers the lawn
+    lo, hi = Obj(tmp_path / "t.obj").bbox(lawn.id)
+    assert hi[0] - lo[0] == pytest.approx(15.0, abs=0.5) and hi[2] - lo[2] == pytest.approx(20.0, abs=0.5)  # none of it cut off
+
+
+def test_the_contour_lines_of_the_site_plan_do_not_cut_the_surfaces_in_bands(tmp_path):
+    report = convert(terrain_sheet(tmp_path / "t.dxf"), tmp_path / "t.obj",
+                     Config(auto=True, site_surfaces=True, terrain_auto=True, images=False, floors_to_outer_face=False))
+    lawn = next(s for s in report.site_surfaces.surfaces if s.kind == "prato")
+    assert lawn.geom.area == pytest.approx(15 * 20, rel=0.03)  # one lawn, not a band between two contour lines
+    assert report.site_surfaces.walls == []  # and two contour lines 4 m apart are no curb
+    paths = [s for s in report.site_surfaces.surfaces if s.kind != "prato"]
+    assert all(not s.geom.intersects(lawn.geom.buffer(-0.5)) for s in paths)
+
+
+def test_a_surface_on_a_terrain_follows_the_ground_and_stands_a_fixed_distance_from_it(tmp_path):
+    import numpy as np
+
+    from dwg2c4d.terrainmesh import EMBED
+
+    report = convert(terrain_sheet(tmp_path / "t.dxf"), tmp_path / "t.obj",
+                     Config(auto=True, site_surfaces=True, terrain_auto=True, images=False, floors_to_outer_face=False))
+    ground, obj = report.plan.terrain, Obj(tmp_path / "t.obj")
+    lawn = next(s for s in report.site_surfaces.surfaces if s.kind == "prato")
+    p = obj.v[sorted({i for f, _ in obj.faces(lawn.id) for i in f})]
+    above = p[:, 1] - ground.height(p[:, 0] - report.origin_offset[0], -p[:, 2] - report.origin_offset[1])
+    assert set(np.round(above, 3)) == {round(lawn.top - ground.level, 3), round(-EMBED, 3)}  # the top, and the underside in the ground
+    assert p[:, 1].max() - p[:, 1].min() > 0.5  # it is not flat: the ground rises under it
+    assert obj.open_edges(lawn.id) == 0 and obj.winding_matches_normals(lawn.id)
+    assert "Sito_Terreno_00" not in obj.groups  # a terrain is the ground itself: no slab under the surfaces
+
+
+def test_a_surface_farther_than_the_reach_from_the_house_is_left_out():
+    from shapely.geometry import LineString, Polygon
+
+    from dwg2c4d.config import LayerRules
+    from dwg2c4d.sitesurfaces import REACH, SiteDrawing, make_surfaces
+
+    drawing = SiteDrawing(box(-50, -50, 600, 100))
+    for b in (box(20, 0, 40, 20), box(10 + REACH + 50, 0, 30 + REACH + 50, 20)):  # one near the house, one beyond the reach
+        drawing.lines.append(("0", LineString(list(b.exterior.coords)), False))
+    surfaces, _ = make_surfaces(drawing, box(0, 0, 10, 10), Polygon(), LayerRules())
+    assert len(surfaces) == 1 and surfaces[0].geom.bounds == pytest.approx((20, 0, 40, 20), abs=0.4)
+
+
+def test_the_picture_to_check_the_site_is_written_with_the_images_and_only_then(tmp_path):
+    report = converted(tmp_path, images=True)
+    assert report.site_overlay_path == tmp_path / "s_controllo_sito.png"
+    assert report.site_overlay_path.read_bytes()[:4] == b"\x89PNG" and report.site_overlay_path.stat().st_size > 5000
+    assert "s_controllo_sito.png" in report.report_path.read_text(encoding="utf-8")
+    other = tmp_path / "x"
+    other.mkdir()
+    assert converted(other).site_overlay_path is None  # no images: no picture

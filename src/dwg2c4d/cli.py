@@ -477,6 +477,7 @@ def main(argv: list[str] | None = None) -> int:
               f"e rilancia con --tabella-sito)")
     for path, what in ((report.views_path, "il foglio come l'ho capito: viste numerate (--vista N per sceglierne un'altra)"),
                        (report.overlay_path, "pianta con le aperture riconosciute: controllala"),
+                       (report.site_overlay_path, "il sito visto dall'alto: superfici, muri, cordoli e gradini con le loro sigle"),
                        (report.preview_path, "anteprima 3D"), (report.report_path, "riepilogo e note")):
         if path:
             print(f"Creato {path}  ({what})")

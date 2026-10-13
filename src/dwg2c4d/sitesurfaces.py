@@ -56,6 +56,7 @@ MIN_FACE = 4.0  # m2: a smaller face is no surface (a gap between two things)
 MIN_FILL = 2.0  # m2: a smaller hatch is a speck (the brick of a pillar, a stroke of a texture)
 MIN_WIDTH = EDGE_WIDTH + 0.25  # m: a face thinner than this (2 * area / perimeter) is a kerb or a path edge, not a surface
 INSIDE = 0.5  # a face with more than this share inside the building (or in the garden) is a room, or the garden's
+REACH = 150.0  # m: a surface farther than this from the building is of another place of the site plan
 MAX_FACES = 80  # more faces than this is a drawing the net does not read: the biggest are kept, the rest said
 BUILDING_MARGIN = 0.10  # m: what lies this close to the building is its wall
 
@@ -388,7 +389,7 @@ def make_surfaces(drawing: SiteDrawing, building: BaseGeometry, taken: BaseGeome
         if kind is None:
             continue
         for piece in polygons_of(f.geom.difference(zone)):
-            if piece.area < MIN_FILL:
+            if piece.area < MIN_FILL or piece.distance(building) > REACH:
                 continue
             label = f.pattern if f.pattern and f.pattern.upper() != "SOLID" else ""
             pieces.append(Surface("", kind[0], piece, "campitura", f.layer, label, why=kind[1]))
@@ -399,7 +400,7 @@ def make_surfaces(drawing: SiteDrawing, building: BaseGeometry, taken: BaseGeome
             continue  # a room of the building, or the garden's own ground
         rest = rest.difference(covered) if not covered.is_empty else rest
         for piece in polygons_of(rest):
-            if piece.area < MIN_FACE or _thickness(piece) < MIN_WIDTH:
+            if piece.area < MIN_FACE or _thickness(piece) < MIN_WIDTH or piece.distance(building) > REACH:
                 continue
             kind, layer, why = _face_kind(piece, drawing.lines, drawing.words, rules)
             pieces.append(Surface("", kind, piece, "linee", layer, "", why=why))

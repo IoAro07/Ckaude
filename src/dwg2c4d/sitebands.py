@@ -2,7 +2,7 @@
 
 A site plan draws a curved flight of steps, or a stepped seat, as a row of hatched bands, one for each tread (a straight stair is a
 row of lines: ``sitesteps``). Hatches that are long and thin (``BAND_THICKNESS``, ``BAND_ASPECT``) and lie one beside the other
-(within ``BAND_GAP``) in a row of at least ``MIN_BANDS`` are the treads of a stair: they are taken out of the surfaces (a hatch of
+(within ``BAND_GAP``) in a row of at least ``MIN_BANDS``, all of one layer and one pattern, are the treads of a stair: they are taken out of the surfaces (a hatch of
 the steps is no lawn and no paving) and built as one object, ``Sito_Gradinata_01``, each band a prism one riser higher than the
 previous.
 
@@ -108,9 +108,16 @@ def find_band_stairs(fills: list[_Fill], building: BaseGeometry) -> tuple[list[B
         return [], fills
     stairs = []
     used: set[int] = set()
-    for row in _rows([p for _, p in bands]):
-        used.update(row)
-        stairs.append(BandStair("", _foot_first([bands[i][1] for i in row], building)))
+    by_style: dict[tuple[str, str], list[int]] = {}
+    for i, (n, _) in enumerate(bands):  # the treads of a stair are drawn all alike: one layer, one pattern
+        by_style.setdefault((fills[n].layer, fills[n].pattern), []).append(i)
+    for mine in by_style.values():
+        if len(mine) < MIN_BANDS:
+            continue
+        for row in _rows([bands[i][1] for i in mine]):
+            members = [mine[k] for k in row]
+            used.update(members)
+            stairs.append(BandStair("", _foot_first([bands[i][1] for i in members], building)))
     stairs.sort(key=lambda s: (-s.geom.area, s.geom.centroid.x))
     for n, s in enumerate(stairs, 1):
         s.id = f"{SITE_PREFIX}{KIND_NAME}_{n:02d}"

@@ -98,8 +98,9 @@ class FalseWalls:
     def empty(self) -> bool:
         return not (self.furniture or self.lowered or self.stairs) and self.columns.is_empty
 
-    def notes(self, low_height: float, curb_height: float) -> list[str]:
-        """The remarks for the report (Italian): how many things, how big, what was done, how to undo it."""
+    def notes(self, low_height: float, curb_height: float, steps_built: bool = False) -> list[str]:
+        """The remarks for the report (Italian): how many things, how big, what was done, how to undo it. ``steps_built``: the stairs
+        outside the building are built as steps (sitesteps), the report says so."""
         out = []
         if self.furniture:
             area = sum(o.area for o in self.furniture)
@@ -113,8 +114,10 @@ class FalseWalls:
         if self.stairs:
             steps = sum(o.steps for o in self.stairs)
             out.append(f"Muri: {len(self.stairs)} scale ({steps} gradini disegnati come linee parallele) non sono state estruse "
-                       "come blocchi pieni alti come i muri: restano i muri che le fiancheggiano (le scale fuori dalla casa si costruiscono a "
-                       "gradini, vedi 'Gradini'; le altre non sono modellate). "
+                       "come blocchi pieni alti come i muri: "
+                       + ("restano i muri che le fiancheggiano (le scale fuori dalla casa, se ci sono, si costruiscono a gradini: vedi "
+                          "'Gradini' nel riepilogo; le altre non sono modellate). " if steps_built else
+                          "la scala non e' modellata, restano i muri che la fiancheggiano. ") +
                        "Posizioni nel file *_report.txt. Se sono muri usa --muri-tutti.")
         if self.lowered:
             area = sum(o.area for o in self.lowered)

@@ -231,6 +231,62 @@ def preview_3d(mesh, path: str | Path, focus: tuple[float, float, float, float] 
                       hide=("Soffitto",), clip=focus)
 
 
+SITE_COLOR = {"strada": "#6b6b70", "pavimentazione": "#d9cdb4", "prato": "#9fcf8a", "acqua": "#8fc4e8", "terreno": "#b79b78"}
+
+
+def site_overlay(report, path: str | Path) -> Path:
+    """The site seen from above, to check it: the surfaces by kind with their names, the curbs and walls, the steps, the building.
+    Needs matplotlib."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import PathPatch
+    from matplotlib.path import Path as MplPath
+    from shapely.geometry.polygon import orient
+
+    from .geom import polygons_of, union
+
+    site = report.site_surfaces
+    fig, ax = plt.subplots(figsize=(16, 10))
+
+    def draw(geom, **style):
+        for poly in polygons_of(geom):
+            poly = orient(poly)
+            path_ = MplPath.make_compound_path(*(MplPath(list(r.coords), closed=True) for r in [poly.exterior, *poly.interiors]))
+            ax.add_patch(PathPatch(path_, **style))
+
+    def label(geom, text, **style):
+        c = geom.representative_point()
+        ax.text(c.x, c.y, text.replace("Sito_", ""), ha="center", va="center", fontsize=5.5, zorder=5, **style)
+
+    if site is not None:
+        draw(site.base, fc="#efe6d8", ec="none", zorder=0.1)
+        for s in site.surfaces:
+            draw(s.geom, fc=SITE_COLOR[s.kind], ec="#555", lw=0.4, alpha=0.9 if s.keep else 0.2, zorder=1)
+            label(s.geom, s.id)
+        for w in site.walls:
+            draw(w.geom, fc="#2a7f7f" if w.kind == "muro" else "#7fc8c8", ec="#1d5f5f", lw=0.4, zorder=3)
+        for b in site.stairs:
+            for k, band in enumerate(b.bands, 1):
+                draw(band, fc="#e0a050", ec="#8a5a20", lw=0.4, zorder=3)
+                label(band, str(k), color="#4a2a00")
+    for st in report.stairs:
+        draw(st.footprint, fc="#e0a050", ec="#8a5a20", lw=0.5, zorder=3)
+        label(st.footprint, st.id)
+    draw(union([report.plan.solid_walls]), fc="#5d5d5d", ec="#222", lw=0.5, zorder=4)
+    ax.set_aspect("equal")
+    ax.autoscale()
+    ax.margins(0.04)
+    ax.grid(alpha=0.15)
+    ax.set_title("Superfici del sito: strada (grigio scuro), pavimentazione (beige), prato (verde), acqua (azzurro), terreno (marrone), "
+                 "muri (verde acqua scuro) e cordoli (chiaro), gradini (arancio), la casa (grigio); ogni oggetto con la sua sigla", fontsize=9)
+    path = Path(path)
+    fig.savefig(path, dpi=100, bbox_inches="tight")
+    plt.close(fig)
+    return path
+
+
 def plan_overlay(report, path: str | Path, openings: list | None = None) -> Path:
     """The plan seen from above: walls, rooms with names and heights, every opening with its id,
     size and sill. Needs matplotlib. ``openings``: those to draw (default: all of the report's; a stacked model's report

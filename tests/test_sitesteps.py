@@ -133,3 +133,11 @@ def test_a_failure_in_the_steps_is_never_the_end_of_the_conversion(tmp_path, mon
     report = run(plan_with_stair(tmp_path), tmp_path, site_surfaces=True)
     assert report.stairs == [] and any("Gradini non costruiti" in w and "che sfortuna" in w for w in report.warnings)
     assert report.wall_pieces > 0
+
+
+def test_the_note_of_the_stairs_left_out_of_the_walls_says_when_the_outside_ones_are_built():
+    false = FalseWalls()
+    drop_stair_steps(house() + steps(), false)
+    assert "la scala non e' modellata" in " ".join(false.notes(0.5, 0.15))
+    built = " ".join(false.notes(0.5, 0.15, steps_built=True))
+    assert "si costruiscono a gradini" in built and "la scala non e' modellata" not in built

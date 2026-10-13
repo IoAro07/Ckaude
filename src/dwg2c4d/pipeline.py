@@ -38,7 +38,7 @@ from .garden import build_garden, place_on_terrain
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
 from .lotfence import detect_lot_fence, finish_lot_fence, without_fence_layers
 from .floors import extend_to_outer_faces, floor_left_over, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
-from .qa import plan_overlay, preview_3d, write_report
+from .qa import plan_overlay, preview_3d, site_overlay, write_report
 from .mesh import storey_tag
 from .terrain import build_terrain
 from .terrainmesh import add_terrain
@@ -75,6 +75,7 @@ class ConversionReport:
     room_objects: list = field(default_factory=list)  # the Room objects (polygons)
     preview_path: Path | None = None
     overlay_path: Path | None = None
+    site_overlay_path: Path | None = None  # the picture of the surfaces, walls and stairs of the site, to check them
     report_path: Path | None = None
     images_note: str = ""  # why a picture was not made
     openings: list = field(default_factory=list)  # the Opening objects, with ids
@@ -171,7 +172,7 @@ def _read_walls(items: list, cfg: Config, warnings: list[str]) -> tuple[BaseGeom
         walls = clean_footprint(lower_far_walls(walls, items, false, keep, site), cfg.merge_tolerance)
         if not walls.is_empty:  # a drawing of nothing but furniture is read as it is: no wall at all is no model
             warnings.extend(own)
-            warnings.extend(false.notes(cfg.low_wall_height, cfg.curb_height))
+            warnings.extend(false.notes(cfg.low_wall_height, cfg.curb_height, cfg.site_surfaces))
             return walls, layer_walls, false
     layer_walls = build_wall_layers(items, cfg, warnings)
     return clean_footprint(union(layer_walls.values()), cfg.merge_tolerance), layer_walls, FalseWalls()
@@ -792,6 +793,9 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             report.overlay_path = plan_overlay(report, output_path.with_name(output_path.stem + "_controllo_pianta.png"),
                                                openings)
             created.append(report.overlay_path.name)
+            if report.site_surfaces is not None or report.stairs:
+                report.site_overlay_path = site_overlay(report, output_path.with_name(output_path.stem + "_controllo_sito.png"))
+                created.append(report.site_overlay_path.name)
             for fl in floors[1:]:  # a picture to check for every storey above
                 path = plan_overlay(fl.report, output_path.with_name(f"{output_path.stem}_controllo_pianta_{storey_tag(fl.index)}.png"))
                 report.overlay_paths.append(path)
