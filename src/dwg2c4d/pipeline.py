@@ -6,6 +6,7 @@ import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
 
 from .autodetect import _KIND_IT, analyze, apply_analysis, other_view_boxes, site_plan_asked, write_views_image
@@ -14,6 +15,7 @@ from .elevation import apply_elevation, find_elevation_zones, is_elevation_layer
 from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
+from .mesh import Mesh
 from .model import OTHER_FLOOR, Plan, build_mesh, building_footprint, facing_sign, floor_footprint
 from .objwriter import write_obj
 from .glazing import ribbon_windows
@@ -29,10 +31,12 @@ from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from
 from .texts import read_words
 from .passages import find_passages, wall_gaps
 from .elevmatch import match_views
-from .garden import build_garden
+from .garden import build_garden, place_on_terrain
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
 from .floors import extend_to_outer_faces, floor_left_over, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
 from .qa import plan_overlay, preview_3d, write_report
+from .terrain import build_terrain
+from .terrainmesh import add_terrain
 
 
 @dataclass
@@ -70,6 +74,7 @@ class ConversionReport:
     roof: dict | None = None  # pitch_deg, pitch_source, ridge_height, faces
     flat_roof: dict | None = None  # area_m2, bodies, thickness, parapet_height
     garden: object | None = None  # the Garden: ground, pools, plants, furniture
+    terrain: dict | None = None  # the terrain from the contour lines: layer, levels, step, floor level, size...
     garden_table_path: Path | None = None
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
     views_path: Path | None = None
@@ -196,6 +201,29 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
         "parapet_height": flat.parapet_height if flat.parapet is not None else None, "parapet_source": flat.parapet_source,
         "modules": len(flat.modules)}
     return roof, flat, report, flat_report
+
+
+def _build_terrain(doc, cfg: Config, result, solid: BaseGeometry, columns: BaseGeometry, garden,
+                   warnings: list[str]):
+    """The terrain from the contour lines of the sheet (terrain.py), or None. Nothing the user did not ask for when the plan
+    converted is a site plan (--vista on the survey): the ground is its own drawing then. It is a help: whatever goes wrong
+    in it is never the reason a conversion fails."""
+    if not cfg.terrain and cfg.analysis is not None and site_plan_asked(cfg.analysis, cfg):
+        return None
+    footprint = building_footprint(solid)
+    parts = union([footprint, floor_footprint(solid), columns])
+    pools = union(garden.shells) if garden is not None else Polygon()
+    try:
+        ground = build_terrain(doc, cfg, cfg.analysis, result.unit_scale, footprint, parts, pools, warnings)
+        if ground is not None:
+            add_terrain(Mesh(), ground)  # the mesh must work out before the walls are built to stand on it
+    except Exception as exc:
+        warnings.append(f"Terreno non costruito: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; per "
+                        "escluderlo usa --no-terreno.")
+        return None
+    if ground is not None and garden is not None:
+        place_on_terrain(garden.objects, ground)
+    return ground
 
 
 def convert(input_path: str | Path, output_path: str | Path | None = None,
@@ -442,6 +470,8 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             elif not apply_garden_table(garden, read_garden_table(cfg.garden_table_in), cfg, warnings):
                 warnings.append("Tabella del giardino: nessuna riga con celle MODIFICA_* compilate da applicare.")
         plan.garden = garden
+    if cfg.terrain or cfg.terrain_auto:
+        plan.terrain = _build_terrain(doc, cfg, result, solid, columns, garden, warnings)
     mesh = build_mesh(plan, cfg, warnings)
     garden = plan.garden  # (None when its mesh could not be built)
     offset = (0.0, 0.0)
@@ -453,7 +483,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     json_path = None
     if cfg.c4d_json:
         json_path = write_json(to_model_dict(mesh, output_path.stem, offset, openings,
-                                             garden.objects if garden else None),
+                                             garden.objects if garden else None, plan.terrain is not None),
                                output_path.with_name(output_path.stem + "_model.json"))
 
     table_path = None
@@ -500,6 +530,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         false_walls=false,
         room_objects=rooms,
         garden=garden,
+        terrain=plan.terrain.info if plan.terrain is not None else None,
         garden_table_path=garden_table_path,
         analysis=cfg.analysis,
     )

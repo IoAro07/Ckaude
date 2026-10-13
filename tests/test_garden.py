@@ -711,8 +711,8 @@ def test_a_garden_whose_mesh_fails_leaves_the_house_alone(tmp_path, monkeypatch)
 
     real = model.add_garden
 
-    def half_built(mesh, garden, cfg):
-        real(mesh, garden, cfg)
+    def half_built(mesh, garden, cfg, ground=None):
+        real(mesh, garden, cfg, ground)
         raise RuntimeError("mesh went wrong")
 
     doc, _ = garden_plan(tmp_path)

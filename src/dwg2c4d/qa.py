@@ -91,6 +91,11 @@ def summary_lines(report) -> list[str]:
                 srcs = sorted(heights[kind])
                 text = ", ".join(f"{h:g} m ({how})" for how, h in srcs[:3])
                 out.append(f"    altezza {label:<9}: {text}")
+    if report.terrain:
+        t = report.terrain
+        out.append(f"  Terreno            : {t['levels']} curve di livello (layer {t['layer']}, ogni {t['step']:g} m, da {t['low']:.1f} "
+                   f"a {t['high']:.1f} m), {t['size'][0]:.0f} x {t['size'][1]:.0f} m, spessore {t['thickness']:g} m; pavimento "
+                   f"finito a {t['floor']:.2f} m ({t['floor_source']})")
     out.append(f"  Facce / oggetti    : {report.faces} / {', '.join(report.groups)}")
     for msg in report.warnings:
         out.append(f"  ATTENZIONE: {msg}")

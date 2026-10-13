@@ -46,6 +46,7 @@ GROUPS = {
     "Cespuglio": ("Cespugli", "shrub"),
     "Arredo": ("Arredi_esterni", "outdoor_furniture"),
 }
+TERRAIN_GROUP = ("Terreno", "terrain")  # the ground of the site (the soil of the garden, when the sheet has no terrain, is "soil")
 FIXTURE_PARTS = ("Telai", "Ante", "Vetri", "Maniglie")
 GARDEN_PARTS = ("Tronco", "Chioma", "Siepe", "Cespuglio", "Arredo")  # parts of a plant / piece of furniture
 FRAME_PARTS = FIXTURE_PARTS + GARDEN_PARTS  # groups named PART_ID (Telai_F01, Chioma_A01) hang under a null ID
@@ -71,6 +72,7 @@ MATERIALS = {
     "garden_edge": {"name": "Bordi e cordoli", "color": [0.40, 0.40, 0.42], "rough": 0.8},
     "lawn": {"name": "Prato", "color": [0.36, 0.55, 0.26], "rough": 0.95},
     "soil": {"name": "Terreno", "color": [0.45, 0.37, 0.29], "rough": 0.95},
+    "terrain": {"name": "Terreno del sito", "color": [0.50, 0.38, 0.27], "rough": 0.97},
     "pool_shell": {"name": "Vasca piscina", "color": [0.80, 0.86, 0.89], "rough": 0.4},
     "water": {"name": "Acqua", "color": [0.30, 0.60, 0.78], "rough": 0.02},
     "trunk": {"name": "Tronco", "color": [0.38, 0.27, 0.18], "rough": 0.9},
@@ -119,16 +121,17 @@ def _frames(mesh: Mesh, openings, origin_offset: tuple[float, float], garden_obj
 
 
 def to_model_dict(mesh: Mesh, name: str, origin_offset: tuple[float, float] = (0.0, 0.0), openings=None,
-                  garden_objects=None) -> dict:
+                  garden_objects=None, terrain: bool = False) -> dict:
     """``mesh`` is in metres, CAD axes. ``origin_offset`` (m) was already applied to it and is
     recorded so the CAD position can be recovered. With ``openings`` the group of each door/window has its
     own origin and axes (``origin``, ``ex``, ``ey``) and its objects' points are relative to them; so does each
-    plant and piece of furniture of the garden (``garden_objects``)."""
+    plant and piece of furniture of the garden (``garden_objects``). With a ``terrain`` the group Terreno is the ground
+    of the site, in a null of its own, not the soil of the garden."""
     frames = _frames(mesh, openings, origin_offset, garden_objects)
     groups, objects, used = [], [], set()
     for gname, faces in mesh.groups.items():
         base, _, opening = gname.partition("_")
-        null, mat = GROUPS.get(gname) or GROUPS.get(base, (gname, "wall"))
+        null, mat = TERRAIN_GROUP if terrain and gname == "Terreno" else GROUPS.get(gname) or GROUPS.get(base, (gname, "wall"))
         if null not in used:
             used.add(null)
             groups.append({"name": null, "label": null, "parent": name})

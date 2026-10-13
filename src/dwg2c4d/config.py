@@ -248,6 +248,12 @@ class Config:
     groups_cut: bool = False  # internal: the groups of walls without doors or windows were left out once already (no endless loop)
     garden_exclude: list[tuple[float, float, float, float]] = field(default_factory=list)  # internal: drawing units
 
+    # The terrain, from the contour lines the sheet draws (polylines, each at its own elevation, evenly spaced): the house on
+    # a flat platform, the ground sloping away from it, the garden laid on it. Heights in metres.
+    terrain: bool = False  # build it even when the evidence is weak (the command line: --terreno)
+    terrain_auto: bool = False  # build it when the sheet has contour lines laid over the plan (the command line turns it on)
+    terrain_thickness: float = 1.0  # metres of ground below the lowest point of the terrain
+
     # Reading a drawing whose layers do not say what things are (the library leaves it off, the command line turns it on):
     # the unit the numbers are really in, which view of the sheet is the plan, which layers hold the walls.
     auto: bool = False
@@ -302,7 +308,7 @@ class Config:
             "roof_thickness", "roof_default_pitch", "label_radius", "passage_max", "skirting_height",
             "skirting_thickness", "garden_thickness", "garden_lawn_drop", "pool_depth", "pool_wall",
             "pool_water_drop", "tree_height", "shrub_height", "hedge_height", "furniture_height",
-            "low_wall_height", "curb_height")]
+            "low_wall_height", "curb_height", "terrain_thickness")]
         numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset, self.garden_area) if box_ for v in box_]
         numbers += [v for ev in self.elevations for v in ev]
         if self.roof_pitch is not None:
@@ -328,7 +334,7 @@ class Config:
         if self.window_sill < 0 or self.floor_thickness < 0:
             raise ValueError("davanzale e spessore pavimento non possono essere negativi")
         for name in ("garden_thickness", "pool_depth", "pool_wall", "tree_height", "shrub_height", "hedge_height",
-                     "furniture_height", "low_wall_height", "curb_height"):
+                     "furniture_height", "low_wall_height", "curb_height", "terrain_thickness"):
             if getattr(self, name) <= 0:
                 raise ValueError(f"{name} deve essere positivo")
         if self.garden_lawn_drop < 0 or self.pool_water_drop < 0 or self.pool_water_drop >= self.pool_depth:
