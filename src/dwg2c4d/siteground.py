@@ -39,10 +39,6 @@ class OpenAirRules(LayerRules):
     """The layer rules of a site plan: no plan of a building lies in it, so what the names call floors (Pavimenti, Pavimentazione) is
     the paving of the open air, not the floors of rooms."""
 
-    def classify_layer(self, layer: str, ignore_veto: bool = False) -> str | None:
-        category = super().classify_layer(layer, ignore_veto)
-        return None if category == "floor" else category
-
     def garden_kind(self, layer: str) -> str | None:
         kind = super().garden_kind(layer)
         if kind is None and any(t.startswith(FLOOR_WORDS) for t in self.tokens(layer)) and "int" not in self.tokens(layer):
