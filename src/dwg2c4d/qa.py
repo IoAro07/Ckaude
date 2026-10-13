@@ -244,6 +244,16 @@ def plan_overlay(report, path: str | Path, openings: list | None = None) -> Path
         draw(walls, fc="#5d5d5d", ec="#222", lw=0.5, zorder=3)
     draw(plan.columns, fc="#3a3a3a", ec="#111", lw=0.4, zorder=3)
     draw(union([plan.low, *(body for body, _ in plan.low_written)]), fc="#7fc8c8", ec="#2a7f7f", lw=0.5, zorder=3)  # curbs and low walls: built low, apart from the walls
+    lot = getattr(report, "lot", None)
+    if lot is not None:  # the fence of the lot: the wall, the pillars, the railing (dark line), the wire fences (dotted), the gates
+        draw(lot.walls, fc="#c9a46a", ec="#7a5a2a", lw=0.5, zorder=3)
+        draw(union(lot.pillars), fc="#7a5a2a", ec="#4a3515", lw=0.4, zorder=3.2)
+        for r in lot.railings:
+            ax.plot(*r.xy, color="#111", lw=1.0, zorder=3.4)
+        for w in lot.wires:
+            ax.plot(*w.xy, color="#7a5a2a", lw=1.0, ls=":", zorder=3.4)
+        for g in lot.gates:
+            ax.text(g.x, g.y, "cancello", ha="center", va="center", fontsize=6, color="#7a5a2a", zorder=3.6)
     false = getattr(report, "false_walls", None)
     for o in (*false.furniture, *false.stairs) if false is not None else ():  # left out: where they were
         colour = "#2ca02c" if o.kind == "arredo" else "#d98c00"
@@ -287,7 +297,9 @@ def plan_overlay(report, path: str | Path, openings: list | None = None) -> Path
                  + ("; giardino: pavimentazione, prato, acqua, siepi/alberi/cespugli/arredi con sigla"
                     if garden is not None else "")
                  + ("; terreno: curve di livello ogni metro (marrone) e piattaforma piana (tratteggio)"
-                    if terrain is not None else ""), fontsize=9)
+                    if terrain is not None else "")
+                 + ("; recinzione del lotto: muretto e pilastri (marrone), ringhiera (linea nera), rete (puntini), cancelli"
+                    if lot is not None else ""), fontsize=9)
     path = Path(path)
     fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)

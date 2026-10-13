@@ -580,7 +580,8 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     plan.roof, plan.flat_roof, roof_report, flat_roof_report = _build_roof(doc, roof_cfg, result, roof_solid, elevations, warnings)
 
     if lot is not None:
-        lot = finish_lot_fence(lot, doc, cfg, result.unit, footprint, read_zones, warnings)
+        lot = finish_lot_fence(lot, doc, cfg, result.unit, footprint, read_zones, warnings,
+                               [v.bbox for v in cfg.analysis.views if v.kind == "elevation"] if cfg.analysis is not None else None)
     plan.lot = lot
     garden = None
     if cfg.garden:

@@ -33,7 +33,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import linemerge, substring
 from shapely.strtree import STRtree
 
-from .config import Config
+from .config import UNIT_TO_METERS, Config
 from .geom import polygons_of, union
 from .mesh import Mesh, Slab
 from .reader import Item, _entity_prims, layer_used, read_items
@@ -50,7 +50,7 @@ PILLAR_SIDE = (0.12, 0.60)  # m: sides of a closed outline that can be a pillar
 PILLAR_ASPECT = 1.3  # its sides differ by less than this ratio
 TOUCH = 0.05  # m: touching is being this close
 MAX_CHAINS = 3000  # a drawing with more lines than this in the plan is not searched
-MAX_ENTITIES = 400_000  # a drawing with more lines than this in the plan is not looked at
+MAX_ENTITIES = 150_000  # a drawing with more lines than this in the plan is not looked at
 GATE_GAP = (0.6, 6.0)  # m: the gap between two pillars that is a gate
 WIRE_MIN = 3.0  # m: a single line shorter than this is no fence
 MIN_STRIP_AREA = 0.15  # m2: a smaller strip is no wall
@@ -504,9 +504,11 @@ def _wires(fence: LotFence, footprint: BaseGeometry) -> list[LineString]:
     return out
 
 
-def finish_lot_fence(fence: LotFence, doc, cfg: Config, unit: str, footprint: BaseGeometry, zones: list, warnings: list[str]) -> LotFence | None:
+def finish_lot_fence(fence: LotFence, doc, cfg: Config, unit: str, footprint: BaseGeometry, zones: list, warnings: list[str],
+                     views: list | None = None) -> LotFence | None:
     """What the fence needs once the building is known: what lies in the building is no fence, the wire fences, the heights and
-    the design from the elevations (``zones``: their boxes in drawing units), the height the user gave. None when nothing is left.
+    the design from the elevations (``zones``: the boxes, in drawing units, of those drawn in line with the plan; ``views``: of
+    the other elevations of the sheet, which are matched by the pillars), the height the user gave. None when nothing is left.
     It is a help: whatever goes wrong in it is never the reason a conversion fails."""
     try:
         if not footprint.is_empty:
@@ -517,8 +519,13 @@ def finish_lot_fence(fence: LotFence, doc, cfg: Config, unit: str, footprint: Ba
         fence.wires = _wires(fence, footprint)
         if fence.empty:
             return None
-        read_profile(fence, [read_items(doc, cfg, area=z, ignore_veto=True, keep_other=True, keep_fills=True, unit=unit).items
-                             for z in zones])
+        pad = READ_PADDING / UNIT_TO_METERS[unit]
+
+        def read(box_) -> list[Item]:
+            return read_items(doc, cfg, area=box_, ignore_veto=True, keep_other=True, keep_fills=True, unit=unit).items
+
+        read_profile(fence, [read(z) for z in zones],
+                     [read((v[0] - pad, v[1] - pad, v[2] + pad, v[3] + pad)) for v in views or [] if not any(_overlap(v, z) for z in zones)])
         if cfg.lot_wall_height is not None:
             prof = fence.profile
             prof.wall, prof.sources["muretto"] = cfg.lot_wall_height, "indicata"
@@ -559,6 +566,9 @@ MIN_BARS = 5  # fewer bars than this do not tell the spacing
 RAIL_GROUP = 0.03  # m: lines this close above one another are one rail
 PILLAR_TOP = 0.15  # m: the cap of a pillar is looked for this far above the shaft
 MIN_SHAFT = 0.5  # m: a vertical line this long at the foot of a pillar is its shaft
+ALIGN_TOL = 0.03  # m: a shaft this close to where a pillar of the plan should be is that pillar's
+MIN_MATCH = 3  # pillars (at different places) that must have a shaft for an elevation drawn elsewhere to be laid on the plan
+READ_PADDING = 1.0  # m: an elevation is read this far beyond its view (the ground line lies on the very edge)
 
 
 def _segments(items: list[Item]) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
@@ -612,17 +622,64 @@ def _grouped(levels: list[float], tol: float) -> list[tuple[float, float]]:
     return [(a, b) for a, b in out]
 
 
-def read_profile(fence: LotFence, elevations: list[list[Item]]) -> None:
-    """Fill ``fence.profile`` with what an elevation drawn in line with the plan says: the ground line, the top of the wall and
-    its cap, the top of the pillars and their caps, the rails and the bars of the railing. ``elevations``: the items (hatches
-    included) of each elevation, in metres. What it does not say stays as it was (the defaults)."""
-    runs = [p.bounds for p in polygons_of(fence.walls) if p.bounds[2] - p.bounds[0] >= p.bounds[3] - p.bounds[1]]  # along x: seen in a front view
+def _overlap(a: tuple, b: tuple) -> bool:
+    return a[0] < b[2] and b[0] < a[2] and a[1] < b[3] and b[1] < a[3]
+
+
+def _front_runs(walls: BaseGeometry) -> list[tuple[float, float, float, float]]:
+    """The stretches of the wall that run along x and are long enough to show in a front elevation: (x0, y0, x1, y1) of each (a
+    wall that turns corners is one polygon: its straight sides count, not its box)."""
+    found: dict[tuple[int, int], tuple[float, float, float, float]] = {}
+    for poly in polygons_of(walls):
+        c = list(poly.exterior.coords)
+        for (ax, ay), (bx, by) in zip(c, c[1:]):
+            if abs(bx - ax) >= MIN_RUN and abs(by - ay) <= 0.02 * abs(bx - ax):
+                found[(round(min(ax, bx) * 20), round(max(ax, bx) * 20))] = (min(ax, bx), min(ay, by), max(ax, bx), max(ay, by))
+    return list(found.values())
+
+
+def _align(vertical: list, pillars: list) -> tuple[float, float] | None:
+    """How an elevation not drawn in line with the plan lies against it, along x: (sign, shift) such that x_plan = sign * x - shift,
+    or None. The pillars are the clue: a shaft is two long vertical lines of the same length a pillar apart, and the shift is
+    the one at which the most plan pillars (at least ``MIN_MATCH`` of their different positions, or all) have a shaft."""
+    centres = sorted({round((b[0] + b[2]) / 2.0, 2) for b in pillars})
+    tall = sorted((x, y0, y1) for x, y0, y1 in vertical if y1 - y0 >= MIN_SHAFT)
+    shafts = []
+    for i, (xa, ya0, ya1) in enumerate(tall):
+        for xb, yb0, yb1 in tall[i + 1:]:
+            if xb - xa > PILLAR_SIDE[1]:
+                break
+            if xb - xa >= PILLAR_SIDE[0] - 0.03 and abs(ya0 - yb0) <= 0.01 and abs(ya1 - yb1) <= 0.01:
+                shafts.append((round((xa + xb) / 2.0, 3), ya0))
+    best = None
+    for sign in (1.0, -1.0):
+        mine = sorted({sign * x for x, _ in shafts})
+        for shift in {round(x - c, 2) for x in mine for c in centres}:
+            hit = sum(any(abs(x - shift - c) <= ALIGN_TOL for x in mine) for c in centres)
+            if best is None or hit > best[0]:
+                best = (hit, sign, shift)
+    return None if best is None or best[0] < min(MIN_MATCH, len(centres)) or best[0] < 2 else (best[1], best[2])
+
+
+def read_profile(fence: LotFence, elevations: list[list[Item]], elsewhere: list[list[Item]] | None = None) -> None:
+    """Fill ``fence.profile`` with what an elevation says: the ground line, the top of the wall and its cap, the top of the
+    pillars and their caps, the rails and the bars of the railing. ``elevations``: the items (hatches included) of each elevation
+    drawn in line with the plan, in metres; ``elsewhere``: those of the elevations drawn elsewhere, which count when their pillars
+    fit the plan's (``_align``). What they do not say stays as it was (the defaults)."""
+    runs = _front_runs(fence.walls)
     pillars = [p.bounds for p in fence.pillars]
     if not runs and not pillars:
         return
     x_lo, x_hi = min(b[0] for b in runs + pillars), max(b[2] for b in runs + pillars)
-    for items in elevations:
+    for k, items in enumerate([*elevations, *(elsewhere or [])]):
         horizontal, vertical = _segments(items)
+        if k >= len(elevations):  # drawn elsewhere: laid on the plan by its pillars
+            fit = _align(vertical, pillars)
+            if fit is None:
+                continue
+            sign, shift = fit
+            horizontal = [(y, *sorted((sign * a - shift, sign * b - shift))) for y, a, b in horizontal]
+            vertical = [(sign * x - shift, y0, y1) for x, y0, y1 in vertical]
         lines = _joined([h for h in horizontal if h[2] >= x_lo - 0.1 and h[1] <= x_hi + 0.1])
         ground = min((y for y, a, b in lines if b - a >= 0.5 * (x_hi - x_lo)), default=None)  # the ground line spans the lot
         if ground is not None and _read_heights(fence.profile, lines, vertical, ground, runs, pillars, bool(fence.railings)):

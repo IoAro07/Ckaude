@@ -59,25 +59,35 @@ def lot_lines(msp, layer="Esterno", railing=True, pillars=True, wire=True, wall=
 
 
 def lot_elevation(msp, wall=77, cap=2, pillar=150, pillar_cap=2, rails=((15, 16), (46, 47), (62, 63)), pitch=10, bar=1.2,
-                  layer="Prospetto Sud"):
+                  layer="Prospetto Sud", move=(0, 0), sign=1):
     """The lot seen from the front, below the plan: the ground, the wall (its top and the bottom of its cap), the pillars with their caps, the
-    rails and the bars of the railing. (The numbers are centimetres above the ground.)"""
-    g = GROUND
-    line(msp, (-520, g), (1520, g), layer)
+    rails and the bars of the railing. (The numbers are centimetres above the ground.) ``move``: the drawing shifted by this much, ``sign``
+    -1: seen from behind (mirrored); both for an elevation that is not in line with the plan."""
+    g = GROUND + move[1]
+
+    def at(x, y):
+        return sign * x + move[0], y
+
+    def seg(a, b):
+        line(msp, at(*a), at(*b), layer)
+
+    def closed(points):
+        msp.add_lwpolyline([at(*p) for p in points], close=True, dxfattribs={"layer": layer})
+
+    seg((-520, g), (1520, g))
     for h in (wall, wall - cap):
-        line(msp, (-476, g + h), (1476, g + h), layer)
+        seg((-476, g + h), (1476, g + h))
     for cx, _ in PILLARS[:4]:
-        msp.add_lwpolyline([(cx - 10.5, g), (cx + 10.5, g), (cx + 10.5, g + pillar), (cx - 10.5, g + pillar)], close=True, dxfattribs={"layer": layer})
-        msp.add_lwpolyline([(cx - 12, g + pillar), (cx + 12, g + pillar), (cx + 12, g + pillar + pillar_cap), (cx - 12, g + pillar + pillar_cap)],
-                           close=True, dxfattribs={"layer": layer})
+        closed([(cx - 10.5, g), (cx + 10.5, g), (cx + 10.5, g + pillar), (cx - 10.5, g + pillar)])
+        closed([(cx - 12, g + pillar), (cx + 12, g + pillar), (cx + 12, g + pillar + pillar_cap), (cx - 12, g + pillar + pillar_cap)])
     for x0, x1 in FRONT_RUNS:
         for lo, hi in rails:
             for h in (lo, hi):
-                line(msp, (x0, g + wall + h), (x1, g + wall + h), layer)
+                seg((x0, g + wall + h), (x1, g + wall + h))
         x = x0 + pitch / 2.0
         while x < x1 - pitch / 2.0:
             for dx in (-bar / 2.0, bar / 2.0):
-                line(msp, (x + dx, g + wall + 5), (x + dx, g + wall + 57), layer)
+                seg((x + dx, g + wall + 5), (x + dx, g + wall + 57))
             x += pitch
 
 
@@ -297,6 +307,56 @@ def test_two_pillars_with_a_wall_between_them_are_no_gate(tmp_path):
 
 
 # --- the heights and the design from the elevation ---------------------------------------------------------------------
+
+def elsewhere(tmp_path, move, sign=1, **kw):
+    """(the fence, the profile read) when the lot's elevation is drawn at ``move`` (cm), mirrored when ``sign`` is -1, and not in line with the plan."""
+    doc, msp = building()
+    doc.layers.add("Esterno")
+    lot_lines(msp)
+    lot_elevation(msp, move=move, sign=sign, **kw)
+    cfg = Config(fences=True)
+    fence = lf.detect_lot_fence(doc, cfg, 0.01, [])
+    xs = sorted(sign * x + move[0] for x in (-520, 1520))
+    view = (xs[0] - 100, GROUND + move[1] - 100, xs[1] + 100, GROUND + move[1] + 500)
+    kept = lf.finish_lot_fence(fence, doc, cfg, "cm", Polygon(), [], [], views=[view])
+    return kept.profile
+
+
+@pytest.mark.parametrize("move,sign", [((9000, -1500), 1), ((-7000, 3000), 1), ((20000, 0), -1)])
+def test_an_elevation_drawn_elsewhere_is_laid_on_the_plan_by_its_pillars(tmp_path, move, sign):
+    prof = elsewhere(tmp_path, move, sign)
+    assert prof.wall == pytest.approx(0.77, abs=1e-6) and prof.pillar == pytest.approx(1.52, abs=1e-6)
+    assert prof.rail == pytest.approx(0.63, abs=1e-6) and prof.pitch == pytest.approx(0.10, abs=1e-6)
+    assert {prof.sources[k] for k in ("muretto", "pilastri", "ringhiera")} == {"prospetto"}
+
+
+def test_a_wall_that_turns_a_corner_is_read_by_its_straight_sides(tmp_path):
+    """One L-shaped polygon (two polylines drawn round the corner): it is taller than wide, but its long horizontal side shows in a front view."""
+    def corner(msp, layer):
+        msp.add_lwpolyline([(0, 600), (0, 0), (1000, 0)], dxfattribs={"layer": layer})
+        msp.add_lwpolyline([(20, 600), (20, 20), (1000, 20)], dxfattribs={"layer": layer})
+        square(msp, 1012, 10, layer)
+
+    fence = only_lines(tmp_path, corner)
+    assert len(lf.polygons_of(fence.walls)) == 1
+    runs = lf._front_runs(fence.walls)
+    assert sorted((round(r[0], 2), round(r[2], 2)) for r in runs) == [(0.0, 10.0), (0.2, 10.0)]  # the two long sides, not the box of the L
+
+
+def test_an_elevation_drawn_elsewhere_whose_pillars_do_not_fit_is_not_used(tmp_path):
+    """Pillars of another size or at other distances (the elevation of another lot, a different building): the defaults stay."""
+    doc, msp = building()
+    doc.layers.add("Esterno")
+    lot_lines(msp)
+    for cx in (0, 300, 900):  # three shafts that are not where the pillars of the plan are
+        msp.add_lwpolyline([(cx + 6000 - 10.5, -2000), (cx + 6000 + 10.5, -2000), (cx + 6000 + 10.5, -1850), (cx + 6000 - 10.5, -1850)], close=True,
+                           dxfattribs={"layer": "Prospetto Sud"})
+    line(msp, (5900, -2000), (7000, -2000), "Prospetto Sud")
+    cfg = Config(fences=True)
+    fence = lf.detect_lot_fence(doc, cfg, 0.01, [])
+    prof = lf.finish_lot_fence(fence, doc, cfg, "cm", Polygon(), [], [], views=[(5800, -2100, 7100, -1500)]).profile
+    assert prof.sources["muretto"] == prof.sources["pilastri"] == "predefinita" and prof.wall == lf.DEFAULT_WALL
+
 
 def test_heights_and_design_come_from_the_elevation(tmp_path):
     report, _ = run(tmp_path, lot_sheet(tmp_path))
