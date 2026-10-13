@@ -244,3 +244,50 @@ def test_the_flat_roof_is_an_object_of_the_c4d_json_with_its_own_material(tmp_pa
     model = json.loads((tmp_path / "t_model.json").read_text(encoding="utf-8"))
     (slab,) = [o for o in model["objects"] if o["name"] == "Copertura"]
     assert slab["material"] == "flat_roof" and "flat_roof" in model["materials"] and slab["group"] == "Tetto"
+
+
+def add_panels(msp, columns=4, rows=4, pattern="ANSI33", size=(110, 170), layer="0", x0=300, y0=200):
+    """Rows of equal hatches (photovoltaic panels: 1.1 x 1.7 m) on the roof."""
+    for i in range(columns):
+        for j in range(rows):
+            x, y = x0 + i * (size[0] + 15), y0 + j * (size[1] + 15)
+            hatch = msp.add_hatch(dxfattribs={"layer": layer})
+            hatch.dxf.pattern_name = pattern
+            hatch.dxf.solid_fill = 0
+            hatch.paths.add_polyline_path([(x, y), (x + size[0], y), (x + size[0], y + size[1]), (x, y + size[1])])
+
+
+def flat_roof_with_panels(msp, pattern="ANSI33", columns=4, rows=4, **kw):
+    add_flat_roof(msp, parapet=False)
+    add_panels(msp, columns=columns, rows=rows, pattern=pattern)
+
+
+def test_repeated_hatches_the_size_of_a_panel_on_a_flat_roof_become_blocks_on_the_slab(tmp_path):
+    report, obj = converted(tmp_path, roof=flat_roof_with_panels, turns=1)
+    assert report.flat_roof["modules"] == 16 and "Pannelli" in obj.groups
+    (_, y0, _), (_, y1, _) = obj.bbox("Pannelli")
+    assert (y0, y1) == pytest.approx((report.wall_height + 0.2, report.wall_height + 0.2 + 0.35), abs=0.01)
+    (px0, _, pz0), (px1, _, pz1) = obj.bbox("Pannelli")
+    (rx0, _, rz0), (rx1, _, rz1) = obj.bbox("Copertura")
+    assert rx0 < px0 and px1 < rx1 and rz0 < pz0 and pz1 < rz1  # on the slab, not beside it
+    assert any("pannelli fotovoltaici" in w for w in report.warnings)
+
+
+def test_a_few_hatches_are_no_panels(tmp_path):
+    report, obj = converted(tmp_path, roof=flat_roof_with_panels, columns=3, rows=3)  # nine: fewer than a roof of panels
+    assert report.flat_roof["modules"] == 0 and "Pannelli" not in obj.groups
+
+
+def test_the_panels_of_a_pitched_roof_are_not_made(tmp_path):
+    """Sixteen equal hatches of tiles lie on a roof that has them: it is a pitched roof, and no panel is made of a tile."""
+    report, obj = converted(tmp_path, roof=flat_roof_with_panels, pattern="COPPI01")
+    assert report.roof is not None and report.flat_roof is None and "Pannelli" not in obj.groups
+
+
+def test_hatches_too_big_to_be_panels_are_not_panels(tmp_path):
+    def big(msp, **kw):
+        add_flat_roof(msp, parapet=False)
+        add_panels(msp, columns=4, rows=3, size=(305, 305), x0=0, y0=-40)  # twelve of 3.05 x 3.05 m: bays, not panels
+
+    report, _ = converted(tmp_path, roof=big)
+    assert report.flat_roof["modules"] == 0

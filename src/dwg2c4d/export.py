@@ -32,6 +32,7 @@ GROUPS = {
     "Soffitto": ("Soffitti", "ceiling"),
     "Tetto": ("Tetto", "roof"),
     "Copertura": ("Tetto", "flat_roof"),
+    "Pannelli": ("Tetto", "pv_panel"),
     # the garden: the ground and the pool, then plants and furniture (a null for each kind, one for each object)
     "Pavimentazione": ("Giardino", "paving"),
     "Bordi": ("Giardino", "garden_edge"),
@@ -62,6 +63,7 @@ MATERIALS = {
     "ceiling": {"name": "Soffitto", "color": [0.95, 0.95, 0.95], "rough": 0.9},
     "roof": {"name": "Tetto", "color": [0.62, 0.32, 0.24], "rough": 0.7},
     "flat_roof": {"name": "Copertura piana", "color": [0.88, 0.88, 0.86], "rough": 0.8},
+    "pv_panel": {"name": "Pannello fotovoltaico", "color": [0.13, 0.15, 0.22], "rough": 0.3},
     "frame": {"name": "Telaio", "color": [0.92, 0.92, 0.90], "rough": 0.45},
     "door_leaf": {"name": "Anta porta", "color": [0.55, 0.38, 0.22], "rough": 0.5},
     "metal": {"name": "Metallo", "color": [0.78, 0.78, 0.80], "rough": 0.25},

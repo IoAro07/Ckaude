@@ -193,7 +193,8 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
         "ridges_from_elevation": roof.ridges_from_elevation, "view": view, "overhang": overhang}
     flat_report = None if flat is None else {
         "area_m2": flat.slab.area, "bodies": flat.bodies, "thickness": flat.thickness, "view": view,
-        "parapet_height": flat.parapet_height if flat.parapet is not None else None, "parapet_source": flat.parapet_source}
+        "parapet_height": flat.parapet_height if flat.parapet is not None else None, "parapet_source": flat.parapet_source,
+        "modules": len(flat.modules)}
     return roof, flat, report, flat_report
 
 

@@ -27,7 +27,7 @@ from shapely.ops import polygonize, unary_union
 from .config import LayerRules
 from .geom import polygons_of, union
 from .reader import Item, Prim
-from .roof import FlatBody
+from .roof import MODULE_HEIGHT, FlatBody
 from .walls import _key, closure_segments, thinness
 
 if TYPE_CHECKING:
@@ -69,6 +69,12 @@ TIE = 0.97  # a pose that scores at least this share of the best one fits as wel
 CENTRE_WEIGHT = 0.02  # a shift that moves the centre of the roof away from the centre of the walls costs this much per diagonal
 MAX_CELLS = 4_000_000  # no raster is made of more cells than this (the step grows instead)
 MAX_VIEWS = 4  # no more roof plans than this are tried (the biggest)
+
+# --- panels ---
+MODULE_SIZE = (0.4, 3.0)  # m: a hatch this big in both sides, repeated, may be a photovoltaic panel
+MODULES = 12  # ... when this many of the same size lie in the roof plan
+MODULE_STEP = 0.05  # m: sizes that differ by less than this are the same
+MODULE_GAP = 0.03  # m: the block of a panel is its hatch shrunk by this all round
 
 # --- the written slope ---
 PITCH_TEXT = re.compile(r"pend\w*\W+(?:\w+\W+){0,3}?(\d{1,3}(?:[.,]\d+)?)\s*(%|°|gradi)", re.I)  # Pendenza 25 %   pendenza falde 30%   Pend. 20 gradi
@@ -568,6 +574,21 @@ def _tile_points(analysis, scale: float) -> list[tuple[float, float]]:
             for h in analysis.soup.hatches if any(t in h["pattern"].upper() for t in TILE_PATTERNS)]
 
 
+def module_boxes(analysis, scale: float, box: tuple[float, float, float, float]) -> list[Polygon]:
+    """The photovoltaic panels the roof plan draws as hatches: the boxes (metres, in the frame of the sheet) of the hatches of
+    ``box`` (metres) that are the size of a panel and have at least ``MODULES`` that are equal. (Which of them stand on a
+    flat roof is up to the caller: tiles lie on pitched ones.)"""
+    x0, y0, x1, y1 = box
+    sizes: dict[tuple[int, int], list[Polygon]] = {}
+    for h in analysis.soup.hatches:
+        a, b, c, d = (v * scale for v in h["bbox"])
+        w, t = sorted((c - a, d - b))
+        if x0 <= (a + c) / 2 <= x1 and y0 <= (b + d) / 2 <= y1 and MODULE_SIZE[0] <= w and t <= MODULE_SIZE[1]:
+            sizes.setdefault((round(w / MODULE_STEP), round(t / MODULE_STEP)), []).append(
+                shapely.box(a, b, c, d).buffer(-MODULE_GAP, join_style="mitre"))
+    return [m for group in sizes.values() if len(group) >= MODULES for m in group]
+
+
 def roof_views(analysis) -> list:
     """The views of the sheet that are roof plans, the biggest first."""
     return sorted((v for v in analysis.views if v.kind == "roof" and v is not analysis.plan), key=lambda v: -v.cells)[:MAX_VIEWS]
@@ -604,7 +625,10 @@ def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale:
             worst = reg if worst is None or (reg is not None and reg.iou > worst.iou) else worst
             continue
         placed = [Item("0", None, "roof", [Prim(place(p.geom, reg), "line") for p in it.prims]) for it in clean.pitched_items()]
+        panels = [place(m, reg) for m in module_boxes(analysis, scale, (x0, y0, x1, y1))]
         flats = [FlatBody(place(f.slab, reg), place(f.parapet, reg) if f.parapet is not None else None) for f in flat_bodies(clean)]
+        for body in flats:
+            body.modules = [m for m in panels if body.slab.contains(m.centroid)]
         drawn = clean.all_lines()
         ambiguous = any(place(drawn, alt).difference(place(drawn, reg).buffer(SAME_LINES)).length > 0.02 * drawn.length
                         for alt in reg.alternatives)
@@ -673,4 +697,7 @@ def flat_roof_notes(flat: "FlatRoof") -> list[str]:
         how = "misurata sul prospetto" if flat.parapet_source == "prospetto" else "presunta (il prospetto non la dice)"
         notes.append(f"Tetto piano: la pianta della copertura disegna un bordo rialzato (parapetto e nervature): alto "
                      f"{flat.parapet_height:.2f} m, {how}.")
+    if flat.modules:
+        notes.append(f"Tetto piano: {len(flat.modules)} campiture uguali sulla copertura (della misura di un pannello) sono diventate "
+                     f"pannelli fotovoltaici, blocchi alti {MODULE_HEIGHT * 100:.0f} cm: controlla.")
     return notes

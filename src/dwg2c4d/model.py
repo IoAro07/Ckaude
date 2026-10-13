@@ -17,7 +17,7 @@ from .fixtures import add_fixtures
 from .garden import add_garden
 from .mesh import Mesh, Slab
 from .openings import Opening
-from .roof import FlatRoof, Roof
+from .roof import MODULE_HEIGHT, FlatRoof, Roof
 from .walls import clean_footprint
 
 SLIVER = 0.004  # wall remnants thinner than 2*SLIVER next to an opening are removed
@@ -189,6 +189,8 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
         if flat.parapet is not None:
             slabs.append(Slab(top, top + flat.parapet_height, flat.parapet))
         mesh.add_extrusion("Copertura", slabs, bottom=True)
+        if flat.modules:
+            mesh.add_extrusion("Pannelli", [Slab(top, top + MODULE_HEIGHT, union(flat.modules))], bottom=True)
 
     if not plan.skirting.is_empty:
         mesh.add_extrusion("Battiscopa", [Slab(0.0, cfg.skirting_height, plan.skirting)], bottom=False)

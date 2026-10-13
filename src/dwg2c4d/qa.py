@@ -74,8 +74,9 @@ def summary_lines(report) -> list[str]:
         f = report.flat_roof
         parapet = (f", parapetto alto {f['parapet_height']:.2f} m ({'dal prospetto' if f['parapet_source'] == 'prospetto' else 'presunto'})"
                    if f["parapet_height"] is not None else "")
+        panels = f", {f['modules']} pannelli fotovoltaici" if f["modules"] else ""
         out.append(f"  Tetto piano        : {f['bodies']} corp{'o' if f['bodies'] == 1 else 'i'}, {f['area_m2']:.0f} m2, lastra di "
-                   f"{f['thickness'] * 100:.0f} cm{parapet}, dalla vista {f['view']} della copertura")
+                   f"{f['thickness'] * 100:.0f} cm{parapet}{panels}, dalla vista {f['view']} della copertura")
     if report.columns:
         out.append(f"  Pilastri           : {report.columns}")
     if report.garden is not None:

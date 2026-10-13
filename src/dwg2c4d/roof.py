@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import shapely
@@ -45,6 +45,7 @@ UPPER_EAVES = 1.5  # m: a long line this far above the walls in use is the eaves
 MAX_MEASURED_PITCH = 60.0  # degrees: ridge heights from an elevation that imply a steeper roof are not believed
 MAX_MEASURED_K = math.tan(math.radians(MAX_MEASURED_PITCH))
 FLAT_THICKNESS = 0.20  # m: a flat roof is a slab this thick on the walls
+MODULE_HEIGHT = 0.35  # m: a photovoltaic panel on a flat roof is a block this high on the slab
 PARAPET_HEIGHT = 0.5  # m: a parapet the plan draws and no elevation measures is this high above the slab
 PARAPET_RISE = (0.2, 1.5)  # m: a long line of an elevation this far over the walls in use is the top of a parapet
 STEP_TOL = 0.02  # neighbouring faces closer in height than this meet (no wall between them) (m)
@@ -71,6 +72,7 @@ class FlatBody:
 
     slab: BaseGeometry
     parapet: BaseGeometry | None = None
+    modules: list[Polygon] = field(default_factory=list)  # photovoltaic panels standing on it
 
 
 @dataclass
@@ -83,6 +85,7 @@ class FlatRoof:
     parapet_height: float  # m, above the top of the slab
     parapet_source: str  # "prospetto" (the elevations show its top) | "presunta" (the plan draws it, its height is a default)
     bodies: int
+    modules: list[Polygon] = field(default_factory=list)  # photovoltaic panels: low blocks on the slab
 
 
 def build_flat_roof(bodies: list[FlatBody], elevations, wall_height: float) -> FlatRoof | None:
@@ -99,7 +102,7 @@ def build_flat_roof(bodies: list[FlatBody], elevations, wall_height: float) -> F
                   if x1 - x0 >= WIDE_LINE * widest and PARAPET_RISE[0] <= y - ev.zero - wall_height <= PARAPET_RISE[1]]
     height = max(rises) - FLAT_THICKNESS if rises else PARAPET_HEIGHT
     return FlatRoof(union(b.slab for b in bodies), union(parapets) if parapets else None, FLAT_THICKNESS,
-                    max(height, 0.1), "prospetto" if rises else "presunta", len(bodies))
+                    max(height, 0.1), "prospetto" if rises else "presunta", len(bodies), [m for b in bodies for m in b.modules])
 
 
 def _key(x: float, y: float) -> tuple[int, int]:
