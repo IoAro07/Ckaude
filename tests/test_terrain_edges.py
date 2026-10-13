@@ -66,6 +66,18 @@ def test_a_site_plan_asked_for_as_the_plan_gets_no_platform_under_all_its_lines_
     assert building_plan.terrain is None and any("non riesco a capire dove sta la casa sul rilievo" in w for w in building_plan.warnings)
 
 
+def test_contour_vertices_far_beyond_the_terrain_are_not_triangulated(monkeypatch):
+    import dwg2c4d.terrain as terrain
+
+    seen = []
+    real = terrain.surface
+    monkeypatch.setattr(terrain, "surface", lambda points, xs, ys: seen.append(len(points)) or real(points, xs, ys))
+    near = np.array([[x, y, 100.0 + 0.1 * x] for x in np.arange(-30.0, 31.0, 3.0) for y in np.arange(-30.0, 31.0, 3.0)])
+    far = np.array([[x, y, 100.0] for x in np.arange(500.0, 900.0, 4.0) for y in np.arange(500.0, 900.0, 4.0)])  # a different lot, 500 m off
+    build_ground(np.concatenate([near, far]), (-20, -20, 20, 20), AWAY, Polygon(), 100.0, -0.2, 1.0)
+    assert seen == [int(((near[:, 0] >= -35) & (near[:, 0] <= 35)).sum())]  # only the points within 15 m of the terrain went in
+
+
 def test_the_3d_preview_shows_the_terrain_only_round_the_house(tmp_path, monkeypatch):
     import dwg2c4d.qa as qa
     from test_terrain import run

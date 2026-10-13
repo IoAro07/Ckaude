@@ -1,7 +1,10 @@
 """The terrain when the contour lines are drawn in another view of the sheet than the plan: the plan is laid on the survey by the
 lines of the lot the two have in common. Synthetic sheets (centimetres)."""
 
+import math
+
 import pytest
+from ezdxf.math import Matrix44
 from shapely.geometry import LineString, Polygon
 from test_views import add_plan, add_title, new_sheet
 
@@ -33,9 +36,10 @@ def add_survey(msp, dx, dy, layer="CURVE-LIV"):
                                    dxfattribs={"layer": layer, "elevation": round((100.0 + c) * 100.0)})
 
 
-def survey_sheet(path, offset_survey=(30000, 0), offset_site=(16000, 0)):
+def survey_sheet(path, offset_survey=(30000, 0), offset_site=(16000, 0), turn=0):
     """Three drawings: the plan (view A), the survey of the lot with the contour lines (view B, no house in it) and the site
-    plan (view C) that has the same lot and a copy of the plan in it, joined to the lot by a drive."""
+    plan (view C) that has the same lot and a copy of the plan in it (turned ``turn`` quarters about its south-west corner),
+    joined to the lot by a drive."""
     doc, msp = new_sheet()
     doc.layers.add("CURVE-LIV")
     add_plan(msp, 0, 0)
@@ -44,8 +48,12 @@ def survey_sheet(path, offset_survey=(30000, 0), offset_site=(16000, 0)):
     add_title(msp, "RILIEVO", offset_survey[0] + 100, -150)
     msp.add_lwpolyline([(x + offset_site[0], y + offset_site[1]) for x, y in LOT], close=True)
     hx, hy = offset_site[0] + HOUSE_IN_LOT[0], offset_site[1] + HOUSE_IN_LOT[1]
+    before = len(msp)
     add_plan(msp, hx, hy)
-    for dx in (500, 560):
+    turned = Matrix44.chain(Matrix44.translate(-hx, -hy, 0), Matrix44.z_rotate(math.radians(90 * turn)), Matrix44.translate(hx, hy, 0))
+    for e in list(msp)[before:]:
+        e.transform(turned)
+    for dx in (500, 560) if turn == 0 else (-300, -240):  # the drive meets the south wall of the house, wherever the house stands now
         msp.add_line((hx + dx, offset_site[1]), (hx + dx, hy))
     add_title(msp, "PLANIMETRIA GENERALE", offset_site[0] + 100, -150)
     msp.add_text("+0.00 (100.00)", height=20, dxfattribs={"insert": (1600, 1000)})
@@ -56,6 +64,12 @@ def survey_sheet(path, offset_survey=(30000, 0), offset_site=(16000, 0)):
 def converted(tmp_path, **kw):
     path = survey_sheet(tmp_path / "s.dxf", **kw)
     return convert(path, tmp_path / "s.obj", Config(auto=True, terrain_auto=True, images=False, floors_to_outer_face=False))
+
+
+def turned_ground(x, y):
+    """The ground at (x, y) of a plan whose copy in the site plan is turned a quarter counter-clockwise: the plan's x axis lies
+    along the lot's y."""
+    return ground(-y, x)
 
 
 FAR = ((28.0, 0.0), (-12.0, 5.0), (7.0, -11.0), (7.0, 24.0))  # far from the platform: there the ground is the slope itself
@@ -89,3 +103,30 @@ def test_when_the_plan_cannot_be_put_on_the_survey_there_is_no_terrain_and_it_is
     report = convert(tmp_path / "s.dxf", tmp_path / "s.obj", Config(auto=True, terrain_auto=True, images=False))
     assert report.terrain is None
     assert any("non riesco a capire dove sta la casa sul rilievo" in w for w in report.warnings)
+
+
+def test_a_copy_of_the_plan_turned_by_a_quarter_still_finds_the_survey(tmp_path):
+    report = converted(tmp_path, turn=1)
+    t = report.plan.terrain
+    assert t is not None and report.terrain["registered"]
+    for x, y in FAR:
+        assert t.height(x, y) == pytest.approx(turned_ground(x, y), abs=0.25), (x, y)
+
+
+def test_a_survey_that_draws_a_copy_of_the_plan_itself_needs_no_go_between(tmp_path):
+    doc, msp = new_sheet()
+    doc.layers.add("CURVE-LIV")
+    add_plan(msp, 0, 0)
+    add_title(msp, "PIANTA PIANO TERRA", 100, -150)
+    add_survey(msp, 30000, 0)
+    add_plan(msp, 30000 + HOUSE_IN_LOT[0], HOUSE_IN_LOT[1])  # the house is drawn in the survey, with the contour lines round it
+    for dx in (500, 560):
+        msp.add_line((30000 + HOUSE_IN_LOT[0] + dx, 0), (30000 + HOUSE_IN_LOT[0] + dx, HOUSE_IN_LOT[1]))
+    add_title(msp, "RILIEVO", 30100, -150)
+    msp.add_text("+0.00 (100.00)", height=20, dxfattribs={"insert": (1600, 1000)})
+    doc.saveas(tmp_path / "d.dxf")
+    report = convert(tmp_path / "d.dxf", tmp_path / "d.obj", Config(auto=True, terrain_auto=True, images=False, floors_to_outer_face=False))
+    assert report.terrain["registered"] and len(report.terrain["views"]) == 2  # plan view -> survey view, nothing between
+    assert report.terrain["shift"] == pytest.approx((325.0, 15.0), abs=0.05)
+    for x, y in FAR:
+        assert report.plan.terrain.height(x, y) == pytest.approx(ground(x, y), abs=0.25), (x, y)

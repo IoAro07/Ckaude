@@ -58,6 +58,8 @@ GRID = 1.0  # m: size of the cells of the mesh of the terrain
 MAX_CELLS = 40000  # the cells grow when the terrain would have more
 PLATFORM_MARGIN = 2.0  # m: the flat ground reaches this far beyond the walls (more than the diagonal of a cell: no cell is half flat there)
 SLOPE_MAX = 0.5  # rise / run: how steep the embankment between the platform and the natural ground is at most (1 : 2)
+CROP = 15.0  # m: contour vertices this far beyond the terrain are no use to its edge
+MIN_POINTS = 50  # ... unless they leave fewer than this to triangulate
 SMOOTH = 1.0  # m: the interpolated ground is blurred by this (the triangles between two vertices of one contour are flat: terraces)
 POOL_MARGIN = 1.0  # m: the flat ground reaches this far beyond a pool (which is dug flat, at the level of the house)
 
@@ -320,6 +322,9 @@ def build_ground(points: np.ndarray, window: tuple[float, float, float, float], 
     ``floor`` the height of the finished floor in them; ``level`` where the platform lies (relative to the floor)."""
     step, nx, ny = _grid(window)
     xs, ys = np.meshgrid(window[0] + np.arange(nx + 1) * step, window[1] + np.arange(ny + 1) * step)
+    near = (points[:, 0] >= window[0] - CROP) & (points[:, 0] <= window[2] + CROP) \
+        & (points[:, 1] >= window[1] - CROP) & (points[:, 1] <= window[3] + CROP)  # a survey of a whole town is no use beyond the terrain
+    points = points[near] if near.sum() >= MIN_POINTS else points
     natural = gaussian_filter(surface(points, xs.ravel(), ys.ravel()).reshape(xs.shape), SMOOTH / step, mode="nearest") - floor
     away = shapely.distance(platform, shapely.points(xs.ravel(), ys.ravel())).reshape(xs.shape)
     z = level + np.clip(natural - level, -SLOPE_MAX * away, SLOPE_MAX * away)
