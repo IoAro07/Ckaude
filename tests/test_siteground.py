@@ -166,3 +166,15 @@ def test_the_floor_levels_are_in_the_report(tmp_path):
     lines = summary_lines(report)
     assert any("Edificio 2" in line and "pavimento a +1.50 m" in line for line in lines)
     assert any(line.startswith("  Terreno") for line in lines)
+
+
+def test_contour_lines_far_from_the_buildings_give_no_terrain_and_the_remark_says_so(tmp_path):
+    path = garden_sheet(tmp_path / "t.dxf")
+    doc = ezdxf.readfile(path)
+    for k in range(26):  # the survey of another lot, 50 m to the north
+        x = -2000 + 200 * k
+        doc.modelspace().add_lwpolyline([(x, 5000), (x, 9000)], dxfattribs={"layer": "CURVE-LIV", "elevation": round(slope_z(x) * 100)})
+    doc.saveas(path)
+    report = convert(path, tmp_path / "t.obj", Config(**TERRAIN))
+    assert report.terrain is None and [b.base for b in report.site.buildings] == [0.0, 0.0]
+    assert any("Terreno: le curve di livello del layer CURVE-LIV stanno a" in w for w in report.warnings)
