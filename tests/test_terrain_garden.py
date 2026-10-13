@@ -163,3 +163,23 @@ def test_the_json_for_cinema_4d_puts_the_terrain_in_its_own_group_with_its_own_m
     model = json.loads((tmp_path / "g_model.json").read_text())
     soil = next(o for o in model["objects"] if o["name"] == "Terreno")
     assert soil["group"] == "Giardino" and soil["material"] == "soil"
+
+
+def test_a_layer_named_like_a_road_is_paving_and_a_closed_outline_on_it_is_laid_on_the_ground(tmp_path):
+    from dwg2c4d.config import LayerRules
+
+    rules = LayerRules()
+    assert {rules.garden_kind(n) for n in ("STRADA", "Strade_asfalto", "ASFALTO", "carreggiata", "Passo carrabile", "viabilita")} == {"paving"}
+    assert rules.garden_kind("Via Cappuccini") is None and rules.garden_kind("Strumenti") is None
+    doc, msp = building()
+    doc.layers.add("STRADA")
+    doc.layers.add("CURVE-LIV")
+    add_contours(msp)
+    msp.add_text("+0.00 (100.50)", height=20, dxfattribs={"insert": (1200, 300), "layer": "0"})
+    msp.add_lwpolyline(rect(1000, -600, 1800, 200), close=True, dxfattribs={"layer": "STRADA"})  # a drive that touches the house
+    doc.saveas(tmp_path / "r.dxf")
+    report = convert(tmp_path / "r.dxf", tmp_path / "r.obj", Config(garden=True, terrain_auto=True, floors_to_outer_face=False))
+    obj = Obj(tmp_path / "r.obj")
+    assert report.garden is not None and report.garden.area("paving") > 30.0 and "Pavimentazione" in obj.groups
+    off = offsets_above_ground(report, obj, "Pavimentazione")
+    assert set(np.round(off, 4)) == {0.2, round(-EMBED, 4)}

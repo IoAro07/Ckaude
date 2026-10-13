@@ -38,6 +38,7 @@ class Plan:
     skirting: BaseGeometry = field(default_factory=Polygon)
     partitions: BaseGeometry = field(default_factory=Polygon)  # the thin walls, apart from the main walls
     low: BaseGeometry = field(default_factory=Polygon)  # curbs, low walls and lot lines outside the building (falsewalls)
+    low_written: list[tuple[BaseGeometry, float]] = field(default_factory=list)  # (body, height m) of those whose height the drawing writes
     garden: object | None = None  # the ground, pools, plants and furniture outside (garden.Garden)
     terrain: object | None = None  # the ground under it all, with the house on a platform (terrain.Terrain)
 
@@ -147,6 +148,18 @@ def outer_half_of_perimeter_walls(solid: BaseGeometry, max_thickness: float) -> 
     return None if outer.is_empty else outer
 
 
+def _add_low(mesh: Mesh, ground, name: str, shape: BaseGeometry, height: float) -> None:
+    """A curb or low wall: on a terrain it follows the ground, else (or if that fails) it is a plain extrusion from zero."""
+    before = len(mesh.groups.get(name, []))
+    try:
+        if ground is None:
+            raise ValueError  # flat ground: the plain extrusion below
+        add_draped(mesh, ground, name, shape, height)
+    except Exception:
+        del mesh.groups.get(name, [])[before:]
+        mesh.add_extrusion(name, [Slab(0.0, height, shape)], bottom=True)
+
+
 def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
     mesh = Mesh()
     walls = plan.solid_walls
@@ -167,18 +180,13 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
     if not plan.partitions.is_empty:
         mesh.add_extrusion("Tramezzi", wall_slabs(plan.partitions, cutting, cfg.wall_height, base), bottom=True)
 
-    if not plan.low.is_empty:
-        curbs, low_walls = split_low(plan.low)
-        for name, shape, height in (("Cordoli", curbs, cfg.curb_height), ("Muretti", low_walls, cfg.low_wall_height)):
-            if shape.is_empty:
-                continue
-            try:
-                if ground is None:
-                    raise ValueError  # flat ground: the plain extrusion below
-                add_draped(mesh, ground, name, shape, height)  # they follow the ground
-            except Exception:
-                mesh.groups.pop(name, None)
-                mesh.add_extrusion(name, [Slab(0.0, height, shape)], bottom=True)
+    for body, written in ((plan.low, None), *plan.low_written):
+        if body.is_empty:
+            continue
+        curbs, low_walls = split_low(body)
+        for name, shape, height in (("Cordoli", curbs, written or cfg.curb_height), ("Muretti", low_walls, written or cfg.low_wall_height)):
+            if not shape.is_empty:
+                _add_low(mesh, ground, name, shape, height)
 
     if not plan.columns.is_empty:
         mesh.add_extrusion("Pilastri", [Slab(base, cfg.wall_height, plan.columns)], bottom=True)

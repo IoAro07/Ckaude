@@ -330,6 +330,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.write_garden_table = False
     in_config = _config_value(args.config, "garden")  # --config {"garden": false} turns it off, as --no-giardino
     cfg.garden = False if args.no_giardino else (True if in_config is None else bool(in_config))
+    if args.altezza_muretti is not None or args.altezza_cordoli is not None:
+        cfg.low_heights_auto = False  # the user's height beats the one written in the drawing
     cfg.terrain = args.terreno
     cfg.terrain_auto = not args.no_terreno
     cfg.auto = not args.no_analisi

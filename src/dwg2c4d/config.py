@@ -69,7 +69,7 @@ class LayerRules:
         ("water", ("piscin", "pool", "acqua", "water", "vasca", "laghett", "stagn")),
         ("lawn", ("prato", "prati", "erba", "lawn", "grass")),
         ("paving", ("pavimentazion", "terrazz", "patio", "vialett", "camminament", "marciapied", "cortile",
-                    "piazzal", "paving", "deck", "selciat", "ghiai")),
+                    "piazzal", "paving", "deck", "selciat", "ghiai", "strad", "asfalt", "carrabil", "carregg", "viabil")),
         ("plants", ("siep", "hedge", "alber", "tree", "cespugl", "shrub", "bush", "arbust")),
     )
     _GARDEN_ANY = ("giardin", "garden", "verde", "green", "landscap", "estern", "outdoor", "exterior", "sistemazion")
@@ -184,6 +184,8 @@ def floor_of(layer: str) -> int | None:
 
 
 DEFAULT_WALL_HEIGHT = 2.70
+DEFAULT_LOW_WALL_HEIGHT = 0.50  # metres: low walls (group Muretti) and curbs (Cordoli), until the user or the drawing says otherwise
+DEFAULT_CURB_HEIGHT = 0.15
 
 
 @dataclass
@@ -214,8 +216,9 @@ class Config:
     partitions_apart: bool = True  # walls of the fondelli/tramezzi layers as their own object (Tramezzi)
     separate_walls: bool = True  # furniture outlines, curbs and free-standing outlines on a wall layer the program chose are not walls
     walls_guessed: bool = False  # internal: the wall layers are the program's choice (names, shapes, proposals), not --muri
-    low_wall_height: float = 0.50  # metres: low walls and lot lines apart from the building (group Muretti)
-    curb_height: float = 0.15  # metres: thin ones among them, curbs (group Cordoli)
+    low_wall_height: float = DEFAULT_LOW_WALL_HEIGHT  # metres: low walls and lot lines apart from the building (group Muretti)
+    curb_height: float = DEFAULT_CURB_HEIGHT  # metres: thin ones among them, curbs (group Cordoli)
+    low_heights_auto: bool = True  # a height written next to a low wall ("Hmuro= 1,00 ml.") is used (off once a height is given)
     wall_finishes: bool = False  # perimeter walls cut in two halves: Muri_esterno and Muri_interno (the command line turns it on)
     floors_to_outer_face: bool = True  # floors per room reach the outer face of the perimeter walls
     floors_by_room: bool = True  # one floor object per room (or per polygon of the floor layer)
@@ -300,6 +303,8 @@ class Config:
     def __post_init__(self) -> None:
         if self.wall_height != DEFAULT_WALL_HEIGHT:
             self.wall_height_auto = False  # an explicit height beats the written ones
+        if self.low_wall_height != DEFAULT_LOW_WALL_HEIGHT or self.curb_height != DEFAULT_CURB_HEIGHT:
+            self.low_heights_auto = False  # ... and so does one given for the low walls
 
     def validate(self) -> None:
         numbers = [getattr(self, n) for n in (

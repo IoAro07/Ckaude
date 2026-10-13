@@ -28,7 +28,8 @@ from .falsewalls import FalseWalls, lower_far_walls, separate_prims
 from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
-from .texts import read_words
+from .lowheights import written_heights
+from .texts import read_texts, read_words
 from .passages import find_passages, wall_gaps
 from .elevmatch import match_views
 from .garden import build_garden, place_on_terrain
@@ -365,6 +366,10 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
                             "se e' un muro unico a cui manca la parte di mezzo, completalo nel disegno; non l'ho chiuso io.")
 
     words = read_words(doc, cfg, result.unit_scale) if cfg.texts else []
+    if cfg.texts and cfg.low_heights_auto and not plan.low.is_empty:  # "Hmuro= 1,00 ml." next to a curb or a low wall
+        plan.low, given, notes = written_heights(plan.low, read_texts(doc, cfg, result.unit_scale))
+        plan.low_written = [(body, height) for body, height, _ in given]
+        warnings.extend(notes)
     text_unit = text_scale(words)
     rooms = find_rooms(solid, words, text_unit, warnings)
     wall_height_source = "indicata" if not cfg.wall_height_auto else "predefinita"

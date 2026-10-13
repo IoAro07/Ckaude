@@ -155,7 +155,7 @@ def plan_overlay(report, path: str | Path) -> Path:
     from matplotlib.path import Path as MplPath
     from shapely.geometry.polygon import orient
 
-    from .geom import polygons_of
+    from .geom import polygons_of, union
 
     plan = report.plan
     fig, ax = plt.subplots(figsize=(16, 10))
@@ -201,7 +201,7 @@ def plan_overlay(report, path: str | Path) -> Path:
     else:
         draw(walls, fc="#5d5d5d", ec="#222", lw=0.5, zorder=3)
     draw(plan.columns, fc="#3a3a3a", ec="#111", lw=0.4, zorder=3)
-    draw(plan.low, fc="#7fc8c8", ec="#2a7f7f", lw=0.5, zorder=3)  # curbs and low walls: built low, apart from the walls
+    draw(union([plan.low, *(body for body, _ in plan.low_written)]), fc="#7fc8c8", ec="#2a7f7f", lw=0.5, zorder=3)  # curbs and low walls: built low, apart from the walls
     false = getattr(report, "false_walls", None)
     for o in (*false.furniture, *false.stairs) if false is not None else ():  # left out: where they were
         colour = "#2ca02c" if o.kind == "arredo" else "#d98c00"
