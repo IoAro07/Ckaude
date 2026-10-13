@@ -239,6 +239,31 @@ def test_a_curved_run_follows_the_curve(tmp_path):
     assert y1 > 8.0 and x1 > 10.0 and x0 < 5.3  # it turns: a straight strip would not reach both
 
 
+def test_a_curved_run_is_built_curved_with_its_railing_following_it(tmp_path):
+    import math
+
+    centre = (-2500, -1500)  # the arc lies beside the building
+
+    def curved(msp, layer):
+        for r in (1000, 1020, 1009, 1011):  # the two faces of the wall, and the railing: two thin arcs along its middle
+            msp.add_arc(centre, r, 0, 60, dxfattribs={"layer": layer})
+        square(msp, centre[0] + 1010, centre[1], layer)
+
+    doc, msp = building()
+    doc.layers.add("Esterno")
+    curved(msp, "Esterno")
+    path = tmp_path / "curve.dxf"
+    doc.saveas(path)
+    report, obj = run(tmp_path, path, elevations=[])
+    assert report.lot is not None and len(report.lot.railings) == 1
+    ids = sorted({i for f, _ in obj.faces("Ringhiera") for i in f})
+    x, y = obj.v[ids][:, 0] - centre[0] / 100.0, -obj.v[ids][:, 2] - centre[1] / 100.0
+    radius = (x ** 2 + y ** 2) ** 0.5
+    assert radius.min() > 10.10 - 0.03 and radius.max() < 10.10 + 0.03  # every point of the railing is on the curve
+    angles = [math.degrees(math.atan2(b, a)) for a, b in zip(x, y)]
+    assert min(angles) < 2.0 and max(angles) > 58.0 and obj.open_edges("Muretto") == 0
+
+
 def test_a_thin_closed_outline_is_a_wall_too(tmp_path):
     def outline(msp, layer):
         msp.add_lwpolyline([(0, 0), (600, 0), (600, 20), (0, 20)], close=True, dxfattribs={"layer": layer})
