@@ -179,7 +179,7 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
             if found.items:
                 roof = build_roof(found.items, replace(cfg, roof_offset=(0.0, 0.0)), result.unit_scale, solid.bounds,
                                   ridge_hints_from(elevations, cfg.wall_height), own, pitch[0] if pitch else None)
-            flat = build_flat_roof(found.flats, elevations, cfg.wall_height)
+            flat = build_flat_roof(found.flats, elevations, cfg.wall_height, cfg.roof_thickness)
             if roof is not None or flat is not None:
                 view, overhang = found.view, found.overhang
                 own = [n for n in own if not n.startswith(("Tetto: le linee del tetto non formano", "Tetto: nessuna linea trovata"))]

@@ -142,7 +142,7 @@ def test_a_roof_drawn_with_no_ridge_becomes_a_flat_slab_on_the_walls(tmp_path, t
     assert "Copertura" in obj.groups and "Tetto" not in obj.groups
     (rx0, ry0, rz0), (rx1, ry1, rz1) = obj.bbox("Copertura")
     (wx0, _, wz0), (wx1, _, _) = obj.bbox("Muri")
-    assert (ry0, ry1) == pytest.approx((report.wall_height, report.wall_height + 0.2), abs=0.01)
+    assert (ry0, ry1) == pytest.approx((report.wall_height, report.wall_height + 0.15), abs=0.01)  # the thickness of the roof
     assert (rx0, rx1, rz0, rz1) == pytest.approx((wx0 - OVER / 100, wx1 + OVER / 100, wz0 - OVER / 100, wz0 + 9.0 + OVER / 100), abs=0.1)
     assert any("Tetto piano" in w for w in report.warnings)
 
@@ -151,7 +151,7 @@ def test_the_double_line_along_the_edge_of_a_flat_roof_is_a_parapet_in_the_model
     report, obj = converted(tmp_path, roof=add_flat_roof, parapet=True)
     assert report.flat_roof["parapet_height"] == pytest.approx(0.5) and report.flat_roof["parapet_source"] == "presunta"
     (_, ry0, _), (_, ry1, _) = obj.bbox("Copertura")
-    assert ry1 == pytest.approx(report.wall_height + 0.2 + 0.5, abs=0.01)
+    assert ry1 == pytest.approx(report.wall_height + 0.15 + 0.5, abs=0.01)
     assert any("bordo rialzato" in w for w in report.warnings)
 
 
@@ -266,7 +266,7 @@ def test_repeated_hatches_the_size_of_a_panel_on_a_flat_roof_become_blocks_on_th
     report, obj = converted(tmp_path, roof=flat_roof_with_panels, turns=1)
     assert report.flat_roof["modules"] == 16 and "Pannelli" in obj.groups
     (_, y0, _), (_, y1, _) = obj.bbox("Pannelli")
-    assert (y0, y1) == pytest.approx((report.wall_height + 0.2, report.wall_height + 0.2 + 0.35), abs=0.01)
+    assert (y0, y1) == pytest.approx((report.wall_height + 0.15, report.wall_height + 0.15 + 0.35), abs=0.01)
     (px0, _, pz0), (px1, _, pz1) = obj.bbox("Pannelli")
     (rx0, _, rz0), (rx1, _, rz1) = obj.bbox("Copertura")
     assert rx0 < px0 and px1 < rx1 and rz0 < pz0 and pz1 < rz1  # on the slab, not beside it
@@ -291,3 +291,9 @@ def test_hatches_too_big_to_be_panels_are_not_panels(tmp_path):
 
     report, _ = converted(tmp_path, roof=big)
     assert report.flat_roof["modules"] == 0
+
+
+def test_the_thickness_the_user_gives_for_the_roof_is_the_thickness_of_the_flat_slab(tmp_path):
+    report, obj = converted(tmp_path, Config(auto=True, roof_auto=True, images=False, roof_thickness=0.4), roof=add_flat_roof, parapet=False)
+    (_, y0, _), (_, y1, _) = obj.bbox("Copertura")
+    assert (y0, y1) == pytest.approx((report.wall_height, report.wall_height + 0.4), abs=0.01) and report.flat_roof["thickness"] == 0.4

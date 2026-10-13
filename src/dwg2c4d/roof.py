@@ -44,7 +44,6 @@ WIDE_LINE = 0.9  # a line this share of the widest one of an elevation runs alon
 UPPER_EAVES = 1.5  # m: a long line this far above the walls in use is the eaves of a storey over the plan, not a cornice
 MAX_MEASURED_PITCH = 60.0  # degrees: ridge heights from an elevation that imply a steeper roof are not believed
 MAX_MEASURED_K = math.tan(math.radians(MAX_MEASURED_PITCH))
-FLAT_THICKNESS = 0.20  # m: a flat roof is a slab this thick on the walls
 MODULE_HEIGHT = 0.35  # m: a photovoltaic panel on a flat roof is a block this high on the slab
 PARAPET_HEIGHT = 0.5  # m: a parapet the plan draws and no elevation measures is this high above the slab
 PARAPET_RISE = (0.2, 1.5)  # m: a long line of an elevation this far over the walls in use is the top of a parapet
@@ -88,8 +87,8 @@ class FlatRoof:
     modules: list[Polygon] = field(default_factory=list)  # photovoltaic panels: low blocks on the slab
 
 
-def build_flat_roof(bodies: list[FlatBody], elevations, wall_height: float) -> FlatRoof | None:
-    """A slab ``FLAT_THICKNESS`` thick on top of the walls under every flat body; with a parapet where the bodies have one,
+def build_flat_roof(bodies: list[FlatBody], elevations, wall_height: float, thickness: float) -> FlatRoof | None:
+    """A slab ``thickness`` thick (the thickness of the roof: --spessore-tetto) on top of the walls under every flat body; with a parapet where the bodies have one,
     as high as the highest long line the elevations draw over the walls (a parapet is a long line a little over the
     eaves), else ``PARAPET_HEIGHT``."""
     if not bodies:
@@ -100,8 +99,8 @@ def build_flat_roof(bodies: list[FlatBody], elevations, wall_height: float) -> F
         widest = max((x1 - x0 for _, x0, x1 in ev.hlines), default=0.0)
         rises += [y - ev.zero - wall_height for y, x0, x1 in ev.hlines
                   if x1 - x0 >= WIDE_LINE * widest and PARAPET_RISE[0] <= y - ev.zero - wall_height <= PARAPET_RISE[1]]
-    height = max(rises) - FLAT_THICKNESS if rises else PARAPET_HEIGHT
-    return FlatRoof(union(b.slab for b in bodies), union(parapets) if parapets else None, FLAT_THICKNESS,
+    height = max(rises) - thickness if rises else PARAPET_HEIGHT
+    return FlatRoof(union(b.slab for b in bodies), union(parapets) if parapets else None, thickness,
                     max(height, 0.1), "prospetto" if rises else "presunta", len(bodies), [m for b in bodies for m in b.modules])
 
 

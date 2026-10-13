@@ -363,20 +363,20 @@ def test_the_bays_of_a_flat_roof_with_double_lines_between_them_are_one_slab():
 
 def test_a_flat_roof_gets_a_slab_on_the_walls_and_a_parapet_of_the_default_height_when_the_plan_draws_one():
     bodies = rv.flat_bodies(rv.clean_roof(parapet_roof()))
-    flat = build_flat_roof(bodies, [], 3.0)
+    flat = build_flat_roof(bodies, [], 3.0, 0.2)
     assert flat.thickness == pytest.approx(0.2) and flat.parapet is not None
     assert flat.parapet_height == pytest.approx(0.5) and flat.parapet_source == "presunta" and flat.bodies == 1
 
 
 def test_the_parapet_is_as_high_as_the_long_line_the_elevation_draws_a_little_over_the_walls():
     ev = Elevation("south", 0.0, "porta", [], [(3.0, 0.0, 30.0), (3.9, 0.0, 30.0), (2.0, 5.0, 6.0)])
-    flat = build_flat_roof(rv.flat_bodies(rv.clean_roof(parapet_roof())), [ev], 3.0)
+    flat = build_flat_roof(rv.flat_bodies(rv.clean_roof(parapet_roof())), [ev], 3.0, 0.2)
     assert flat.parapet_height == pytest.approx(0.9 - 0.2) and flat.parapet_source == "prospetto"
 
 
 def test_there_is_no_flat_roof_without_flat_bodies_and_no_parapet_without_the_double_line():
-    assert build_flat_roof([], [], 3.0) is None
-    flat = build_flat_roof([FlatBody(box(0, 0, 5, 5))], [], 3.0)
+    assert build_flat_roof([], [], 3.0, 0.2) is None
+    flat = build_flat_roof([FlatBody(box(0, 0, 5, 5))], [], 3.0, 0.2)
     assert flat.parapet is None
 
 
