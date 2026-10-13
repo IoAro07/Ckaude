@@ -19,7 +19,7 @@ GRID = 1e-5  # footprints are snapped to this grid so neighbours share exact coo
 
 Vec3 = tuple[float, float, float]
 
-STOREY_TAG = re.compile(r"^(PM?\d+)_(.+)$")  # P0_Muri, P1_Telai_F01, PM1_Muri: the group of a stacked storey
+STOREY_TAG = re.compile(r"^((?:PM?|E)\d+)_(.+)$")  # P0_Muri, P1_Telai_F01, PM1_Muri: the group of a stacked storey; E2_Tetto: of a building of a site
 
 
 def storey_tag(index: int) -> str:
@@ -27,8 +27,15 @@ def storey_tag(index: int) -> str:
     return f"P{index}" if index >= 0 else f"PM{-index}"
 
 
+def building_tag(number: int) -> str:
+    """E1, E2...: the tag of the groups of a building of a site (sitemode), as P1 is that of a storey."""
+    return f"E{number}"
+
+
 def storey_name(tag: str) -> str:
-    """The name of a storey for a person (P0 -> 'Piano 0', PM1 -> 'Piano -1')."""
+    """The name of a storey for a person (P0 -> 'Piano 0', PM1 -> 'Piano -1'; E2 -> 'Edificio 2')."""
+    if tag.startswith("E"):
+        return f"Edificio {tag[1:]}"
     return f"Piano {-int(tag[2:]) if tag.startswith('PM') else int(tag[1:])}"
 
 

@@ -19,7 +19,7 @@ from shapely.strtree import STRtree
 
 from .config import Config
 from .geom import long_axis, oriented_rect, polygons_of, union
-from .mesh import storey_tag
+from .mesh import building_tag, storey_tag
 from .reader import Item, Prim
 
 CLUSTER_TOL = 0.03  # loose lines closer than this belong to the same symbol
@@ -75,10 +75,13 @@ class Opening:
     block: str = ""
     storey: int | None = None  # the storey it belongs to when the model stacks several (None: a single plan)
     shift: tuple[float, float] = (0.0, 0.0)  # m: from the frame of its own plan to the frame of the model (stacked storeys)
+    building: int | None = None  # the building of a site (sitemode) it belongs to: the sigla repeats in each
 
     @property
     def key(self) -> str:
-        """Its name in a model of several storeys, where the sigla repeats on every floor (P1_F03); the sigla in a model of one."""
+        """Its name in a model of several storeys or buildings, where the sigla repeats on every floor (P1_F03, E2_F03); the sigla in a model of one."""
+        if self.building is not None:
+            return f"{building_tag(self.building)}_{self.id}"
         return self.id if self.storey is None else f"{storey_tag(self.storey)}_{self.id}"
 
     @property

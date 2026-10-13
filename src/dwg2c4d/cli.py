@@ -185,6 +185,22 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--spessore-solaio", type=float, metavar="M",
                    help="spessore del solaio tra due piani impilati (default 0,30 m)")
 
+    g = p.add_argument_group("modalita' sito (un foglio con la planimetria generale e i tetti degli edifici, senza la pianta di nessuno)")
+    ex = g.add_mutually_exclusive_group()
+    ex.add_argument("--sito", action="store_true",
+                    help="costruisci gli edifici dai tetti disegnati nella planimetria generale (campiture di coppi, frecce di "
+                         "pendenza): volumi chiusi con il loro tetto, alti come dicono i prospetti. Di norma lo fa da solo quando il "
+                         "foglio non ha la pianta di nessun edificio e la planimetria generale disegna dei tetti")
+    ex.add_argument("--no-sito", action="store_true",
+                    help="non usare la modalita' sito: un foglio senza la pianta di un edificio da' l'errore, come prima")
+    g.add_argument("--sporto-sito", type=float, metavar="M",
+                   help="quanto il tetto sporge dal muro, per gli edifici del sito (default 0,5 m): i muri sono il contorno del tetto "
+                        "meno lo sporto")
+    g.add_argument("--spessore-muri-sito", type=float, metavar="M",
+                   help="spessore dei muri dei volumi del sito, vuoti dentro (default 0,40 m)")
+    g.add_argument("--altezza-piano", type=float, metavar="M",
+                   help="altezza di un piano per gli edifici del sito che nessun prospetto misura (default 3 m)")
+
     g = p.add_argument_group("giardino (superfici e oggetti fuori dalla casa)")
     g.add_argument("--no-giardino", action="store_true",
                    help="non costruire il giardino (pavimentazione, prato, acqua, piscina, siepi, alberi...)")
@@ -279,7 +295,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         "tree_height": args.altezza_alberi, "hedge_height": args.altezza_siepi, "shrub_height": args.altezza_cespugli,
         "low_wall_height": args.altezza_muretti, "curb_height": args.altezza_cordoli,
         "slab_thickness": args.spessore_solaio,
-        "terrain_thickness": args.spessore_terreno,
+        "terrain_thickness": args.spessore_terreno, "site_overhang": args.sporto_sito, "site_wall": args.spessore_muri_sito,
+        "storey_height": args.altezza_piano,
     }
     for name, value in simple.items():
         if value is not None:
@@ -352,6 +369,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         raise ValueError("--piani e --no-piani insieme non hanno senso: scegline uno")
     if args.piani or args.no_piani:
         cfg.stacking = "yes" if args.piani else "no"
+    if args.sito or args.no_sito:
+        cfg.site = "yes" if args.sito else "no"
     if args.tabella_giardino:
         cfg.garden_table_in = args.tabella_giardino
     return cfg
