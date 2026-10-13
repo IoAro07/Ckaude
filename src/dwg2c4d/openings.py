@@ -30,6 +30,8 @@ OVERLAP = 0.005  # a gap filler reaches this far into the wall on each side, so 
 STATION_OFFSETS = (0.03, 0.10, 0.25)  # where to look for the wall just outside the symbol
 DUPLICATE_CENTRE = 0.02  # m: two openings of one kind whose centres lie this close and whose widths differ by less than
 DUPLICATE_WIDTH = 0.02  # m: ... this are one opening drawn twice (two symbols on top of each other)
+MANUAL_REACH = 0.30  # m: an opening the user places lies this close to a wall at most, beyond its own half width (a wall's centre is within half its thickness)
+ID_PREFIX = {"window": "F", "door": "P", "passage": "V"}  # the first letter of the sigla of each kind
 
 
 @dataclass
@@ -425,10 +427,6 @@ def merge_duplicates(openings: list[Opening]) -> tuple[list[Opening], int]:
             same = op
         same.notes.append("era disegnata due volte nello stesso punto (due simboli identici sovrapposti): ne ho tenuto uno")
     return kept, twice
-
-
-MANUAL_REACH = 0.30  # m: an opening the user places lies this close to a wall at most, beyond its own half width (a wall's centre is within half its thickness)
-ID_PREFIX = {"window": "F", "door": "P", "passage": "V"}
 
 
 def opening_at(centre: tuple[float, float], width: float, kind: str, walls: BaseGeometry, cfg: Config) -> Opening | None:
