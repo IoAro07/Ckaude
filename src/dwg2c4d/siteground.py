@@ -14,19 +14,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from .garden import Garden, add_garden, build_garden
+from .garden import Garden, add_garden, build_garden, place_on_terrain
 from .garden_table import apply_garden_table, read_garden_table
 from .geom import union
 from .mesh import Mesh
+from .siteterrain import site_terrain
+from .terrain import Terrain
+from .terrainmesh import add_terrain
 
 GARDEN_SKIPPED_KINDS = ("elevation", "section", "roof", "detail")  # views whose contents are never garden
 
 
 @dataclass
 class Around:
-    """What lies round the buildings of a site: the garden (ground, pool, plants)."""
+    """What lies round the buildings of a site: the garden (ground, pool, plants) and the terrain under it all."""
 
     garden: Garden | None = None
+    terrain: Terrain | None = None
 
 
 def _box(views: list) -> tuple[float, float, float, float]:
@@ -61,16 +65,33 @@ def site_garden(doc, cfg, analysis, site, notes: list[str]) -> Garden | None:
 
 
 def around_site(doc, cfg, analysis, site, notes: list[str]) -> Around:
-    """The garden, the terrain and the low walls of the site (``notes`` gets what the report says of them)."""
-    return Around(garden=site_garden(doc, cfg, analysis, site, notes))
+    """The garden, the terrain and the low walls of the site (``notes`` gets what the report says of them). The terrain sets the
+    floor height of every building (``Building.base``)."""
+    garden = site_garden(doc, cfg, analysis, site, notes)
+    terrain = None
+    if cfg.terrain or cfg.terrain_auto:
+        shells = garden.shells if garden is not None else []
+        window = garden.window if garden is not None else None
+        try:
+            terrain = site_terrain(doc, cfg, analysis, site, shells, window, notes)
+        except Exception as exc:  # a help: whatever goes wrong in it is never the reason a conversion fails
+            for b in site.buildings:
+                b.base = 0.0
+            notes.append(f"Terreno non costruito: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; per escluderlo "
+                         "usa --no-terreno.")
+    if terrain is not None and garden is not None:
+        place_on_terrain(garden.objects, terrain)
+    return Around(garden, terrain)
 
 
 def add_around(mesh: Mesh, around: Around, cfg, notes: list[str]) -> None:
     """Put what lies round the buildings in ``mesh``. It is a help: what fails is taken out again and the buildings stay."""
+    if around.terrain is not None:
+        add_terrain(mesh, around.terrain)
     if around.garden is not None:
         before = set(mesh.groups)
         try:
-            add_garden(mesh, around.garden, cfg)
+            add_garden(mesh, around.garden, cfg, around.terrain)
         except Exception as exc:
             for name in set(mesh.groups) - before:
                 del mesh.groups[name]

@@ -41,7 +41,7 @@ def garden_sheet(path, pool=True, panels=False, canopy=False, tree=False, lawn=T
     if panels:
         hatch(msp, rect(1500, -600, 2100, -300), "Pensilina", rgb=(90, 170, 230))
     if canopy:
-        hatch(msp, rect(2800, -500, 3000, -300), "Coppi Scuro", color=30, pattern="COPPI01")
+        hatch(msp, rect(2500, -300, 2700, -100), "Coppi Scuro", color=30, pattern="COPPI01")
     if tree:
         block = doc.blocks.new("ALBERO")
         block.add_circle((0, 0), 100)
@@ -101,3 +101,68 @@ def test_the_plants_come_with_the_garden_and_can_be_left_out(tmp_path):
     assert [o.kind for o in report.garden.objects] == ["tree"] and "Chioma_A01" in obj.groups
     bare, obj = converted(tmp_path, Config(auto=True, images=False, roof_auto=True, garden=True, garden_plants=False), tree=True)
     assert bare.garden.objects == [] and "Chioma_A01" not in obj.groups and "Prato" in obj.groups  # the ground stays
+
+
+# --- the terrain: every building at the height of the ground under it ----------------------------------------------
+
+from test_terrain import add_contours, slope_z  # noqa: E402  (the slope of test_terrain: 10 % up eastwards, contour lines running north-south)
+
+TERRAIN = dict(auto=True, images=False, roof_auto=True, garden=True, terrain_auto=True)
+
+
+def sloping(tmp_path, cfg=None, contours=True, **kw):
+    """The garden sheet on the slope: the hip roof (floor of the zero) and the gable roof 18 m further east, 1.5 m higher."""
+    path = garden_sheet(tmp_path / "t.dxf", **kw)
+    if contours:
+        doc = ezdxf.readfile(path)
+        add_contours(doc.modelspace())
+        doc.saveas(path)
+    report = convert(path, tmp_path / "t.obj", cfg or Config(**TERRAIN))
+    return report, Obj(tmp_path / "t.obj")
+
+
+def test_every_building_stands_on_the_ground_under_it_the_biggest_one_is_the_zero(tmp_path):
+    report, obj = sloping(tmp_path)
+    hip, gable = report.site.buildings
+    assert hip.base == pytest.approx(0.0) and gable.base == pytest.approx(slope_z(2100) - slope_z(600), abs=0.05)  # 1.5 m up
+    assert obj.bbox("E1_Muri")[0][1] == pytest.approx(0.0, abs=0.01)
+    assert obj.bbox("E2_Muri")[0][1] == pytest.approx(gable.base, abs=0.01)  # the walls of the second stand on its floor
+    assert obj.bbox("E2_Pavimento")[0][1] == pytest.approx(gable.base - 0.2, abs=0.01)
+    assert obj.bbox("E2_Tetto")[0][1] > gable.base  # the roof goes up with it
+    assert report.terrain is not None and "Terreno" in obj.groups
+    assert any(w.startswith("Terreno: ogni edificio sta su una piattaforma") and "edificio 2 a +1.50 m" in w for w in report.warnings)
+
+
+def test_the_ground_is_flat_under_each_building_and_keeps_the_contour_lines_between_them(tmp_path):
+    report, obj = sloping(tmp_path)
+    ground = report.site.around.terrain
+    assert float(ground.height(600.0 / 100.0, 400.0 / 100.0)) == pytest.approx(-0.2, abs=0.01)  # under the first building: its platform
+    gable = report.site.buildings[1]
+    assert float(ground.height(21.0, 3.5)) == pytest.approx(gable.base - 0.2, abs=0.01)  # under the second: its own
+    assert float(ground.height(29.0, 3.5)) == pytest.approx(slope_z(2900) - slope_z(600), abs=0.1)  # beyond them the ground is the survey's: still rising
+
+
+def test_the_pool_is_dug_at_the_height_of_its_own_ground(tmp_path):
+    report, obj = sloping(tmp_path)
+    top = obj.bbox("Vasca")[1][1]
+    assert top == pytest.approx(slope_z(450) - slope_z(600), abs=0.06)  # the pool lies 1.5 m west of the first building's centre: 15 cm lower
+    assert obj.bbox("Acqua")[1][1] == pytest.approx(top - 0.2, abs=0.01)  # the water 20 cm below the edge
+
+
+def test_with_no_terrain_option_the_buildings_stand_on_the_flat_zero(tmp_path):
+    report, obj = sloping(tmp_path, Config(auto=True, images=False, roof_auto=True, garden=True))
+    assert report.terrain is None and "Terreno" not in obj.groups
+    assert [b.base for b in report.site.buildings] == [0.0, 0.0] and obj.bbox("E2_Muri")[0][1] == pytest.approx(0.0, abs=0.01)
+
+
+def test_a_sheet_with_no_contour_lines_has_no_terrain_and_no_remark(tmp_path):
+    report, obj = sloping(tmp_path, contours=False)
+    assert report.terrain is None and [b.base for b in report.site.buildings] == [0.0, 0.0]
+    assert not any(w.startswith("Terreno") for w in report.warnings)
+
+
+def test_the_floor_levels_are_in_the_report(tmp_path):
+    report, _ = sloping(tmp_path)
+    lines = summary_lines(report)
+    assert any("Edificio 2" in line and "pavimento a +1.50 m" in line for line in lines)
+    assert any(line.startswith("  Terreno") for line in lines)

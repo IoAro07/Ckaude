@@ -646,9 +646,10 @@ def add_garden(mesh: Mesh, garden: Garden, cfg: Config, ground=None) -> None:
             elif kind != "soil":
                 add_draped(mesh, ground, GROUND_NAMES[kind], geom, top)
     for pool, shell in zip(garden.pools, garden.shells):
-        mesh.add_extrusion("Vasca", [Slab(-cfg.pool_depth - cfg.pool_wall, -cfg.pool_depth, shell),
-                                     Slab(-cfg.pool_depth, 0.0, shell.difference(pool))])
-        mesh.add_extrusion("Acqua", [Slab(-cfg.pool_depth, -cfg.pool_water_drop, pool)])
+        top = float(ground.lift(shell.centroid.x, shell.centroid.y)) if ground is not None else 0.0  # a pool is dug where its flat ground is
+        mesh.add_extrusion("Vasca", [Slab(top - cfg.pool_depth - cfg.pool_wall, top - cfg.pool_depth, shell),
+                                     Slab(top - cfg.pool_depth, top, shell.difference(pool))])
+        mesh.add_extrusion("Acqua", [Slab(top - cfg.pool_depth, top - cfg.pool_water_drop, pool)])
     for o in garden.objects:
         if o.keep:
             add_object(mesh, o)

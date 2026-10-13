@@ -326,7 +326,7 @@ def _convert_site(doc, output_path: Path, cfg: Config) -> ConversionReport | Non
     if site is None:
         return None
     mesh = site.mesh
-    garden = site.around.garden
+    garden, terrain = site.around.garden, site.around.terrain
     x0, y0, x1, y1 = site.bounds
     offset = (0.0, 0.0)
     if cfg.origin != "drawing":
@@ -335,7 +335,8 @@ def _convert_site(doc, output_path: Path, cfg: Config) -> ConversionReport | Non
     write_obj(mesh, output_path, cfg.out_units, cfg.mirror)
     json_path = None
     if cfg.c4d_json:
-        json_path = write_json(to_model_dict(mesh, output_path.stem, offset, site.openings, garden.objects if garden else None),
+        json_path = write_json(to_model_dict(mesh, output_path.stem, offset, site.openings, garden.objects if garden else None,
+                                             terrain is not None),
                                output_path.with_name(output_path.stem + "_model.json"))
     garden_table_path = None
     if cfg.write_garden_table and garden is not None and garden.objects:
@@ -347,7 +348,7 @@ def _convert_site(doc, output_path: Path, cfg: Config) -> ConversionReport | Non
         size_m=(x1 - x0, y1 - y0), wall_area_m2=walls.area, wall_pieces=len(site.buildings),
         doors=sum(o.kind == "door" for o in site.openings), windows=sum(o.kind == "window" for o in site.openings),
         passages=0, columns=0, faces=mesh.face_count, groups=list(mesh.groups), warnings=warnings, origin_offset=offset,
-        json_path=json_path, garden=garden, garden_table_path=garden_table_path,
+        json_path=json_path, garden=garden, garden_table_path=garden_table_path, terrain=terrain.info if terrain is not None else None,
         wall_height=max(b.eave_height or 0.0 for s in site.buildings for b in s.bodies),
         wall_height_source="predefinita" if any(b.eave_source == "predefinita" for s in site.buildings for b in s.bodies) else "prospetto",
         plan=site.plan, mesh=mesh, openings=site.openings, site=site, analysis=analysis, cfg=cfg)
