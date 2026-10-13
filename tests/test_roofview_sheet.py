@@ -196,3 +196,51 @@ def test_a_roof_whose_ridge_would_change_place_if_the_outline_is_turned_by_half_
 def test_a_symmetric_roof_is_not_said_to_fit_in_two_places(tmp_path):
     report, _ = converted(tmp_path)  # a hip roof: turned by half a turn it is the same roof
     assert report.roof is not None and not any("quasi altrettanto bene" in w for w in report.warnings)
+
+
+def add_hip_and_flat(msp, w=1400, d=900, layer="0", **kw):
+    """The roof of ``add_plan`` in two bodies 20 cm apart: a hip roof over the west half (a ridge along y) and a flat roof
+    (an outline and nothing else) over the east half."""
+    x0, y0, y1, mid = -OVER, -OVER, d + OVER, w // 2
+    x1 = mid - 10
+    msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
+    half = (x1 - x0) / 2
+    xm = (x0 + x1) / 2
+    msp.add_line((xm, y0 + half), (xm, y1 - half), dxfattribs={"layer": layer})
+    for corner, end in (((x0, y0), (xm, y0 + half)), ((x1, y0), (xm, y0 + half)), ((x0, y1), (xm, y1 - half)),
+                        ((x1, y1), (xm, y1 - half))):
+        msp.add_line(corner, end, dxfattribs={"layer": layer})
+    msp.add_lwpolyline([(mid + 10, y0), (w + OVER, y0), (w + OVER, y1), (mid + 10, y1)], close=True, dxfattribs={"layer": layer})
+
+
+def test_a_roof_view_with_a_hip_roof_and_a_flat_roof_makes_both(tmp_path):
+    report, obj = converted(tmp_path, roof=add_hip_and_flat, turns=1)
+    assert report.roof is not None and report.roof["faces"] == 4
+    assert report.flat_roof is not None and report.flat_roof["bodies"] == 1
+    assert "Tetto" in obj.groups and "Copertura" in obj.groups
+    (_, _, _), (tx1, _, _) = obj.bbox("Tetto")
+    (cx0, _, _), (_, _, _) = obj.bbox("Copertura")
+    assert tx1 < cx0 + 0.5  # the hip roof is on one side of the flat one: they do not overlap
+
+
+def test_a_roof_view_with_no_closed_outline_says_so_and_builds_nothing(tmp_path):
+    def open_outline(msp, **kw):
+        msp.add_lwpolyline([(0, 900), (0, 0), (1500, 0), (1500, 900)])  # three sides of a roof, and tiles to say what it is
+        for k in range(4):
+            hatch = msp.add_hatch()
+            hatch.dxf.pattern_name = "COPPI01"
+            hatch.dxf.solid_fill = 0
+            hatch.paths.add_polyline_path([(100 + k * 300, 100), (350 + k * 300, 100), (350 + k * 300, 400), (100 + k * 300, 400)])
+
+    report, obj = converted(tmp_path, roof=open_outline)
+    assert report.roof is None and report.flat_roof is None and "Tetto" not in obj.groups
+    assert any("nessun contorno chiuso" in w for w in report.warnings)
+
+
+def test_the_flat_roof_is_an_object_of_the_c4d_json_with_its_own_material(tmp_path):
+    import json
+
+    converted(tmp_path, Config(auto=True, roof_auto=True, images=False, c4d_json=True), roof=add_flat_roof, parapet=False)
+    model = json.loads((tmp_path / "t_model.json").read_text(encoding="utf-8"))
+    (slab,) = [o for o in model["objects"] if o["name"] == "Copertura"]
+    assert slab["material"] == "flat_roof" and "flat_roof" in model["materials"] and slab["group"] == "Tetto"
