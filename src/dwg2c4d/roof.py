@@ -49,7 +49,7 @@ class Roof:
     steps: list[list[Vec3]]  # vertical walls between neighbouring faces that do not meet (gables)
     pitch_deg: float  # typical (median) pitch
     pitch_range: tuple[float, float]  # steepest / shallowest face, degrees
-    pitch_source: str  # "indicata" | "prospetto" | "predefinita"
+    pitch_source: str  # "indicata" | "scritta" | "prospetto" | "predefinita"
     ridge_height: float  # highest point above the eaves
     faces: int
     offset: tuple[float, float]  # translation applied to the roof plan (m)
@@ -116,8 +116,10 @@ def _ridge_runs(network, outline_boundary) -> list[tuple[float, float, float]]:
 def build_roof(items: list[Item], cfg: Config, unit_scale: float,
                walls_bounds: tuple[float, float, float, float],
                ridge_hints: list[tuple[float, float, float]],
-               warnings: list[str]) -> Roof | None:
-    """``ridge_hints``: (x0, x1, height above the eaves), metres, in plan coordinates."""
+               warnings: list[str], written_pitch: float | None = None) -> Roof | None:
+    """``ridge_hints``: (x0, x1, height above the eaves), metres, in plan coordinates. ``written_pitch``: degrees, the
+    slope the sheet writes ("Pendenza 25 %"): it is the slope when no --pendenza is given, and then the elevations
+    do not fix it."""
     lines: list[LineString] = []
     for it in items:
         if it.category != "roof":
@@ -202,7 +204,7 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
 
     # Ridges whose height an elevation gives (an explicit pitch wins over the elevation).
     run_info: list[tuple[list[tuple[int, int]], float, float, float, float]] = []
-    if cfg.roof_pitch is None:
+    if cfg.roof_pitch is None and written_pitch is None:
         for y, x0, x1 in _ridge_runs(network, outline_boundary):
             if x1 - x0 < MIN_RIDGE:
                 continue
@@ -221,6 +223,8 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
     # Slope of each face: from the ridge nodes the elevation fixed on it, else the default.
     if cfg.roof_pitch is not None:
         default_k, source = math.tan(math.radians(cfg.roof_pitch)), "indicata"
+    elif written_pitch is not None:
+        default_k, source = math.tan(math.radians(written_pitch)), "scritta"
     else:
         default_k, source = math.tan(math.radians(cfg.roof_default_pitch)), "predefinita"
     # A ridge's height belongs to the faces that have it as an edge and to the end faces that
@@ -254,7 +258,7 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
         fallback_k = float(np.median(measured))
     else:
         fallback_k = default_k
-        if ridge_hints and cfg.roof_pitch is None:
+        if ridge_hints and cfg.roof_pitch is None and written_pitch is None:
             warnings.append("Tetto: nessun colmo della pianta del tetto corrisponde alle linee orizzontali "
                             "del prospetto (stesse coordinate X?): pendenza predefinita.")
 

@@ -11,8 +11,10 @@ section marks, arrows, the gutters and the wall lines under the eaves. ``clean_r
 from __future__ import annotations
 
 import math
+import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import shapely
@@ -26,6 +28,9 @@ from .config import LayerRules
 from .geom import polygons_of, union
 from .reader import Item, Prim
 from .walls import _key, closure_segments, thinness
+
+if TYPE_CHECKING:
+    from .roof import Roof
 
 # --- cleaning ---
 MIN_ROOF_AREA = 4.0  # m2: a closed outline smaller than this is a skylight, a chimney or a panel, not a roof
@@ -49,9 +54,16 @@ MAX_OVERHANG = 1.5  # m: ... and the exact search never grows it more than this
 MIN_IOU = 0.45  # the roof is on the plan if it overlaps the building (grown by the eaves) at least this well
 MIN_COVER = 0.6  # ... and at least this share of the roof stands over the building (grown)
 MIRROR_MARGIN = 0.1  # a mirrored pose is taken only if it overlaps this much better (iou) than any that is not
+SAME_LINES = 0.05  # m: the lines of the roof in two poses are the same when they lie this close
 TIE = 0.97  # a pose that scores at least this share of the best one fits as well: the plain one (no turn) is taken
 CENTRE_WEIGHT = 0.02  # a shift that moves the centre of the roof away from the centre of the walls costs this much per diagonal
 MAX_CELLS = 4_000_000  # no raster is made of more cells than this (the step grows instead)
+MAX_VIEWS = 4  # no more roof plans than this are tried (the biggest)
+
+# --- the written slope ---
+PITCH_TEXT = re.compile(r"pend\w*\W+(?:\w+\W+){0,3}?(\d{1,3}(?:[.,]\d+)?)\s*(%|°|gradi)", re.I)  # Pendenza 25 %   pendenza falde 30%   Pend. 20 gradi
+PITCH_PERCENT = (8.0, 100.0)  # a written slope in percent is a roof's if it lies in this range (a 2 % gutter is not)
+PITCH_DEGREES = (5.0, 60.0)  # ... and in degrees in this one
 
 
 @dataclass
@@ -64,7 +76,17 @@ class Registration:
     shift: tuple[float, float]
     iou: float  # how well the outline covers the building grown by the eaves (0 to 1)
     overhang: float  # m: how far the building was grown for the best fit
-    tied: bool  # another pose fits nearly as well: the roof is where the plan looks most like it, not surely
+    cover: float = 1.0  # the share of the roof that stands over the building (grown by the eaves)
+    alternatives: list["Registration"] = field(default_factory=list)  # other poses that fit nearly as well (TIE)
+
+    @property
+    def tied(self) -> bool:
+        return bool(self.alternatives)
+
+    @property
+    def sound(self) -> bool:
+        """Does it fit well enough to be believed?"""
+        return self.iou >= MIN_IOU and self.cover >= MIN_COVER
 
 
 def pose_of(turns: int, mirror: bool) -> tuple[float, float, float, float]:
@@ -139,9 +161,14 @@ def _junk_layers(parts: list[_Part]) -> set[str]:
     return junk
 
 
+def _pieces(geom: BaseGeometry) -> list[LineString]:
+    """The lines of a geometry (a line, or a collection of them), none of them empty."""
+    return [g for g in getattr(geom, "geoms", [geom]) if isinstance(g, LineString) and g.length > 0]
+
+
 def _faces(lines: list[LineString]) -> list[Polygon]:
     """The closed planes the lines make (thin strips, gutters and slivers left out)."""
-    segs = [g for g in getattr(unary_union(lines), "geoms", [unary_union(lines)]) if isinstance(g, LineString) and g.length > 0]
+    segs = _pieces(unary_union(lines))
     network = unary_union(segs + closure_segments(segs, CLOSE_GAP))
     return [f for f in polygonize(network) if f.area >= MIN_ROOF_AREA and thinness(f) >= FASCIA]
 
@@ -227,9 +254,8 @@ def clean_roof(items: list[Item]) -> CleanRoof | None:
     kept = [l for l in kept if not l.is_empty]
     if not kept:
         return None
-    merged = unary_union(kept)
-    segs = [g for g in getattr(merged, "geoms", [merged]) if isinstance(g, LineString) and g.length > 0]
-    lines = _prune([g for g in getattr(unary_union(segs + closure_segments(segs, CLOSE_GAP)), "geoms", []) if isinstance(g, LineString)])
+    segs = _pieces(unary_union(kept))
+    lines = _prune(_pieces(unary_union(segs + closure_segments(segs, CLOSE_GAP))))
     groups = []
     for comp in _components(lines):
         planes = _faces(comp)
@@ -303,13 +329,20 @@ def _refine(fit: _Fit, tx: float, ty: float, d: float) -> tuple[float, float, fl
 
 
 def register_roof(roof: BaseGeometry, building: BaseGeometry) -> Registration | None:
-    """The move that lays the outline of a roof plan over the building, or None when it fits nowhere.
+    """The move that lays the outline of a roof plan over the building, or None when it fits nowhere (``fit_roof`` is the
+    best move whatever it is worth)."""
+    reg = fit_roof(roof, building)
+    return reg if reg is not None and reg.sound else None
+
+
+def fit_roof(roof: BaseGeometry, building: BaseGeometry) -> Registration | None:
+    """The best move that lays the outline of a roof plan over the building (None only when nothing can be tried).
 
     Every pose (a quarter turn each, and the mirror images) is tried: the two shapes are drawn on a coarse grid and
     their overlap is worked out for every shift at once (a correlation), for a few growths of the building; the best
     shifts are then polished with the exact areas. A mirror image is taken only when it fits ``MIRROR_MARGIN`` better
-    than any pose that is not mirrored. ``roof`` and ``building`` are in metres. The result must overlap the building
-    grown by the eaves (``MIN_IOU``) and the roof must stand over it (``MIN_COVER``)."""
+    than any pose that is not mirrored. ``roof`` and ``building`` are in metres. It is ``sound`` when it overlaps the
+    building grown by the eaves (``MIN_IOU``) and the roof stands over it (``MIN_COVER``)."""
     if roof.is_empty or building.is_empty:
         return None
     bx0, by0, bx1, by1 = building.bounds
@@ -323,7 +356,7 @@ def register_roof(roof: BaseGeometry, building: BaseGeometry) -> Registration | 
     candidates: list[tuple[float, int, bool, float, float, float]] = []  # (score, turns, mirror, tx, ty, d), coarse
     for mirror in (False, True):
         for turns in range(4):
-            posed = place(roof, Registration(turns, mirror, (0.0, 0.0), 0.0, 0.0, False))
+            posed = place(roof, Registration(turns, mirror, (0.0, 0.0), 0.0, 0.0))
             rx0, ry0, rx1, ry1 = posed.bounds
             rnx, rny = int(math.ceil((rx1 - rx0) / step)) + 1, int(math.ceil((ry1 - ry0) / step)) + 1
             if rnx * rny > MAX_CELLS:
@@ -348,7 +381,7 @@ def register_roof(roof: BaseGeometry, building: BaseGeometry) -> Registration | 
         return None
     results = []
     for _, turns, mirror, tx, ty, d in sorted(candidates, reverse=True):
-        posed = place(roof, Registration(turns, mirror, (0.0, 0.0), 0.0, 0.0, False))
+        posed = place(roof, Registration(turns, mirror, (0.0, 0.0), 0.0, 0.0))
         tx, ty, d, score, iou = _refine(_Fit(posed, building), tx, ty, d)
         results.append((score, iou, turns, mirror, tx, ty, d, posed))
     results.sort(key=lambda r: -r[0])
@@ -361,9 +394,136 @@ def register_roof(roof: BaseGeometry, building: BaseGeometry) -> Registration | 
         plain = [r for r in [best, *tied] if r[2] == 0 and not r[3]]
         if plain:
             best = plain[0]
-    score, iou, turns, mirror, tx, ty, d, posed = best
-    moved = affinity.translate(posed, tx, ty)
-    cover = moved.intersection(building.buffer(d, join_style="mitre")).area / moved.area
-    if iou < MIN_IOU or cover < MIN_COVER:
+            tied = [r for r in results if r is not best and r[0] >= TIE * best[0] and (not r[3] or best[3])]
+    return _registration(best, building, tied)
+
+
+def _registration(result: tuple, building: BaseGeometry, tied: list[tuple] = ()) -> Registration:
+    """The Registration of one result of the search: (score, iou, turns, mirror, tx, ty, d, the roof posed)."""
+    _, iou, turns, mirror, tx, ty, d, posed = result
+    cover = affinity.translate(posed, tx, ty).intersection(building.buffer(d, join_style="mitre")).area / posed.area
+    return Registration(turns, mirror, (tx, ty), iou, d, cover, [_registration(r, building) for r in tied])
+
+
+# ------------------------------------------------------------------------------------------------
+# the roof plan of a sheet
+
+@dataclass
+class ViewRoof:
+    """A roof plan found in a view of the sheet and laid over the plan: its roof items in the frame of the plan."""
+
+    items: list[Item]
+    view: int
+    registration: Registration
+    overhang: float | None  # m: from the wall line the view draws under the eaves, else from the registration
+    size: tuple[float, float]  # m: the roof plan
+    ambiguous: bool  # the roof fits the plan in another pose too, and the lines of the roof do not look the same in it
+
+
+def pitch_from_texts(texts: list[str]) -> tuple[float, str] | None:
+    """The slope written in the drawing as (degrees, the words), or None. A slope in percent (rise per 100 of run) or in
+    degrees; the one written most often when the sheet gives several. Values no roof has (a 2 % gutter, a 0.5 %
+    terrace) are not looked at."""
+    found: list[tuple[float, str]] = []
+    for text in texts:
+        for m in PITCH_TEXT.finditer(text):
+            value = float(m.group(1).replace(",", "."))
+            if m.group(2) == "%":
+                if PITCH_PERCENT[0] <= value <= PITCH_PERCENT[1]:
+                    found.append((math.degrees(math.atan(value / 100.0)), f"{m.group(1)} %"))
+            elif PITCH_DEGREES[0] <= value <= PITCH_DEGREES[1]:
+                found.append((value, f"{m.group(1)} gradi"))
+    if not found:
         return None
-    return Registration(turns, mirror, (tx, ty), iou, d, bool(tied))
+    count = Counter(round(deg, 1) for deg, _ in found)
+    best = max(count, key=lambda deg: (count[deg], -deg))
+    return next((deg, words) for deg, words in found if round(deg, 1) == best)
+
+
+def written_pitch(analysis) -> tuple[float, str] | None:
+    """The slope written on the views of the sheet that tell about the roof: the roof plan, the sections, the elevations
+    and the plan itself."""
+    kinds = ("roof", "section", "elevation")
+    boxes = [v for v in analysis.views if v.kind in kinds or v is analysis.plan]
+    texts = [t["text"] for t in analysis.soup.texts if any(v.contains(t["x"], t["y"]) for v in boxes)]
+    return pitch_from_texts(texts)
+
+
+def roof_views(analysis) -> list:
+    """The views of the sheet that are roof plans, the biggest first."""
+    return sorted((v for v in analysis.views if v.kind == "roof" and v is not analysis.plan), key=lambda v: -v.cells)[:MAX_VIEWS]
+
+
+def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale: float,
+                   warnings: list[str]) -> ViewRoof | None:
+    """The roof of the sheet's roof plan, laid over ``building`` (the footprint of the plan, metres): of the views that are
+    roof plans the one whose outline fits the building best (``register_roof``). None when there is none or none fits
+    (the warnings say so: a roof put in the wrong place is worse than no roof)."""
+    from dataclasses import replace
+
+    from .reader import read_items
+
+    views = roof_views(analysis)
+    if not views:
+        return None
+    area = (min(v.bbox[0] for v in views), min(v.bbox[1] for v in views), max(v.bbox[2] for v in views), max(v.bbox[3] for v in views))
+    read = read_items(doc, replace(cfg, layers=LayerRules(), area=None), area=area, ignore_veto=True, keep_other=True, unit=unit)
+    bounds = [shapely.total_bounds([p.geom for p in it.prims]) for it in read.items]
+    best: ViewRoof | None = None
+    worst: Registration | None = None
+    empty = 0
+    for v in views:
+        x0, y0, x1, y1 = (c * scale for c in v.bbox)
+        mine = [it for it, b in zip(read.items, bounds) if x0 <= (b[0] + b[2]) / 2 <= x1 and y0 <= (b[1] + b[3]) / 2 <= y1]
+        clean = clean_roof(mine)
+        if clean is None:
+            empty += 1
+            continue
+        reg = fit_roof(clean.outline, building)
+        if reg is None or not reg.sound:
+            worst = reg if worst is None or (reg is not None and reg.iou > worst.iou) else worst
+            continue
+        placed = [Item(it.layer, None, "roof", [Prim(place(p.geom, reg), p.kind) for p in it.prims]) for it in clean.items]
+        drawn = unary_union([p.geom for it in clean.items for p in it.prims])
+        ambiguous = any(place(drawn, alt).difference(place(drawn, reg).buffer(SAME_LINES)).length > 0.02 * drawn.length
+                        for alt in reg.alternatives)
+        found = ViewRoof(placed, v.id, reg, clean.overhang if clean.overhang is not None else reg.overhang, v.size_m(scale),
+                         ambiguous)
+        if best is None or reg.iou > best.registration.iou:
+            best = found
+    if best is not None:
+        return best
+    if worst is not None:
+        warnings.append(
+            f"Tetto: la vista {views[0].id} e' la pianta della copertura ma il suo contorno non combacia con i muri della "
+            f"pianta convertita (sovrapposizione migliore {worst.iou * 100:.0f} %, ce ne vuole almeno {MIN_IOU * 100:.0f} %): non "
+            "l'ho messa, per non piazzare un tetto sbagliato. Se sai dov'e' indicala tu con --layer-tetto, --area-tetto e "
+            "--sposta-tetto.")
+    elif empty:
+        warnings.append(
+            f"Tetto: nella vista {views[0].id} (la pianta della copertura) non ho trovato nessun contorno chiuso da cui "
+            "fare le falde: indica i layer del tetto con --layer-tetto.")
+    return None
+
+
+def view_roof_notes(found: ViewRoof, roof: "Roof", pitch: tuple[float, str] | None) -> list[str]:
+    """What the report tells about a roof taken from a view: where it came from, how it was put on the plan, the slope.
+    Every one of these is a reading of the drawing, not something the user said: it has to be checkable."""
+    reg = found.registration
+    w, h = found.size
+    moved = f"ruotato di {reg.turns * 90} gradi" if reg.turns else "non ruotato"
+    if reg.mirror:
+        moved += " e rovesciato (era speculare alla pianta)"
+    notes = [f"Tetto: costruito dalla vista della copertura (vista {found.view}, {w:.0f} x {h:.0f} m, disegnata altrove nel foglio): "
+             f"messo sulla pianta {moved} e spostato di {reg.shift[0]:.2f}, {reg.shift[1]:.2f} m, facendo combaciare il suo contorno "
+             f"con i muri (sovrapposizione {reg.iou * 100:.0f} %, sporto {found.overhang:.2f} m). Controlla nell'anteprima 3D "
+             "che sia al suo posto."]
+    if found.ambiguous:
+        notes.append("Tetto: il contorno combacia con la pianta anche in altre posizioni (forma simmetrica): ho scelto quella "
+                     "non ruotata; controlla che i colmi vadano nel verso giusto.")
+    if roof.pitch_source == "scritta" and pitch:
+        notes.append(f"Tetto: pendenza {roof.pitch_deg:.0f} gradi, quella scritta nel foglio ({pitch[1]}).")
+    elif roof.pitch_source == "predefinita":
+        notes.append(f"Tetto: nessuna pendenza scritta ne' ricavabile dai prospetti: uso {roof.pitch_deg:.0f} gradi (--pendenza per "
+                     "cambiarla).")
+    return notes

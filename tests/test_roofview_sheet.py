@@ -1,0 +1,124 @@
+"""The roof plan of a sheet, drawn as a view of its own, becomes the roof of the converted plan: whole conversions of
+synthetic sheets (centimetres)."""
+
+import math
+
+import ezdxf
+import pytest
+from ezdxf.math import Matrix44
+
+from dwg2c4d import Config, convert
+from dwg2c4d.config import LayerRules
+from helpers import Obj
+from test_views import add_plan, add_title, new_sheet
+
+OVER = 60  # cm: the eaves
+
+
+def add_hip_roof(msp, w=1400, d=900, layer="0", pitch_note=None, junk=True):
+    """The roof plan of ``add_plan`` (a hip roof, ``OVER`` of eaves) in the frame of the plan, with what else a roof view
+    holds: the wall line under the eaves, tile lines, a panel array, a skylight, a dimension and a section line."""
+    x0, y0, x1, y1 = -OVER, -OVER, w + OVER, d + OVER
+    half = (y1 - y0) / 2
+    ym = (y0 + y1) / 2
+    msp.add_lwpolyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], close=True, dxfattribs={"layer": layer})
+    rx0, rx1 = x0 + half, x1 - half
+    msp.add_line((rx0, ym), (rx1, ym), dxfattribs={"layer": layer})
+    for corner, end in (((x0, y0), (rx0, ym)), ((x0, y1), (rx0, ym)), ((x1, y0), (rx1, ym)), ((x1, y1), (rx1, ym))):
+        msp.add_line(corner, end, dxfattribs={"layer": layer})
+    if pitch_note:
+        msp.add_text(pitch_note, height=12, dxfattribs={"layer": "TESTI", "insert": (x0 + 40, y0 - 40)})
+    if not junk:
+        return
+    msp.add_lwpolyline([(0, 0), (w, 0), (w, d), (0, d)], close=True, dxfattribs={"layer": layer})  # the wall under the eaves
+    for k in range(150):  # tiles drawn with lines
+        msp.add_line((x0 + 10 + k * 9, y0 + 100), (x0 + 16 + k * 9, y0 + 130), dxfattribs={"layer": "TRATTEGGIO"})
+    msp.add_lwpolyline([(300, 150), (450, 150), (450, 300), (300, 300)], close=True, dxfattribs={"layer": layer})  # a skylight
+    msp.add_lwpolyline([(rx0 + 50, ym + 60), (rx0 + 350, ym + 60), (rx0 + 350, ym + 300), (rx0 + 50, ym + 300)], close=True,
+                       dxfattribs={"layer": layer})  # a panel array (7 m2) in a plane of the roof
+    msp.add_line((x0 - 200, y0 - 100), (x1 + 200, y0 - 100), dxfattribs={"layer": "QUOTE"})  # a dimension line
+    msp.add_line((w / 2, y0 - 300), (w / 2, y1 + 300), dxfattribs={"layer": "sezioni"})  # a section line through the roof
+
+
+def roof_sheet(path, turns=1, shift=(3200, 500), roof=add_hip_roof, **kw):
+    """A plan 14 x 9 m and, far from it and turned ``turns`` quarters, the plan of its roof with a title."""
+    doc, msp = new_sheet()
+    for name in ("TESTI", "TRATTEGGIO", "QUOTE", "sezioni"):
+        doc.layers.add(name)
+    add_plan(msp, 0, 0)
+    add_title(msp, "PIANTA PIANO TERRA", 100, -150)
+    before = len(msp)
+    roof(msp, **kw)
+    add_title(msp, "PIANTA COPERTURA", 100, -250)
+    move = Matrix44.chain(Matrix44.z_rotate(math.radians(90 * turns)), Matrix44.translate(shift[0], shift[1], 0))
+    for e in list(msp)[before:]:
+        e.transform(move)
+    doc.saveas(path)
+    return path
+
+
+def converted(tmp_path, cfg=None, **kw):
+    path = roof_sheet(tmp_path / "t.dxf", **kw)
+    report = convert(path, tmp_path / "t.obj", cfg or Config(auto=True, roof_auto=True, images=False))
+    return report, Obj(tmp_path / "t.obj")
+
+
+@pytest.mark.parametrize("turns", [0, 1, 2, 3])
+def test_the_roof_plan_of_the_sheet_becomes_the_roof_over_the_walls(tmp_path, turns):
+    report, obj = converted(tmp_path, turns=turns)
+    assert report.roof is not None and report.roof["view"] is not None and report.roof["faces"] == 4
+    assert any("vista della copertura" in w for w in report.warnings)
+    (wx0, _, wz0), (wx1, _, _) = obj.bbox("Muri")  # the plan is 14 x 9 m (the walls' far side is where the doors swing)
+    (rx0, _, rz0), (rx1, ry1, rz1) = obj.bbox("Tetto")
+    over = OVER / 100
+    assert (rx0, rx1, rz0, rz1) == pytest.approx((wx0 - over, wx1 + over, wz0 - over, wz0 + 9.0 + over), abs=0.1)
+    assert ry1 > report.wall_height
+
+
+def test_the_pitch_written_in_the_sheet_is_the_pitch_of_the_roof(tmp_path):
+    report, _ = converted(tmp_path, pitch_note="Pendenza 25 %")
+    assert report.roof["pitch_source"] == "scritta" and report.roof["pitch_deg"] == pytest.approx(14.04, abs=0.05)
+    assert report.roof["ridge_height"] == pytest.approx(report.wall_height + 5.1 * 0.25, abs=0.05)  # half span 5.1 m
+
+
+def test_without_a_written_pitch_the_default_is_used_and_said(tmp_path):
+    report, _ = converted(tmp_path)
+    assert report.roof["pitch_source"] == "predefinita"
+    assert any("nessuna pendenza scritta" in w for w in report.warnings)
+
+
+def test_an_explicit_pitch_beats_the_written_one(tmp_path):
+    cfg = Config(auto=True, roof_auto=True, images=False, roof_pitch=30.0)
+    report, _ = converted(tmp_path, cfg, pitch_note="Pendenza 25 %")
+    assert report.roof["pitch_source"] == "indicata" and report.roof["pitch_deg"] == pytest.approx(30.0, abs=0.05)
+
+
+def test_no_roof_is_built_when_the_user_says_no(tmp_path):
+    report, obj = converted(tmp_path, Config(auto=True, roof_auto=False, images=False))
+    assert report.roof is None and "Tetto" not in obj.groups
+
+
+def test_a_roof_layer_always_wins_over_the_roof_view(tmp_path):
+    path = roof_sheet(tmp_path / "t.dxf", junk=False)
+    doc = ezdxf.readfile(path)
+    doc.layers.add("Tetto")
+    add_hip_roof(doc.modelspace(), layer="Tetto", junk=False)  # drawn over the plan: a roof of the layer
+    doc.saveas(path)
+    report = convert(path, tmp_path / "t.obj", Config(auto=True, roof_auto=True, images=False))
+    assert report.roof is not None and report.roof["view"] is None
+    assert not any("vista della copertura" in w for w in report.warnings)
+
+
+def test_a_layer_the_user_names_is_the_only_place_the_roof_is_looked_for(tmp_path):
+    cfg = Config(auto=True, roof_auto=True, images=False, layers=LayerRules({"roof": ["NESSUNO"]}))
+    report, obj = converted(tmp_path, cfg)
+    assert report.roof is None and "Tetto" not in obj.groups
+
+
+def test_a_roof_plan_that_fits_no_building_is_not_placed_and_the_report_says_so(tmp_path):
+    def strip(msp, **kw):
+        msp.add_lwpolyline([(0, 0), (4000, 0), (4000, 250), (0, 250)], close=True)  # 40 x 2.5 m: no building of the sheet
+
+    report, obj = converted(tmp_path, roof=strip)
+    assert report.roof is None and "Tetto" not in obj.groups
+    assert any("non combacia" in w for w in report.warnings)

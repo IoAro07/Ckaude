@@ -20,7 +20,8 @@ from .glazing import ribbon_windows
 from .thinwalls import THICKNESS, single_line_walls
 from .openings import assign_ids, build_openings
 from .reader import layer_used, storeys, read_items
-from .roof import build_roof, ridge_hints_from
+from .roof import Roof, build_roof, ridge_hints_from
+from .roofview import roof_from_view, view_roof_notes, written_pitch
 from .falsewalls import FalseWalls, lower_far_walls, separate_prims
 from .walls import build_columns, build_wall_layers, clean_footprint
 from .table import apply_table, read_table, write_table
@@ -147,6 +148,39 @@ def _read_walls(items: list, cfg: Config, warnings: list[str]) -> tuple[BaseGeom
             return walls, layer_walls, false
     layer_walls = build_wall_layers(items, cfg, warnings)
     return clean_footprint(union(layer_walls.values()), cfg.merge_tolerance), layer_walls, FalseWalls()
+
+
+def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list, warnings: list[str]) -> tuple[Roof | None, dict | None]:
+    """(the roof, its line of the report). From the layers the names call roof (or --layer-tetto): they always win. When
+    they give none (no such layer, or only the lines of a tile pattern) and the sheet draws a roof plan as a view of its
+    own, from that view, cleaned and laid over the plan (roofview): never when the user said where the roof is
+    (--layer-tetto, --area-tetto, --sposta-tetto)."""
+    if not (cfg.roof or cfg.roof_auto):
+        return None, None
+    own: list[str] = []
+    roof, view = None, None
+    rr = read_items(doc, cfg, area=cfg.roof_area, unit=result.unit)
+    items = rr.items if cfg.roof else [it for it in rr.items if it.category == "roof" and not is_elevation_layer(it.layer)]
+    if items or cfg.roof:  # nothing asked, nothing drawn: no roof and no remark
+        roof = build_roof(items, cfg, result.unit_scale, solid.bounds, ridge_hints_from(elevations, cfg.wall_height), own)
+    stated = "roof" in cfg.layers.overrides or cfg.roof_area is not None or cfg.roof_offset is not None
+    if roof is None and not stated and cfg.analysis is not None and not site_plan_asked(cfg.analysis, cfg):
+        found = roof_from_view(doc, cfg, cfg.analysis, union([building_footprint(solid), floor_footprint(solid)]), result.unit,
+                               result.unit_scale, own)
+        if found is not None:
+            pitch = written_pitch(cfg.analysis)
+            roof = build_roof(found.items, replace(cfg, roof_offset=(0.0, 0.0)), result.unit_scale, solid.bounds, [], own,
+                              pitch[0] if pitch else None)
+            if roof is not None:
+                view = found.view
+                own = [n for n in own if not n.startswith("Tetto: le linee del tetto non formano")]
+                own.extend(view_roof_notes(found, roof, pitch))
+    warnings.extend(own)
+    if roof is None:
+        return None, None
+    return roof, {"pitch_deg": roof.pitch_deg, "pitch_range": roof.pitch_range, "pitch_source": roof.pitch_source,
+                  "ridge_height": roof.ridge_height + cfg.wall_height, "faces": roof.faces,
+                  "ridges_from_elevation": roof.ridges_from_elevation, "view": view}
 
 
 def convert(input_path: str | Path, output_path: str | Path | None = None,
@@ -367,22 +401,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if skirting_items(result.items):
         plan.skirting = skirting_strips(result.items, solid, openings, cfg)
 
-    roof_report = None
-    roof_items = None
-    if cfg.roof or cfg.roof_auto:
-        rr = read_items(doc, cfg, area=cfg.roof_area, unit=result.unit)
-        roof_items = rr.items if cfg.roof else [it for it in rr.items if it.category == "roof"
-                                               and not is_elevation_layer(it.layer)]
-        if not cfg.roof and not roof_items:
-            roof_items = None  # nothing asked, nothing drawn: no roof and no remark
-    if roof_items is not None:
-        roof = build_roof(roof_items, cfg, result.unit_scale, solid.bounds,
-                          ridge_hints_from(elevations, cfg.wall_height), warnings)
-        if roof is not None:
-            plan.roof = roof
-            roof_report = {"pitch_deg": roof.pitch_deg, "pitch_range": roof.pitch_range, "pitch_source": roof.pitch_source,
-                           "ridge_height": roof.ridge_height + cfg.wall_height, "faces": roof.faces,
-                           "ridges_from_elevation": roof.ridges_from_elevation}
+    plan.roof, roof_report = _build_roof(doc, cfg, result, solid, elevations, warnings)
 
     footprint = building_footprint(solid)
     for o in openings:
