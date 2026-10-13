@@ -280,6 +280,12 @@ class Config:
     part: bool = False  # internal: this conversion is an upper storey of a stack: the caller puts the storeys together
     user: object | None = field(default=None, repr=False, compare=False)  # internal: the Config as given, before the analysis changed it
 
+    # Site mode (sitemode.py): a sheet with no plan of a building but a site plan that draws the roofs of its buildings.
+    site: str = "auto"  # auto: when the sheet has no plan of a building and the site plan draws roofs | yes: always, from the roofs | no: never
+    site_overhang: float = 0.50  # metres: how far a roof reaches beyond the wall of its building, when no elevation says
+    site_wall: float = 0.40  # metres: thickness of the walls of the volumes of a site (the inside is not known)
+    storey_height: float = 3.00  # metres: a storey, for the buildings of a site that no elevation measures
+
     # Input / output.
     units: str | None = None  # force drawing units: mm, cm, m, in, ft
     out_units: str = "m"
@@ -326,7 +332,7 @@ class Config:
             "roof_thickness", "roof_default_pitch", "label_radius", "passage_max", "skirting_height",
             "skirting_thickness", "garden_thickness", "garden_lawn_drop", "pool_depth", "pool_wall",
             "pool_water_drop", "tree_height", "shrub_height", "hedge_height", "furniture_height",
-            "low_wall_height", "curb_height", "terrain_thickness")]
+            "low_wall_height", "curb_height", "terrain_thickness", "site_overhang", "site_wall", "storey_height")]
         if self.lot_wall_height is not None:
             numbers.append(self.lot_wall_height)
         numbers += [v for box_ in (self.area, self.roof_area, self.roof_offset, self.garden_area) if box_ for v in box_]
@@ -341,6 +347,10 @@ class Config:
             raise ValueError(f"unita' del disegno non valida: {self.units!r}")
         if self.stacking not in ("auto", "yes", "no"):
             raise ValueError("stacking deve essere auto, yes o no")
+        if self.site not in ("auto", "yes", "no"):
+            raise ValueError("site deve essere auto, yes o no")
+        if not 0.0 <= self.site_overhang <= 3.0 or not 0.1 <= self.site_wall <= 1.5 or not 2.0 <= self.storey_height <= 6.0:
+            raise ValueError("sporto del tetto: da 0 a 3 m; spessore dei muri del sito: da 0,1 a 1,5 m; altezza del piano: da 2 a 6 m")
         if self.slab_thickness is not None and not 0.05 <= self.slab_thickness <= 1.5:
             raise ValueError("spessore del solaio: tra 0,05 e 1,5 m")
         if self.fixtures not in ("simple", "detailed"):

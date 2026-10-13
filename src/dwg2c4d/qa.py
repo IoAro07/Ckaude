@@ -73,6 +73,9 @@ def summary_lines(report) -> list[str]:
         kinds = ", ".join(f"{n} {_KIND_IT.get(k, k)}" for k, n in Counter(v.kind for v in a.views).most_common())
         chosen = f"convertita la vista {a.plan.id}" if a.plan is not None else "nessuna pianta riconosciuta"
         out.append(f"  Foglio             : {len(a.views)} viste ({kinds}); {chosen}")
+    if getattr(report, "site", None) is not None:  # a site: buildings from their roofs, no plan
+        out.extend(_site_lines(report))
+        return out + _tail_lines(report)
     if report.floors:
         base = report.floors[0]
         out.append(f"  Piani              : {len(report.floors)} piani impilati in un modello solo: il piano {base.index} e' la pianta "
@@ -111,6 +114,32 @@ def summary_lines(report) -> list[str]:
     if report.columns:
         out.append(f"  Pilastri           : {report.columns}")
     out.extend(_storey_lines(report))
+    return out + _tail_lines(report)
+
+
+def _site_lines(report) -> list[str]:
+    """The summary of a site: its buildings, their roofs and heights, the doors and windows put on them."""
+    site = report.site
+    w, h = report.size_m
+    out = [f"  Modalita' sito     : {len(site.buildings)} edifici dai tetti della planimetria generale (vista "
+           f"{', '.join(str(v) for v in site.views)}), nessuna pianta; ingombro {w:.1f} x {h:.1f} m"]
+    for b in site.buildings:
+        bw, bh = b.size
+        eaves = sorted({round(body.eave_height, 2) for body in b.bodies})
+        out.append(f"  {f'Edificio {b.id}':<19}: tetto {bw:.1f} x {bh:.1f} m, {len(b.planes)} falde in {len(b.bodies)} corp"
+                   f"{'o' if len(b.bodies) == 1 else 'i'}, gronda a {', '.join(f'{e:g}' for e in eaves)} m; "
+                   f"porte / finestre {sum(o.kind == 'door' and o.building == b.id for o in report.openings)} / "
+                   f"{sum(o.kind == 'window' and o.building == b.id for o in report.openings)}")
+    how = {"indicata": "indicata", "scritta": "scritta nel foglio", "prospetto": "dedotta dal prospetto", "predefinita": "predefinita"}
+    out.append(f"  Tetto              : pendenza {site.pitch:.0f} gradi ({how[site.pitch_source]})")
+    out.append(f"  Porte / finestre   : {report.doors} / {report.windows}")
+    out.append(f"  Muri               : {report.wall_area_m2:.1f} m2 in pianta, vuoti dentro")
+    return out
+
+
+def _tail_lines(report) -> list[str]:
+    """The lines every summary ends with: the garden, the terrain, the faces and the warnings."""
+    out: list[str] = []
     if report.garden is not None:
         from .garden import summary
 

@@ -42,6 +42,7 @@ from .qa import plan_overlay, preview_3d, write_report
 from .mesh import storey_tag
 from .terrain import build_terrain
 from .terrainmesh import add_terrain
+from .sitemode import Site, build_site
 
 
 @dataclass
@@ -82,6 +83,7 @@ class ConversionReport:
     lot: object | None = None  # the lotfence.LotFence: wall, pillars, railing and wire fence round the lot
     terrain: dict | None = None  # the terrain from the contour lines: layer, levels, step, floor level, size...
     garden_table_path: Path | None = None
+    site: Site | None = None  # the buildings of a site, read from the roofs of its site plan (sitemode): a sheet with no plan of a building
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
     views_path: Path | None = None
     floors: list[Floor] = field(default_factory=list)  # the storeys of a stacked model, the converted plan first (none: one plan)
@@ -315,6 +317,48 @@ def _build_terrain(doc, cfg: Config, result, solid: BaseGeometry, columns: BaseG
     return ground
 
 
+def _convert_site(doc, output_path: Path, cfg: Config) -> ConversionReport | None:
+    """The conversion of a sheet that draws no plan of a building but the roofs of its buildings in a site plan (sitemode):
+    volumes and roofs, written as any other conversion. None when the site plan draws no roofs."""
+    analysis = cfg.analysis
+    warnings = [n for n in cfg.analysis_notes if "non ho capito quale sia la pianta" not in n]  # (there is none, and none is needed)
+    site = build_site(doc, cfg, analysis, warnings)
+    if site is None:
+        return None
+    mesh = site.mesh
+    x0, y0, x1, y1 = site.bounds
+    offset = (0.0, 0.0)
+    if cfg.origin != "drawing":
+        offset = (-(x0 + x1) / 2, -(y0 + y1) / 2) if cfg.origin == "center" else (-x0, -y0)
+        mesh.translate_xy(*offset)
+    write_obj(mesh, output_path, cfg.out_units, cfg.mirror)
+    json_path = None
+    if cfg.c4d_json:
+        json_path = write_json(to_model_dict(mesh, output_path.stem, offset, site.openings), output_path.with_name(output_path.stem + "_model.json"))
+    walls = site.plan.solid_walls
+    report = ConversionReport(
+        output=output_path, unit=analysis.unit.unit, unit_guessed=analysis.unit.declared is None,
+        size_m=(x1 - x0, y1 - y0), wall_area_m2=walls.area, wall_pieces=len(site.buildings),
+        doors=sum(o.kind == "door" for o in site.openings), windows=sum(o.kind == "window" for o in site.openings),
+        passages=0, columns=0, faces=mesh.face_count, groups=list(mesh.groups), warnings=warnings, origin_offset=offset,
+        json_path=json_path, wall_height=max(b.eave_height or 0.0 for s in site.buildings for b in s.bodies),
+        wall_height_source="predefinita" if any(b.eave_source == "predefinita" for s in site.buildings for b in s.bodies) else "prospetto",
+        plan=site.plan, mesh=mesh, openings=site.openings, site=site, analysis=analysis, cfg=cfg)
+    created = [output_path.name, output_path.with_suffix(".mtl").name] + ([json_path.name] if json_path else [])
+    if cfg.images:
+        try:
+            report.views_path = write_views_image(analysis, output_path.with_name(output_path.stem + "_viste.png"))
+            created.append(report.views_path.name)
+        except Exception as exc:  # a picture must never stop the conversion
+            report.images_note = f"immagine delle viste non creata: {exc}"
+        focus = (x0 + offset[0] - PREVIEW_MARGIN, x1 + offset[0] + PREVIEW_MARGIN, y0 + offset[1] - PREVIEW_MARGIN,
+                 y1 + offset[1] + PREVIEW_MARGIN)
+        report.preview_path = preview_3d(mesh, output_path.with_name(output_path.stem + "_anteprima_3d.png"), focus)
+        created.append(report.preview_path.name)
+    report.report_path = write_report(report, output_path.with_name(output_path.stem + "_report.txt"), created + [output_path.stem + "_report.txt"])
+    return report
+
+
 def convert(input_path: str | Path, output_path: str | Path | None = None,
             cfg: Config | None = None, _doc=None, _analysis=None) -> ConversionReport:
     """``_doc``: the drawing already opened (a second pass over the same file does not read it again). ``_analysis``: the
@@ -337,6 +381,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         except Exception as exc:  # the analysis is a help: when it fails the layer names and the options decide
             analysis_failed = f"Analisi del foglio non riuscita ({type(exc).__name__}: {exc}): uso i nomi dei layer."
             cfg = replace(cfg, auto=False, analysis_notes=[analysis_failed])
+    if cfg.analysis is not None and cfg.site != "no" and (cfg.site == "yes" or no_plan):
+        built = _convert_site(doc, output_path, cfg)  # a site plan that draws the roofs of its buildings: the buildings from those
+        if built is not None:
+            return built
+        if cfg.site == "yes":
+            raise ConversionError("Modalita' sito richiesta (--sito) ma la planimetria generale non disegna nessun tetto "
+                                  "(campiture di coppi o di tegole): non ho trovato edifici da costruire.")
     if no_plan and len(analysis.views) > 1:  # prospetti, sezioni, una planimetria generale: nessuna pianta di edificio
         picture = ""
         if cfg.images:
