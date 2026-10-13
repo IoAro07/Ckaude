@@ -79,6 +79,9 @@ class Outline:
     depth: float
     area: float
     steps: int = 0  # for a stair: how many steps were counted
+    geom: BaseGeometry | None = None  # for a stair: its footprint (metres), so that the steps can be built (sitesurfaces)
+    run: tuple[float, float] = (0.0, 0.0)  # for a stair: the unit vector along which its steps follow one another (nearest first)
+    pitch: float = 0.0  # for a stair: the distance between two steps (the tread), metres
 
 
 @dataclass
@@ -95,8 +98,9 @@ class FalseWalls:
     def empty(self) -> bool:
         return not (self.furniture or self.lowered or self.stairs) and self.columns.is_empty
 
-    def notes(self, low_height: float, curb_height: float) -> list[str]:
-        """The remarks for the report (Italian): how many things, how big, what was done, how to undo it."""
+    def notes(self, low_height: float, curb_height: float, steps_built: bool = False) -> list[str]:
+        """The remarks for the report (Italian): how many things, how big, what was done, how to undo it. ``steps_built``: the stairs
+        outside the building are built as steps (sitesteps), the report says so."""
         out = []
         if self.furniture:
             area = sum(o.area for o in self.furniture)
@@ -110,7 +114,10 @@ class FalseWalls:
         if self.stairs:
             steps = sum(o.steps for o in self.stairs)
             out.append(f"Muri: {len(self.stairs)} scale ({steps} gradini disegnati come linee parallele) non sono state estruse "
-                       "come blocchi pieni alti come i muri: la scala non e' modellata, restano i muri che la fiancheggiano. "
+                       "come blocchi pieni alti come i muri: "
+                       + ("restano i muri che le fiancheggiano (le scale fuori dalla casa, se ci sono, si costruiscono a gradini: vedi "
+                          "'Gradini' nel riepilogo; le altre non sono modellate). " if steps_built else
+                          "la scala non e' modellata, restano i muri che la fiancheggiano. ") +
                        "Posizioni nel file *_report.txt. Se sono muri usa --muri-tutti.")
         if self.lowered:
             area = sum(o.area for o in self.lowered)
@@ -311,10 +318,11 @@ def _step_chains(seg: np.ndarray) -> list[list[int]]:
     return chains
 
 
-def _stair_footprint(seg: np.ndarray) -> Polygon:
-    """The footprint of a stair from the lines of its steps (``seg``: (n, 4), nearest step first): the width of the steps,
-    less ``STEP_EDGE`` at each side (the walls it lies between are not part of it), and the length of the row, one step
-    more at each end (the first riser and the landing), give or take the drawing of a line twice."""
+def _stair_footprint(seg: np.ndarray) -> tuple[Polygon, tuple[float, float], float]:
+    """(the footprint of a stair, the unit vector along which its steps follow one another, the distance between two steps)
+    from the lines of its steps (``seg``: (n, 4), nearest step first): the width of the steps, less ``STEP_EDGE`` at each side
+    (the walls it lies between are not part of it), and the length of the row, one step more at each end (the first riser and
+    the landing), give or take the drawing of a line twice."""
     ux, uy = seg[0, 2] - seg[0, 0], seg[0, 3] - seg[0, 1]
     norm = math.hypot(ux, uy)
     ux, uy = ux / norm, uy / norm
@@ -325,7 +333,8 @@ def _stair_footprint(seg: np.ndarray) -> Polygon:
     pitch = (across.max() - across.min()) / (len(seg) - 1)
     s0, s1 = along.min() + STEP_EDGE, along.max() - STEP_EDGE
     c0, c1 = across.min() - pitch - STEP_COPY, across.max() + pitch + STEP_COPY
-    return Polygon([(s * ux + c * nx, s * uy + c * ny) for s, c in ((s0, c0), (s1, c0), (s1, c1), (s0, c1))])
+    shape = Polygon([(s * ux + c * nx, s * uy + c * ny) for s, c in ((s0, c0), (s1, c0), (s1, c1), (s0, c1))])
+    return shape, (nx, ny), float(pitch)
 
 
 def drop_stair_steps(items: list[Item], false: FalseWalls, exempt: frozenset[str] = frozenset()) -> list[Item]:
@@ -355,11 +364,12 @@ def drop_stair_steps(items: list[Item], false: FalseWalls, exempt: frozenset[str
     tree = STRtree(geoms)
     dropped: set[tuple[int, int]] = set()
     for chain in chains:
-        footprint = _stair_footprint(seg[chain])
+        footprint, run, pitch = _stair_footprint(seg[chain])
         dropped.update(refs[steps[k]] for k in chain)
         dropped.update(refs[k] for k in tree.query(footprint, predicate="contains").tolist())
         x0, y0, x1, y1 = footprint.bounds
-        false.stairs.append(Outline("scala", (x0 + x1) / 2.0, (y0 + y1) / 2.0, x1 - x0, y1 - y0, footprint.area, len(chain)))
+        false.stairs.append(Outline("scala", (x0 + x1) / 2.0, (y0 + y1) / 2.0, x1 - x0, y1 - y0, footprint.area, len(chain),
+                                    footprint, run, pitch))
     return _without(items, dropped)
 
 

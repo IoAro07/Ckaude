@@ -19,6 +19,8 @@ from .lotfence import add_lot_fence
 from .mesh import Mesh, Slab
 from .openings import Opening
 from .roof import MODULE_HEIGHT, FlatRoof, Roof
+from .sitesteps import add_stairs
+from .sitesurfaces import add_site_surfaces
 from .terrainmesh import add_draped, add_terrain
 from .walls import clean_footprint
 
@@ -43,6 +45,8 @@ class Plan:
     garden: object | None = None  # the ground, pools, plants and furniture outside (garden.Garden)
     lot: object | None = None  # the wall, pillars, railing and wire fence round the lot (lotfence.LotFence)
     terrain: object | None = None  # the ground under it all, with the house on a platform (terrain.Terrain)
+    site_surfaces: object | None = None  # the ground round the building read from the site plan (sitesurfaces.SiteSurfaces)
+    stairs: list = field(default_factory=list)  # the stairs outside the building, as steps (sitesteps.Staircase)
 
     @cached_property
     def solid_walls(self) -> BaseGeometry:
@@ -234,6 +238,26 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str], roof: bool = True) 
                 del mesh.groups[name]
             plan.garden = None
             warnings.append(f"Giardino non costruito: {type(exc).__name__}: {exc}. Il resto del modello e' completo.")
+
+    if plan.site_surfaces is not None:
+        before = set(mesh.groups)
+        try:
+            add_site_surfaces(mesh, plan.site_surfaces, cfg, ground)
+        except Exception as exc:  # the surfaces are a help: what they had made is taken out again, the house stays
+            for name in set(mesh.groups) - before:
+                del mesh.groups[name]
+            plan.site_surfaces = None
+            warnings.append(f"Superfici del sito non costruite: {type(exc).__name__}: {exc}. Il resto del modello e' completo.")
+
+    if plan.stairs:
+        before = set(mesh.groups)
+        try:
+            add_stairs(mesh, plan.stairs, ground)
+        except Exception as exc:  # the steps are a help: what they had made is taken out again, the house stays
+            for name in set(mesh.groups) - before:
+                del mesh.groups[name]
+            plan.stairs = []
+            warnings.append(f"Gradini non costruiti: {type(exc).__name__}: {exc}. Il resto del modello e' completo.")
 
     if plan.lot is not None:
         before = set(mesh.groups)

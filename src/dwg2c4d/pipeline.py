@@ -38,11 +38,14 @@ from .garden import build_garden, place_on_terrain
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
 from .lotfence import detect_lot_fence, finish_lot_fence, without_fence_layers
 from .floors import extend_to_outer_faces, floor_left_over, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
-from .qa import plan_overlay, preview_3d, write_report
+from .qa import plan_overlay, preview_3d, site_overlay, write_report
 from .mesh import storey_tag
 from .terrain import build_terrain
 from .terrainmesh import add_terrain
 from .sitemode import Site, build_site
+from .sitesurfaces import SiteSurfaces, build_site_surfaces
+from .sitetable import apply_site_table, read_site_table, write_site_table
+from .sitesteps import Staircase, build_stairs, notes as stairs_notes
 
 
 @dataclass
@@ -72,6 +75,7 @@ class ConversionReport:
     room_objects: list = field(default_factory=list)  # the Room objects (polygons)
     preview_path: Path | None = None
     overlay_path: Path | None = None
+    site_overlay_path: Path | None = None  # the picture of the surfaces, walls and stairs of the site, to check them
     report_path: Path | None = None
     images_note: str = ""  # why a picture was not made
     openings: list = field(default_factory=list)  # the Opening objects, with ids
@@ -82,7 +86,10 @@ class ConversionReport:
     garden: object | None = None  # the Garden: ground, pools, plants, furniture
     lot: object | None = None  # the lotfence.LotFence: wall, pillars, railing and wire fence round the lot
     terrain: dict | None = None  # the terrain from the contour lines: layer, levels, step, floor level, size...
+    site_surfaces: SiteSurfaces | None = None  # the ground round the building read from the site plan (sitesurfaces): paving, lawn, road...
+    stairs: list[Staircase] = field(default_factory=list)  # the stairs outside the building, built from their rows of step lines (sitesteps)
     garden_table_path: Path | None = None
+    site_table_path: Path | None = None  # the table of the surfaces, curbs, walls and stairs of the site, written next to the model
     site: Site | None = None  # the buildings of a site, read from the roofs of its site plan (sitemode): a sheet with no plan of a building
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
     views_path: Path | None = None
@@ -165,7 +172,7 @@ def _read_walls(items: list, cfg: Config, warnings: list[str]) -> tuple[BaseGeom
         walls = clean_footprint(lower_far_walls(walls, items, false, keep, site), cfg.merge_tolerance)
         if not walls.is_empty:  # a drawing of nothing but furniture is read as it is: no wall at all is no model
             warnings.extend(own)
-            warnings.extend(false.notes(cfg.low_wall_height, cfg.curb_height))
+            warnings.extend(false.notes(cfg.low_wall_height, cfg.curb_height, cfg.site_surfaces))
             return walls, layer_walls, false
     layer_walls = build_wall_layers(items, cfg, warnings)
     return clean_footprint(union(layer_walls.values()), cfg.merge_tolerance), layer_walls, FalseWalls()
@@ -294,8 +301,39 @@ def _stack_storeys(doc, input_path: Path, output_path: Path, cfg: Config, stack:
     return floors
 
 
+def _stairs(cfg: Config, false: FalseWalls, solid: BaseGeometry, floors: list, warnings: list[str]) -> list[Staircase]:
+    """The stairs outside the building, from the rows of step lines the walls left out (sitesteps), or []. A stair climbs to the
+    level of a storey above when the sheet has one. It is a help: whatever goes wrong in it is never the reason a conversion fails."""
+    if not cfg.site_surfaces or not false.stairs:
+        return []
+    try:
+        stairs = build_stairs(false.stairs, union([building_footprint(solid), floor_footprint(solid)]), [fl.level for fl in floors[1:]])
+    except Exception as exc:
+        warnings.append(f"Gradini non costruiti: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; per "
+                        "escluderli usa --no-superfici-sito.")
+        return []
+    stairs_notes(stairs, warnings)
+    return stairs
+
+
+def _site_surfaces(doc, cfg: Config, result, solid: BaseGeometry, garden, lot, warnings: list[str]) -> SiteSurfaces | None:
+    """The surfaces of the site plan that draws a copy of the plan (sitesurfaces), or None. What the garden and the fence of the lot
+    already cover is left to them. It is a help: whatever goes wrong in it is never the reason a conversion fails."""
+    if not cfg.site_surfaces or cfg.analysis is None or cfg.analysis.plan is None or site_plan_asked(cfg.analysis, cfg):
+        return None
+    taken = union([*(garden.surfaces.values() if garden is not None else []), *(garden.shells if garden is not None else []),
+                   lot.footprint if lot is not None else Polygon()])
+    try:
+        return build_site_surfaces(doc, cfg, cfg.analysis, cfg.analysis.plan, result.unit_scale,
+                                   union([building_footprint(solid), floor_footprint(solid)]), taken, warnings)
+    except Exception as exc:
+        warnings.append(f"Superfici del sito non costruite: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; "
+                        "per escluderle usa --no-superfici-sito.")
+        return None
+
+
 def _build_terrain(doc, cfg: Config, result, solid: BaseGeometry, columns: BaseGeometry, garden,
-                   warnings: list[str]):
+                   warnings: list[str], site: SiteSurfaces | None = None):
     """The terrain from the contour lines of the sheet (terrain.py), or None. None as well when the plan converted is a site
     plan the user asked for (--vista on it): all its linework would be taken for a building and flattened, unless --terreno.
     It is a help: whatever goes wrong in it is never the reason a conversion fails."""
@@ -305,7 +343,8 @@ def _build_terrain(doc, cfg: Config, result, solid: BaseGeometry, columns: BaseG
     parts = union([footprint, floor_footprint(solid), columns])
     pools = union(garden.shells) if garden is not None else Polygon()
     try:
-        ground = build_terrain(doc, cfg, cfg.analysis, result.unit_scale, footprint, parts, pools, warnings)
+        ground = build_terrain(doc, cfg, cfg.analysis, result.unit_scale, footprint, parts, pools, warnings,
+                               site.reach if site is not None else None)
         if ground is not None:
             add_terrain(Mesh(), ground)  # the mesh must work out before the walls are built to stand on it
     except Exception as exc:
@@ -663,8 +702,15 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             elif not apply_garden_table(garden, read_garden_table(cfg.garden_table_in), cfg, warnings):
                 warnings.append("Tabella del giardino: nessuna riga con celle MODIFICA_* compilate da applicare.")
         plan.garden = garden
+    plan.stairs = _stairs(cfg, false, solid, floors, warnings)
+    plan.site_surfaces = _site_surfaces(doc, cfg, result, solid, garden, lot, warnings)
+    if cfg.site_table_in:
+        if plan.site_surfaces is None and not plan.stairs:
+            warnings.append("Tabella del sito indicata, ma non ho trovato nessuna superficie, muro o scala del sito a cui applicarla.")
+        elif not apply_site_table(plan.site_surfaces, plan.stairs, read_site_table(cfg.site_table_in), cfg, warnings):
+            warnings.append("Tabella del sito: nessuna riga con celle MODIFICA_* compilate da applicare.")
     if cfg.terrain or cfg.terrain_auto:
-        plan.terrain = _build_terrain(doc, cfg, result, solid, columns, garden, warnings)
+        plan.terrain = _build_terrain(doc, cfg, result, solid, columns, garden, warnings, plan.site_surfaces)
     mesh = build_mesh(plan, cfg, warnings, roof=not floors)
     garden = plan.garden  # (None when its mesh could not be built)
     if floors:
@@ -696,6 +742,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             garden_table_path = output_path.with_name(output_path.stem + "_giardino_nuova.csv")  # never overwrite the input
         write_garden_table(garden_table_path, garden, result.unit_scale)
 
+    site_table_path = None
+    if cfg.write_site_table and (plan.stairs or plan.site_surfaces is not None):
+        site_table_path = output_path.with_name(output_path.stem + "_sito.csv")
+        if cfg.site_table_in and Path(cfg.site_table_in).resolve() == site_table_path.resolve():
+            site_table_path = output_path.with_name(output_path.stem + "_sito_nuova.csv")  # never overwrite the input
+        write_site_table(site_table_path, plan.site_surfaces, plan.stairs)
+
     report = ConversionReport(
         output=output_path,
         unit=result.unit,
@@ -722,13 +775,16 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         garden=garden,
         lot=plan.lot,
         terrain=plan.terrain.info if plan.terrain is not None else None,
+        site_surfaces=plan.site_surfaces,
+        stairs=plan.stairs,
         garden_table_path=garden_table_path,
+        site_table_path=site_table_path,
         analysis=cfg.analysis,
         floors=floors,
         cfg=cfg,
     )
     created = [output_path.name, output_path.with_suffix(".mtl").name]
-    created += [p.name for p in (json_path, table_path, garden_table_path) if p]
+    created += [p.name for p in (json_path, table_path, garden_table_path, site_table_path) if p]
     if cfg.images and cfg.analysis is not None and len(cfg.analysis.views) > 1:
         try:
             report.views_path = write_views_image(cfg.analysis, output_path.with_name(output_path.stem + "_viste.png"))
@@ -745,6 +801,9 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             report.overlay_path = plan_overlay(report, output_path.with_name(output_path.stem + "_controllo_pianta.png"),
                                                openings)
             created.append(report.overlay_path.name)
+            if report.site_surfaces is not None or report.stairs:
+                report.site_overlay_path = site_overlay(report, output_path.with_name(output_path.stem + "_controllo_sito.png"))
+                created.append(report.site_overlay_path.name)
             for fl in floors[1:]:  # a picture to check for every storey above
                 path = plan_overlay(fl.report, output_path.with_name(f"{output_path.stem}_controllo_pianta_{storey_tag(fl.index)}.png"))
                 report.overlay_paths.append(path)

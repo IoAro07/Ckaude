@@ -221,6 +221,15 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--altezza-cespugli", type=float, metavar="M",
                    help="altezza dei cespugli se il prospetto non la da' (default 0,9)")
 
+    g = p.add_argument_group("superfici del sito (il terreno intorno alla casa, dalla planimetria generale)")
+    g.add_argument("--no-superfici-sito", action="store_true",
+                   help="non costruire le superfici del sito (pavimentazioni, prato, strade, gradini, muri di contenimento) lette "
+                        "dalla planimetria generale che disegna una copia della pianta")
+
+    g.add_argument("--tabella-sito", metavar="FILE.csv",
+                   help="applica la tabella del sito corretta a mano (colonne MODIFICA_*: tipo, quota, altezza, alzata, tieni), "
+                        "scritta da una conversione precedente come NOME_sito.csv")
+
     g = p.add_argument_group("recinzione del lotto (muretto, pilastri, ringhiera, rete)")
     g.add_argument("--no-recinzioni", action="store_true",
                    help="non costruire la recinzione del lotto (muretto con copertina, pilastri, ringhiera, rete): resta com'e' nel disegno")
@@ -365,6 +374,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
     if args.no_tabella:
         cfg.write_table = False
         cfg.write_garden_table = False
+        cfg.write_site_table = False
     in_config = _config_value(args.config, "garden")  # --config {"garden": false} turns it off, as --no-giardino
     cfg.garden = False if args.no_giardino else (True if in_config is None else bool(in_config))
     cfg.garden_plants = not args.no_vegetazione
@@ -372,6 +382,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.low_heights_auto = False  # the user's height beats the one written in the drawing
     in_config = _config_value(args.config, "fences")  # --config {"fences": false} turns it off, as --no-recinzioni
     cfg.fences = False if args.no_recinzioni else (True if in_config is None else bool(in_config))
+    in_config = _config_value(args.config, "site_surfaces")  # --config {"site_surfaces": false} turns it off, as --no-superfici-sito
+    cfg.site_surfaces = False if args.no_superfici_sito else (True if in_config is None else bool(in_config))
     cfg.terrain = args.terreno
     cfg.terrain_auto = not args.no_terreno
     cfg.auto = not args.no_analisi
@@ -385,6 +397,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.site = "yes" if args.sito else "no"
     if args.tabella_giardino:
         cfg.garden_table_in = args.tabella_giardino
+    if args.tabella_sito:
+        cfg.site_table_in = args.tabella_sito
     return cfg
 
 
@@ -462,8 +476,12 @@ def main(argv: list[str] | None = None) -> int:
     if report.garden_table_path:
         print(f"Creato {report.garden_table_path}  (tabella del giardino: correggi le colonne MODIFICA_* "
               f"e rilancia con --tabella-giardino)")
+    if report.site_table_path:
+        print(f"Creato {report.site_table_path}  (tabella del sito: correggi le colonne MODIFICA_* "
+              f"e rilancia con --tabella-sito)")
     for path, what in ((report.views_path, "il foglio come l'ho capito: viste numerate (--vista N per sceglierne un'altra)"),
                        (report.overlay_path, "pianta con le aperture riconosciute: controllala"),
+                       (report.site_overlay_path, "il sito visto dall'alto: superfici, muri, cordoli e gradini con le loro sigle"),
                        (report.preview_path, "anteprima 3D"), (report.report_path, "riepilogo e note")):
         if path:
             print(f"Creato {path}  ({what})")

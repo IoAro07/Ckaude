@@ -393,10 +393,11 @@ def _platform(parts: BaseGeometry, pools: BaseGeometry) -> BaseGeometry:
 
 
 def build_terrain(doc, cfg: Config, analysis, unit_scale: float, building: BaseGeometry, parts: BaseGeometry,
-                  pools: BaseGeometry, warnings: list[str]) -> Terrain | None:
+                  pools: BaseGeometry, warnings: list[str], reach: BaseGeometry | None = None) -> Terrain | None:
     """The terrain of the drawing, or None. ``building``: the footprint of the walls (m); ``parts``: everything that stands
     on the platform (walls, floors, columns); ``pools``: the pools to be dug. Built when the user asks (``cfg.terrain``) or
-    the sheet has contour lines (``MIN_LEVELS`` levels) that lie over the building (``cfg.terrain_auto``)."""
+    the sheet has contour lines (``MIN_LEVELS`` levels) that lie over the building (``cfg.terrain_auto``). ``reach``: ground that
+    must be covered whatever its distance from the building (the surfaces of the site: sitesurfaces)."""
     asked = cfg.terrain
     found = read_contours(doc, cfg, unit_scale, MIN_LEVELS_ASKED if asked else MIN_LEVELS)
     if not found:
@@ -422,7 +423,10 @@ def build_terrain(doc, cfg: Config, analysis, unit_scale: float, building: BaseG
         return None
     platform = _platform(parts, pools)
     covered = box(*MultiPoint(points[:, :2]).bounds).union(platform)  # the lines reach as far as they do, but the platform is on it
-    window = box(*building.bounds).buffer(MARGIN).union(platform).intersection(box(*covered.bounds)).bounds
+    wanted = box(*building.bounds).buffer(MARGIN).union(platform)
+    if reach is not None and not reach.is_empty:
+        wanted = wanted.union(box(*reach.bounds))
+    window = wanted.intersection(box(*covered.bounds)).bounds
     floor = written_floor_level(sheet_texts(doc), c.levels[0], c.levels[-1]) or (_ground_under(points, building), FLOOR_FROM_GROUND)
     level = -cfg.floor_thickness
     t = build_ground(points, window, platform, pools, floor[0], level, cfg.terrain_thickness)
