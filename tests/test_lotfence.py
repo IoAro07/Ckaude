@@ -8,7 +8,7 @@ import ezdxf
 import pytest
 from builders import building, south_elevation
 from helpers import Obj
-from shapely.geometry import Polygon, box
+from shapely.geometry import Point, Polygon, box
 
 from dwg2c4d import Config, convert
 from dwg2c4d import lotfence as lf
@@ -331,16 +331,24 @@ def test_an_elevation_drawn_elsewhere_is_laid_on_the_plan_by_its_pillars(tmp_pat
 
 
 def test_a_wall_that_turns_a_corner_is_read_by_its_straight_sides(tmp_path):
-    """One L-shaped polygon (two polylines drawn round the corner): it is taller than wide, but its long horizontal side shows in a front view."""
-    def corner(msp, layer):
-        msp.add_lwpolyline([(0, 600), (0, 0), (1000, 0)], dxfattribs={"layer": layer})
-        msp.add_lwpolyline([(20, 600), (20, 20), (1000, 20)], dxfattribs={"layer": layer})
-        square(msp, 1012, 10, layer)
+    """One L-shaped polygon (two polylines drawn round the corner), taller than wide: its long horizontal side shows in a front view."""
+    from dwg2c4d.reader import read_items
 
-    fence = only_lines(tmp_path, corner)
-    assert len(lf.polygons_of(fence.walls)) == 1
-    runs = lf._front_runs(fence.walls)
-    assert sorted((round(r[0], 2), round(r[2], 2)) for r in runs) == [(0.0, 10.0), (0.2, 10.0)]  # the two long sides, not the box of the L
+    doc, msp = building()
+    doc.layers.add("Esterno")
+    msp.add_lwpolyline([(0, 1000), (0, 0), (600, 0)], dxfattribs={"layer": "Esterno"})
+    msp.add_lwpolyline([(20, 1000), (20, 20), (600, 20)], dxfattribs={"layer": "Esterno"})
+    square(msp, 612, 10, "Esterno")
+    line(msp, (-50, -2000), (700, -2000), "Prospetto Sud")  # the elevation below: the ground
+    for y in (-1923, -1925):  # the top of the wall, the bottom of its cap
+        line(msp, (0, y), (600, y), "Prospetto Sud")
+    cfg = Config(fences=True)
+    fence = lf.detect_lot_fence(doc, cfg, 0.01, [])
+    assert len(lf.polygons_of(fence.walls)) == 1 and fence.walls.bounds[3] - fence.walls.bounds[1] > fence.walls.bounds[2] - fence.walls.bounds[0]
+    assert sorted((round(r[0], 2), round(r[2], 2)) for r in lf._front_runs(fence.walls)) == [(0.0, 6.0), (0.2, 6.0)]  # the two long sides, not the box of the L
+    items = read_items(doc, cfg, area=(-100, -2100, 800, -1500), ignore_veto=True, keep_other=True, keep_fills=True, unit="cm").items
+    lf.read_profile(fence, [items])
+    assert fence.profile.wall == pytest.approx(0.77, abs=1e-6) and fence.profile.sources["muretto"] == "prospetto"
 
 
 def test_an_elevation_drawn_elsewhere_whose_pillars_do_not_fit_is_not_used(tmp_path):
@@ -426,7 +434,7 @@ def test_the_railing_has_the_bars_of_the_elevation_and_stays_light(tmp_path):
     faces = len(obj.faces("Ringhiera"))
     bars = round((9.52 + 8.42 + 2 * 14.76) / 0.10)
     assert bars * 5 <= faces <= bars * 6 + 100  # a bar is a box: five faces seen from outside, the rails come on top
-    assert obj.face_count if False else sum(len(f) for f in obj.groups.values()) < 30_000
+    assert sum(len(f) for f in obj.groups.values()) < 30_000  # the whole model, fence included
 
 
 def test_a_long_railing_has_fewer_bars_when_there_would_be_too_many(tmp_path, monkeypatch):
@@ -443,7 +451,7 @@ def test_the_gate_is_left_open(tmp_path):
     for name in ("Muretto", "Copertina", "Pilastri_lotto", "Ringhiera"):
         ids = sorted({i for f, _ in obj.faces(name) for i in f})
         xs, ys = obj.v[ids][:, 0], -obj.v[ids][:, 2]
-        assert not any(gap.buffer(-0.02).contains(__import__("shapely").geometry.Point(x, y)) for x, y in zip(xs, ys)), name
+        assert not any(gap.buffer(-0.02).contains(Point(x, y)) for x, y in zip(xs, ys)), name
     assert report.lot.gates and "lasciato aperto" in next(l for l in summary_lines(report) if "Recinzione del lotto" in l)
 
 
@@ -478,6 +486,16 @@ def test_a_layer_named_muretto_is_the_fence_not_a_wall_of_the_house(tmp_path):
     plain, plain_obj = run(tmp_path, path, fences=False)
     assert plain.lot is None and "Pilastri_lotto" not in plain_obj.groups
     assert plain_obj.bbox("Muri")[1][0] - plain_obj.bbox("Muri")[0][0] > 15.0  # (the lot as walls)
+
+
+def test_a_layer_named_muretto_with_the_analysis_of_the_command_line(tmp_path):
+    """The command line analyses the sheet first and hands the walls over as a list of layers (the names' own among them): Muretto is in it."""
+    path = lot_sheet(tmp_path, layer="Muretto", elevation=False)
+    assert main([str(path), "-o", str(tmp_path / "m.obj"), "--no-immagini", "--no-tabella"]) == 0
+    obj = Obj(tmp_path / "m.obj")
+    assert "Muretto" in obj.groups and "Pilastri_lotto" in obj.groups
+    lo, hi = obj.bbox("Muri")
+    assert hi[0] - lo[0] < 11.0 and hi[2] - lo[2] < 7.0  # the house, not the lot
 
 
 def test_nothing_changes_on_a_sheet_without_a_fence(tmp_path):
