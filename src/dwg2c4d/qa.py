@@ -156,6 +156,10 @@ def _tail_lines(report) -> list[str]:
         from .lotfence import summary as lot_summary
 
         out.append(f"  Recinzione del lotto: {lot_summary(report.lot)}")
+    if getattr(report, "site_surfaces", None) is not None:
+        from .sitesurfaces import summary as site_summary
+
+        out.append(f"  Superfici del sito : {site_summary(report.site_surfaces)}")
     if report.terrain:
         t = report.terrain
         out.append(f"  Terreno            : {t['levels']} curve di livello (layer {t['layer']}, ogni {t['step']:g} m, da {t['low']:.1f} "

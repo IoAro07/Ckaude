@@ -218,6 +218,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--altezza-cespugli", type=float, metavar="M",
                    help="altezza dei cespugli se il prospetto non la da' (default 0,9)")
 
+    g = p.add_argument_group("superfici del sito (il terreno intorno alla casa, dalla planimetria generale)")
+    g.add_argument("--no-superfici-sito", action="store_true",
+                   help="non costruire le superfici del sito (pavimentazioni, prato, strade, gradini, muri di contenimento) lette "
+                        "dalla planimetria generale che disegna una copia della pianta")
+
     g = p.add_argument_group("recinzione del lotto (muretto, pilastri, ringhiera, rete)")
     g.add_argument("--no-recinzioni", action="store_true",
                    help="non costruire la recinzione del lotto (muretto con copertina, pilastri, ringhiera, rete): resta com'e' nel disegno")
@@ -368,6 +373,8 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.low_heights_auto = False  # the user's height beats the one written in the drawing
     in_config = _config_value(args.config, "fences")  # --config {"fences": false} turns it off, as --no-recinzioni
     cfg.fences = False if args.no_recinzioni else (True if in_config is None else bool(in_config))
+    in_config = _config_value(args.config, "site_surfaces")  # --config {"site_surfaces": false} turns it off, as --no-superfici-sito
+    cfg.site_surfaces = False if args.no_superfici_sito else (True if in_config is None else bool(in_config))
     cfg.terrain = args.terreno
     cfg.terrain_auto = not args.no_terreno
     cfg.auto = not args.no_analisi

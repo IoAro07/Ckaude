@@ -43,6 +43,7 @@ from .mesh import storey_tag
 from .terrain import build_terrain
 from .terrainmesh import add_terrain
 from .sitemode import Site, build_site
+from .sitesurfaces import SiteSurfaces, build_site_surfaces
 
 
 @dataclass
@@ -82,6 +83,7 @@ class ConversionReport:
     garden: object | None = None  # the Garden: ground, pools, plants, furniture
     lot: object | None = None  # the lotfence.LotFence: wall, pillars, railing and wire fence round the lot
     terrain: dict | None = None  # the terrain from the contour lines: layer, levels, step, floor level, size...
+    site_surfaces: SiteSurfaces | None = None  # the ground round the building read from the site plan (sitesurfaces): paving, lawn, road...
     garden_table_path: Path | None = None
     site: Site | None = None  # the buildings of a site, read from the roofs of its site plan (sitemode): a sheet with no plan of a building
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
@@ -292,6 +294,22 @@ def _stack_storeys(doc, input_path: Path, output_path: Path, cfg: Config, stack:
     fit_openings(floors)
     warnings.extend(notes)
     return floors
+
+
+def _site_surfaces(doc, cfg: Config, result, solid: BaseGeometry, garden, lot, warnings: list[str]) -> SiteSurfaces | None:
+    """The surfaces of the site plan that draws a copy of the plan (sitesurfaces), or None. What the garden and the fence of the lot
+    already cover is left to them. It is a help: whatever goes wrong in it is never the reason a conversion fails."""
+    if not cfg.site_surfaces or cfg.analysis is None or cfg.analysis.plan is None or site_plan_asked(cfg.analysis, cfg):
+        return None
+    taken = union([*(garden.surfaces.values() if garden is not None else []), *(garden.shells if garden is not None else []),
+                   lot.footprint if lot is not None else Polygon()])
+    try:
+        return build_site_surfaces(doc, cfg, cfg.analysis, cfg.analysis.plan, result.unit_scale,
+                                   union([building_footprint(solid), floor_footprint(solid)]), taken, warnings)
+    except Exception as exc:
+        warnings.append(f"Superfici del sito non costruite: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; "
+                        "per escluderle usa --no-superfici-sito.")
+        return None
 
 
 def _build_terrain(doc, cfg: Config, result, solid: BaseGeometry, columns: BaseGeometry, garden,
@@ -655,6 +673,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             elif not apply_garden_table(garden, read_garden_table(cfg.garden_table_in), cfg, warnings):
                 warnings.append("Tabella del giardino: nessuna riga con celle MODIFICA_* compilate da applicare.")
         plan.garden = garden
+    plan.site_surfaces = _site_surfaces(doc, cfg, result, solid, garden, lot, warnings)
     if cfg.terrain or cfg.terrain_auto:
         plan.terrain = _build_terrain(doc, cfg, result, solid, columns, garden, warnings)
     mesh = build_mesh(plan, cfg, warnings, roof=not floors)
@@ -714,6 +733,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         garden=garden,
         lot=plan.lot,
         terrain=plan.terrain.info if plan.terrain is not None else None,
+        site_surfaces=plan.site_surfaces,
         garden_table_path=garden_table_path,
         analysis=cfg.analysis,
         floors=floors,

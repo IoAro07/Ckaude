@@ -262,6 +262,10 @@ class Config:
     terrain_auto: bool = False  # build it when the sheet has contour lines laid over the plan (the command line turns it on)
     terrain_thickness: float = 1.0  # metres of ground below the lowest point of the terrain
 
+    # The surfaces of the site (sitesurfaces.py): the ground round the building read from the site plan the sheet draws a copy of the
+    # plan in (paving, lawn, road, steps, retaining walls), each an object of its own. The library leaves it off (the command line turns it on).
+    site_surfaces: bool = False
+
     # Reading a drawing whose layers do not say what things are (the library leaves it off, the command line turns it on):
     # the unit the numbers are really in, which view of the sheet is the plan, which layers hold the walls.
     auto: bool = False

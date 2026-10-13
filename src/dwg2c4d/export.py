@@ -12,7 +12,7 @@ import json
 import math
 from pathlib import Path
 
-from .mesh import Mesh, split_storey, storey_name
+from .mesh import Mesh, site_kind, split_storey, storey_name
 
 # mesh group -> (null name, material key)
 GROUPS = {
@@ -53,8 +53,12 @@ GROUPS = {
     "Ringhiera": ("Recinzione", "railing"),
     "Recinzione_pali": ("Recinzione", "fence_post"),
     "Recinzione_rete": ("Recinzione", "fence_mesh"),
+    # the surfaces of the site (sitesurfaces.py): Sito_Prato_01... in a null of their own, the material by kind (SITE_MATERIALS)
+    "Sito": ("Superfici_sito", "site_paving"),
 }
-SITE_NULLS = ("Giardino", "Piscina", "Alberi", "Siepi", "Cespugli", "Arredi_esterni", "Recinzione")  # what belongs to the lot, not to a storey
+SITE_MATERIALS = {"Strada": "site_road", "Pavimentazione": "site_paving", "Prato": "site_lawn", "Acqua": "site_water",
+                  "Terreno": "site_soil"}
+SITE_NULLS = ("Giardino", "Piscina", "Alberi", "Siepi", "Cespugli", "Arredi_esterni", "Recinzione", "Superfici_sito")  # what belongs to the lot, not to a storey
 TERRAIN_GROUP = ("Terreno", "terrain")  # the ground of the site (the soil of the garden, when the sheet has no terrain, is "soil")
 FIXTURE_PARTS = ("Telai", "Ante", "Vetri", "Maniglie")
 GARDEN_PARTS = ("Tronco", "Chioma", "Siepe", "Cespuglio", "Arredo")  # parts of a plant / piece of furniture
@@ -102,6 +106,11 @@ MATERIALS = {
     "railing": {"name": "Ringhiera", "color": [0.06, 0.06, 0.07], "rough": 0.4},
     "fence_post": {"name": "Paletti della rete", "color": [0.18, 0.18, 0.19], "rough": 0.5},
     "fence_mesh": {"name": "Rete metallica", "color": [0.25, 0.27, 0.25], "rough": 0.5},
+    "site_road": {"name": "Strada", "color": [0.30, 0.30, 0.32], "rough": 0.9},
+    "site_paving": {"name": "Pavimentazione del sito", "color": [0.62, 0.61, 0.60], "rough": 0.7},
+    "site_lawn": {"name": "Prato del sito", "color": [0.36, 0.55, 0.26], "rough": 0.95},
+    "site_water": {"name": "Acqua del sito", "color": [0.30, 0.60, 0.78], "rough": 0.02},
+    "site_soil": {"name": "Terreno del sito (superficie)", "color": [0.45, 0.37, 0.29], "rough": 0.95},
 }
 
 
@@ -158,6 +167,7 @@ def to_model_dict(mesh: Mesh, name: str, origin_offset: tuple[float, float] = (0
         tag, rest = split_storey(gname)  # a model of several storeys: P1_Telai_F01 under the null P1_F01 inside P1_Infissi
         base, _, opening = rest.partition("_")
         null, mat = TERRAIN_GROUP if terrain and rest == "Terreno" else GROUPS.get(rest) or GROUPS.get(base, (rest, "wall"))
+        mat = SITE_MATERIALS.get(site_kind(rest) or "", mat)
         parent = name
         if tag:
             if tag not in used:

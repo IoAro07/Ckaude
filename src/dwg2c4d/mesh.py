@@ -22,6 +22,15 @@ Vec3 = tuple[float, float, float]
 STOREY_TAG = re.compile(r"^((?:PM?|E)\d+)_(.+)$")  # P0_Muri, P1_Telai_F01, PM1_Muri: the group of a stacked storey; E2_Tetto: of a building of a site
 
 
+SITE_PREFIX = "Sito_"  # the groups of the surfaces of the site (sitesurfaces.py): Sito_Prato_01
+
+
+def site_kind(group: str) -> str | None:
+    """The kind of a surface of the site from its group name (Sito_Prato_01 -> Prato), None for any other group."""
+    parts = group.split("_")
+    return parts[1] if len(parts) >= 3 and parts[0] + "_" == SITE_PREFIX else None
+
+
 def storey_tag(index: int) -> str:
     """P0 for the ground floor, P1, P2... above it, PM1 for the first storey under the ground."""
     return f"P{index}" if index >= 0 else f"PM{-index}"

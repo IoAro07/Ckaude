@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .mesh import Mesh, split_storey
+from .mesh import SITE_PREFIX, Mesh, site_kind, split_storey
 
 OUT_SCALE = {"m": 1.0, "cm": 100.0, "mm": 1000.0}
 
@@ -45,6 +45,12 @@ MATERIALS = {
     "Ringhiera": ((0.06, 0.06, 0.07), 1.0),
     "Recinzione_pali": ((0.18, 0.18, 0.19), 1.0),
     "Recinzione_rete": ((0.25, 0.27, 0.25), 0.35),
+    # the surfaces of the site (sitesurfaces.py): one material for each kind, shared by the objects of that kind
+    "Sito_Strada": ((0.30, 0.30, 0.32), 1.0),
+    "Sito_Pavimentazione": ((0.62, 0.61, 0.60), 1.0),
+    "Sito_Prato": ((0.36, 0.55, 0.26), 1.0),
+    "Sito_Acqua": ((0.30, 0.60, 0.78), 0.55),
+    "Sito_Terreno": ((0.45, 0.37, 0.29), 1.0),
 }
 
 
@@ -57,6 +63,9 @@ def material_of(group: str) -> str:
     per room (Pavimento_Sala) keeps its own so each room can get another finish. The storeys of a stacked model
     (P1_Muri) share the materials of the walls, the floors... of the other storeys."""
     group = split_storey(group)[1]
+    kind = site_kind(group)
+    if kind is not None:
+        return SITE_PREFIX + kind
     base = group.split("_", 1)[0]
     return base if base in SHARED else group
 
