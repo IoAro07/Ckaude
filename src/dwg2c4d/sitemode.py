@@ -103,6 +103,7 @@ class Building:
     footprint: BaseGeometry  # the outer face of the walls: the outline less the eaves
     overhang: float
     hatch_area: float  # m2 of tile hatch
+    base: float = 0.0  # m: where its finished floor lies above the zero of the model (the ground round the buildings is not flat: siteground)
 
     @property
     def size(self) -> tuple[float, float]:
@@ -464,6 +465,8 @@ class Site:
     openings: list = field(default_factory=list)
     notes: list[str] = field(default_factory=list)  # what the report says: every guess is one of them
     matched: list = field(default_factory=list)  # [(building, body, siteelev.RoofLevel, the bands that fit)]: the roofs the elevations show
+    roofs: BaseGeometry = field(default_factory=Polygon)  # every roof hatch of the site plan, those of no building too: none of them is ground
+    around: object | None = None  # the siteground.Around: garden, terrain, low walls
 
     @property
     def bounds(self) -> tuple[float, float, float, float]:
@@ -476,14 +479,15 @@ def site_views(analysis) -> list:
     return sites or [v for v in analysis.views if v.kind == "roof"]
 
 
-def read_buildings(doc, cfg, analysis) -> tuple[list[Building], list]:
-    """(the buildings, the views they were read in): the buildings the tiles of the site plan draw. Empty when it draws none."""
+def read_buildings(doc, cfg, analysis) -> tuple[list[Building], list, BaseGeometry]:
+    """(the buildings, the views they were read in, every roof hatch there): the buildings the tiles of the site plan draw.
+    Empty when it draws none."""
     from .autodetect import TILE_PATTERNS
 
     scale = analysis.unit.scale
     views = site_views(analysis)
     hatches = roof_hatches(doc, scale, [v.bbox for v in views], TILE_PATTERNS, cfg.arc_tolerance / scale)
-    return find_buildings(hatches, analysis.soup.seg * scale, cfg.site_overhang), views
+    return find_buildings(hatches, analysis.soup.seg * scale, cfg.site_overhang), views, union(hatches)
 
 
 def resolve_pitch(buildings: list[Building], cfg, analysis) -> tuple[float, str]:
@@ -565,22 +569,26 @@ def build_site(doc, cfg, analysis, warnings: list[str]) -> Site | None:
     """The model of the buildings the roofs of the site plan draw, or None when it draws none. ``warnings`` gets
     every reading that is a guess."""
     from .model import Plan
+    from .siteground import add_around, around_site
 
-    buildings, views = read_buildings(doc, cfg, analysis)
+    buildings, views, roofs = read_buildings(doc, cfg, analysis)
     if not buildings:
         return None
     matched, reads = read_levels(doc, cfg, analysis, buildings, warnings)
     pitch, source = resolve_pitch(buildings, cfg, analysis)
-    site = Site(buildings, [v.id for v in views], pitch, source, matched=matched)
+    site = Site(buildings, [v.id for v in views], pitch, source, matched=matched, roofs=roofs)
     for b in buildings:
         default_heights(b, cfg)
     opening_notes = read_openings(cfg, analysis, site, reads)
+    around_notes: list[str] = []
+    site.around = around_site(doc, cfg, analysis, site, around_notes)  # (sets the floor level of every building)
     for b in buildings:
         mesh = building_mesh(b, source, cfg, [o for o in site.openings if o.building == b.id])
-        site.mesh.add_mesh(mesh, rename=lambda name, b=b: f"{building_tag(b.id)}_{name}")
+        site.mesh.add_mesh(mesh, shift=(0.0, 0.0, b.base), rename=lambda name, b=b: f"{building_tag(b.id)}_{name}")
+    add_around(site.mesh, site.around, cfg, around_notes)
     walls = union(wall_ring(shape, cfg.site_wall) for b in buildings for _, shape in eave_groups(b))
     site.plan = Plan(walls=walls, columns=Polygon(), openings=site.openings, merge_tolerance=cfg.merge_tolerance)
-    site.notes.extend(site_notes(site, cfg, analysis) + opening_notes)
+    site.notes.extend(site_notes(site, cfg, analysis) + opening_notes + around_notes)
     warnings.extend(site.notes)
     return site
 

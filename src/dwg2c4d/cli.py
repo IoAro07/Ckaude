@@ -204,6 +204,9 @@ def build_parser() -> argparse.ArgumentParser:
     g = p.add_argument_group("giardino (superfici e oggetti fuori dalla casa)")
     g.add_argument("--no-giardino", action="store_true",
                    help="non costruire il giardino (pavimentazione, prato, acqua, piscina, siepi, alberi...)")
+    g.add_argument("--no-vegetazione", action="store_true",
+                   help="nel giardino non costruire alberi, siepi e cespugli (restano pavimentazione, prato, piscina, arredi): "
+                        "li fa piu' leggero quando il foglio ne ha centinaia")
     g.add_argument("--area-giardino", type=_area, metavar="XMIN,YMIN,XMAX,YMAX",
                    help="dove e' il giardino, in coordinate del disegno (default: lo cerca da solo attorno alla casa)")
     g.add_argument("--tabella-giardino", metavar="FILE.csv",
@@ -364,6 +367,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
         cfg.write_garden_table = False
     in_config = _config_value(args.config, "garden")  # --config {"garden": false} turns it off, as --no-giardino
     cfg.garden = False if args.no_giardino else (True if in_config is None else bool(in_config))
+    cfg.garden_plants = not args.no_vegetazione
     if args.altezza_muretti is not None or args.altezza_cordoli is not None:
         cfg.low_heights_auto = False  # the user's height beats the one written in the drawing
     in_config = _config_value(args.config, "fences")  # --config {"fences": false} turns it off, as --no-recinzioni

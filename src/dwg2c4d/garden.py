@@ -176,7 +176,9 @@ def kind_from_colour(rgb: tuple[int, int, int] | None) -> str | None:
     return "paving"
 
 
-def _fill_kind(f: _Fill) -> str | None:
+def _fill_kind(f: _Fill, pool_named: bool = False) -> str | None:
+    """What a fill is made of: the layer name, else the pattern, else the colour. ``pool_named``: the sheet has a layer that
+    says it holds a pool, so a blue that no name and no pattern vouches for is no water (the panels of a carport are blue too)."""
     if f.layer_kind in ("lawn", "paving", "water"):
         return f.layer_kind
     for word in re.split(r"[^a-z]+", f.pattern.lower()):  # whole words: TERRACOTTA, TERRAZZO are no soil
@@ -185,7 +187,8 @@ def _fill_kind(f: _Fill) -> str | None:
         for prefix, kind in _PATTERN_PREFIXES:
             if word.startswith(prefix):
                 return kind
-    return kind_from_colour(f.rgb)
+    kind = kind_from_colour(f.rgb)
+    return "paving" if kind == "water" and pool_named else kind
 
 
 def block_kind(name: str, layer_kind: str | None, in_elevation: bool = False) -> str | None:
@@ -458,8 +461,9 @@ def build_ground(fills: list[_Fill], footprint: BaseGeometry, cfg: Config) \
     """The ground as non-overlapping pieces by kind (``KINDS``), the water outlines of the pools and the outer
     outlines of their shells."""
     cover: dict[str, BaseGeometry] = {k: Polygon() for k in (*KINDS, "water")}
+    pool_named = any(f.layer_kind == "water" for f in fills)  # a layer called Piscina beats the colour of the hatches
     for f in sorted(fills, key=lambda f: f.order):
-        kind = _fill_kind(f)
+        kind = _fill_kind(f, pool_named)
         if kind is None:
             continue
         for poly in polygons_of(f.geom.difference(footprint)):
@@ -615,6 +619,8 @@ def build_garden(doc, cfg: Config, unit_scale: float, footprint: BaseGeometry, z
     ground, pools, shells = build_ground(fills, footprint if lot is None or lot.is_empty else union([footprint, lot]), cfg)
     garden = Garden(ground, pools, shells, [], window.bounds)
     garden.objects = _objects(blocks, e_blocks, e_fills, footprint, window, ground, cfg)
+    if not cfg.garden_plants:  # the ground and the furniture stay; the plants are left out (--no-vegetazione)
+        garden.objects = [o for o in garden.objects if o.kind == "furniture"]
     if garden.empty:
         return None
     return garden
