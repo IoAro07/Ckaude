@@ -145,7 +145,23 @@ def outer_half_of_perimeter_walls(solid: BaseGeometry, max_thickness: float) -> 
     return None if outer.is_empty else outer
 
 
-def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
+def add_roofs(mesh: Mesh, plan: Plan, cfg: Config, z_base: float) -> None:
+    """The pitched roof and the flat roof of the plan, their eaves at ``z_base`` (the top of the walls they stand on)."""
+    if plan.roof is not None:
+        mesh.add_roof_solid("Tetto", plan.roof, z_base=z_base, thickness=cfg.roof_thickness)
+    if plan.flat_roof is not None:
+        flat = plan.flat_roof
+        top = z_base + flat.thickness
+        slabs = [Slab(z_base, top, flat.slab)]
+        if flat.parapet is not None:
+            slabs.append(Slab(top, top + flat.parapet_height, flat.parapet))
+        mesh.add_extrusion("Copertura", slabs, bottom=True)
+        if flat.modules:
+            mesh.add_extrusion("Pannelli", [Slab(top, top + MODULE_HEIGHT, union(flat.modules))], bottom=True)
+
+
+def build_mesh(plan: Plan, cfg: Config, warnings: list[str], roof: bool = True) -> Mesh:
+    """``roof``: put the roof of the plan on the walls (a stack of storeys puts it on the top one instead)."""
     mesh = Mesh()
     walls = plan.solid_walls
     cutting = [o for o in plan.openings if o.keep]  # a dropped opening is closed with wall
@@ -180,17 +196,8 @@ def build_mesh(plan: Plan, cfg: Config, warnings: list[str]) -> Mesh:
                 group = f"Vetri_{o.id}" if cfg.fixtures_per_opening and o.id else "Vetri"
                 mesh.add_extrusion(group, [Slab(o.z0, o.z1, o.glass)], bottom=True)
 
-    if plan.roof is not None:
-        mesh.add_roof_solid("Tetto", plan.roof, z_base=cfg.wall_height, thickness=cfg.roof_thickness)
-    if plan.flat_roof is not None:
-        flat = plan.flat_roof
-        top = cfg.wall_height + flat.thickness
-        slabs = [Slab(cfg.wall_height, top, flat.slab)]
-        if flat.parapet is not None:
-            slabs.append(Slab(top, top + flat.parapet_height, flat.parapet))
-        mesh.add_extrusion("Copertura", slabs, bottom=True)
-        if flat.modules:
-            mesh.add_extrusion("Pannelli", [Slab(top, top + MODULE_HEIGHT, union(flat.modules))], bottom=True)
+    if roof:
+        add_roofs(mesh, plan, cfg, cfg.wall_height)
 
     if not plan.skirting.is_empty:
         mesh.add_extrusion("Battiscopa", [Slab(0.0, cfg.skirting_height, plan.skirting)], bottom=False)

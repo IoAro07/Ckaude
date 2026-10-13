@@ -175,6 +175,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="converti la vista N del foglio (i numeri sono nell'immagine NOME_viste.png) invece di "
                         "quella scelta dal programma")
 
+    g = p.add_argument_group("piani (la pianta di ogni piano e' una vista del foglio)")
+    g.add_argument("--piani", action="store_true",
+                   help="impila nello stesso modello i piani del foglio (PIANTA PIANO TERRA, PIANTA PIANO PRIMO...) anche se "
+                        "hai indicato --vista o --area: la pianta indicata e' il piano piu' basso. Senza questa opzione si "
+                        "fa da solo quando i titoli nominano piani consecutivi e i contorni dei muri combaciano")
+    g.add_argument("--no-piani", action="store_true",
+                   help="converti solo la pianta scelta, senza impilare gli altri piani del foglio")
+    g.add_argument("--spessore-solaio", type=float, metavar="M",
+                   help="spessore del solaio tra due piani impilati (default 0,30 m)")
+
     g = p.add_argument_group("giardino (superfici e oggetti fuori dalla casa)")
     g.add_argument("--no-giardino", action="store_true",
                    help="non costruire il giardino (pavimentazione, prato, acqua, piscina, siepi, alberi...)")
@@ -257,6 +267,7 @@ def config_from_args(args: argparse.Namespace) -> Config:
         "garden_area": args.area_giardino, "pool_depth": args.profondita_piscina,
         "tree_height": args.altezza_alberi, "hedge_height": args.altezza_siepi, "shrub_height": args.altezza_cespugli,
         "low_wall_height": args.altezza_muretti, "curb_height": args.altezza_cordoli,
+        "slab_thickness": args.spessore_solaio,
     }
     for name, value in simple.items():
         if value is not None:
@@ -321,6 +332,10 @@ def config_from_args(args: argparse.Namespace) -> Config:
     cfg.auto = not args.no_analisi
     if args.vista is not None:
         cfg.view = args.vista
+    if args.piani and args.no_piani:
+        raise ValueError("--piani e --no-piani insieme non hanno senso: scegline uno")
+    if args.piani or args.no_piani:
+        cfg.stacking = "yes" if args.piani else "no"
     if args.tabella_giardino:
         cfg.garden_table_in = args.tabella_giardino
     return cfg

@@ -15,6 +15,8 @@ from .export import to_model_dict, write_json
 from .dwgfile import ConversionError, open_drawing
 from .geom import union, polygons_of
 from .model import OTHER_FLOOR, Plan, build_mesh, building_footprint, facing_sign, floor_footprint
+from .stacking import (DEFAULT_SLAB, Floor, Stack, consensus_levels, find_storeys, fit_openings, moved, outline,
+                       place_storeys, register, stack_mesh, stacking_on)
 from .objwriter import write_obj
 from .glazing import ribbon_windows
 from .thinwalls import THICKNESS, single_line_walls
@@ -24,15 +26,16 @@ from .roof import FlatRoof, Roof, build_flat_roof, build_roof, ridge_hints_from
 from .roofview import flat_roof_notes, roof_from_view, view_roof_notes, written_pitch
 from .falsewalls import FalseWalls, lower_far_walls, separate_prims
 from .walls import build_columns, build_wall_layers, clean_footprint
-from .table import apply_table, read_table, write_table
+from .table import apply_table, read_table, rows_of_storey, write_table
 from .labels import Room, apply_labels, find_rooms, text_scale, wall_height_from_rooms
 from .texts import read_words
 from .passages import find_passages, wall_gaps
-from .elevmatch import match_views
+from .elevmatch import agreed_height, match_known, match_views
 from .garden import build_garden
 from .garden_table import apply_garden_table, read_garden_table, write_garden_table
 from .floors import extend_to_outer_faces, floor_left_over, layer_floors, name_floors, room_floors, skirting_items, skirting_strips, split_partitions
 from .qa import plan_overlay, preview_3d, write_report
+from .mesh import storey_tag
 
 
 @dataclass
@@ -73,6 +76,9 @@ class ConversionReport:
     garden_table_path: Path | None = None
     analysis: object | None = None  # the autodetect.Analysis: unit, views, the plan chosen
     views_path: Path | None = None
+    floors: list[Floor] = field(default_factory=list)  # the storeys of a stacked model, the converted plan first (none: one plan)
+    cfg: Config | None = None  # the Config in use after the analysis (an upper storey of a stack: its caller builds the mesh with it)
+    overlay_paths: list[Path] = field(default_factory=list)  # the control pictures of the upper storeys
 
 
 def _extent(geom: BaseGeometry) -> tuple[float, float]:
@@ -198,9 +204,87 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
     return roof, flat, report, flat_report
 
 
+def _counts(solid: BaseGeometry, openings: list, columns: BaseGeometry) -> dict:
+    """What the report says of a plan: its extent, its walls, its doors and windows, its columns."""
+    return dict(size_m=_extent(solid), wall_area_m2=solid.area, wall_pieces=len(polygons_of(solid)),
+                doors=sum(o.kind == "door" for o in openings), passages=sum(o.kind == "passage" for o in openings),
+                windows=sum(o.kind == "window" for o in openings), columns=len(polygons_of(columns)))
+
+
+def _room_rows(rooms: list[Room]) -> list[dict]:
+    return [{"name": r.name, "area_m2": r.area, "height": r.height, "named": r.named} for r in rooms]
+
+
+STOREY_OFF = dict(garden=False, roof=False, roof_auto=False, elevations=[], images=False, c4d_json=False, write_table=False,
+                  write_garden_table=False, garden_table_in=None, area=None, roof_area=None, roof_offset=None)  # what an upper storey leaves to the base
+
+
+def _known_elevations(doc, up: "ConversionReport", view, cfg: Config, known: list[dict], offset: tuple[float, float]) -> list[dict]:
+    """The elevations the plan below matched that the conversion of this storey did not: placed on its plan like on the one below
+    (elevmatch.match_known), so a row of two or three windows an upper floor shows is not lost for lack of evidence."""
+    matched = {e["view"] for e in up.elevations}
+    try:
+        return match_known(doc, up.cfg, replace(cfg.analysis, plan=view), up.openings, up.plan.solid_walls, up.unit,
+                           UNIT_TO_METERS[up.unit], [e for e in known if e["view"] not in matched], offset, up.warnings)
+    except Exception as exc:  # the elevations drawn elsewhere are a help: never the reason a conversion fails
+        up.warnings.append(f"Prospetti del piano sotto non riportati su questo piano ({type(exc).__name__}: {exc}).")
+        return []
+
+
+def _stack_storeys(doc, input_path: Path, output_path: Path, cfg: Config, stack: Stack, plan: Plan, openings: list,
+                   elevation_report: list[dict], height_source: str, warnings: list[str]) -> list[Floor]:
+    """The storeys of the stack, lowest first (none: nothing above the converted plan could be stacked, and the warnings say
+    why). Each storey above is converted with the usual machinery (``Config.part``: from the user's own options, with the
+    analysis of the sheet pointed at its view), laid over the one below by its outline (stacking.register), and given its
+    height and level (stacking.place_storeys). One that fails or does not register ends the stack: the ones above it would hang
+    in the air."""
+    base = Floor(stack.base_index, cfg.analysis.plan.id, stack.base_how, plan, cfg, openings, height_source=height_source)
+    floors = [base]
+    below, below_walls = outline(plan.solid_walls), plan.solid_walls
+    seen = {v.id: v.matched for v in cfg.analysis.views}
+    for cand in stack.candidates:
+        part_cfg = replace(cfg.user, view=cand.view.id, part=True, storey=cand.index, stacking="no", **STOREY_OFF)
+        label = f"Piano {cand.index} (vista {cand.view.id}, {cand.how})"
+        try:
+            up = convert(input_path, output_path, part_cfg, _doc=doc, _analysis=replace(cfg.analysis, plan=cand.view, notes=[]))
+            reg, why = register(outline(up.plan.solid_walls), below, cfg.stacking == "yes", up.plan.solid_walls, below_walls)
+        except Exception as exc:  # the other floors are a help: whatever goes wrong in them is never the reason a conversion fails
+            reg, why = None, f"{type(exc).__name__}: {exc}"
+        if reg is None:
+            warnings.append(f"{label} non impilato: {why}. Il modello arriva fino al piano {floors[-1].index}."
+                            + ("" if cfg.stacking == "yes" else " Se sono piani dello stesso edificio puoi imporlo con --piani."))
+            break
+        for o in up.openings:
+            o.storey, o.shift = cand.index, reg.shift
+        up.elevations.extend(_known_elevations(doc, up, cand.view, cfg, [e for e in elevation_report if e.get("normal")], reg.shift))
+        floors.append(Floor(cand.index, cand.view.id, cand.how, up.plan, up.cfg, up.openings, reg.shift, reg.iou,
+                            height_source=up.wall_height_source, report=up))
+        warnings.extend(f"Piano {cand.index}: {w}" for w in up.warnings if w not in warnings)
+        below, below_walls = moved(outline(up.plan.solid_walls), reg.shift), moved(up.plan.solid_walls, reg.shift)
+        for v in cfg.analysis.views:  # the elevations the base matched say so; what this storey matched is told after it
+            if v.matched != seen[v.id]:
+                v.matched = f"{seen[v.id]}; piano {cand.index}: {v.matched}" if seen[v.id] else f"piano {cand.index}: {v.matched}"
+                seen[v.id] = v.matched
+    if len(floors) == 1:
+        return []
+    for o in openings:
+        o.storey = base.index
+    top = floors[-1]
+    if top.height_source == "predefinita" and cfg.user.wall_height_auto:  # the roof stands on it: the elevations know where its walls end
+        agreed = agreed_height([(e["confidence"] == "alta", e["storey_height"]) for e in top.report.elevations if e.get("storey_height")])
+        if agreed is not None:
+            top.height, top.height_source = agreed, "prospetto"
+    notes = place_storeys(floors, consensus_levels([e["levels"] for e in elevation_report if e.get("levels")]),
+                          cfg.slab_thickness or DEFAULT_SLAB, not cfg.user.wall_height_auto)
+    fit_openings(floors)
+    warnings.extend(notes)
+    return floors
+
+
 def convert(input_path: str | Path, output_path: str | Path | None = None,
-            cfg: Config | None = None, _doc=None) -> ConversionReport:
-    """``_doc``: the drawing already opened (a second pass over the same file does not read it again)."""
+            cfg: Config | None = None, _doc=None, _analysis=None) -> ConversionReport:
+    """``_doc``: the drawing already opened (a second pass over the same file does not read it again). ``_analysis``: the
+    analysis of the sheet already made (an upper storey of a stack is converted with the one of the base, its plan changed)."""
     cfg = cfg or Config()
     cfg.validate()
     input_path = Path(input_path)
@@ -211,8 +295,9 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     no_plan = False
     if cfg.auto:  # the sheet first: the unit, which view is the plan, which layers are the walls
         try:
-            analysis = analyze(doc, lambda layer: layer_used(doc, cfg, layer), cfg.view, cfg.units)
-            cfg, _ = apply_analysis(doc, cfg, analysis)
+            analysis = _analysis if _analysis is not None else analyze(doc, lambda layer: layer_used(doc, cfg, layer), cfg.view, cfg.units)
+            user = cfg
+            cfg = replace(apply_analysis(doc, cfg, analysis)[0], user=user)
             no_plan = analysis.plan is None and cfg.area is None and not any(
                 v.kind in ("plan", "?") for v in analysis.views)
         except Exception as exc:  # the analysis is a help: when it fails the layer names and the options decide
@@ -234,8 +319,11 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if cfg.floor is not None and found and cfg.floor not in found:
         raise ConversionError(f"Il piano {cfg.floor} non esiste: i layer nominano i piani "
                               f"{', '.join(map(str, found))}.")
+    stack = find_storeys(cfg.analysis) if stacking_on(cfg, cfg.analysis, len(found) > 1) else None  # the other floors of the sheet
+    if stack is not None and stack.candidates:
+        cfg = replace(cfg, storey=stack.base_index)  # the elevations are read for this storey: the views said which it is
     result = read_items(doc, cfg)
-    warnings = list(cfg.analysis_notes) + list(result.warnings)
+    warnings = list(cfg.analysis_notes) + list(result.warnings) + (stack.notes if stack is not None else [])
     if len(found) > 1 and cfg.floor is None:
         warnings.append(f"I layer nominano {len(found)} piani ({', '.join(f'P{n}' for n in found)}): ho letto il "
                         f"piano {found[0]}. Per un altro usa --piano N.")
@@ -350,7 +438,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     elevation_report: list[dict] = []
     specs = [(spec, "") for spec in cfg.elevations]
     garden_zones = [tuple(spec[:4]) for spec in cfg.elevations]  # what is an elevation, for the garden to leave out
-    if not specs and cfg.elevations_auto:
+    if not specs and cfg.elevations_auto and not cfg.part:  # (the elevations drawn in line with the plan below are not those of an upper one)
         everything = read_items(doc, cfg, area=None, ignore_veto=True, keep_other=True, unit=result.unit)
         found_zones = find_elevation_zones(everything.items, solid.bounds, result.unit_scale, cores=True)
         specs = [(zone, layers) for layers, zone, _ in found_zones]
@@ -387,7 +475,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     labels = apply_labels(openings, words, cfg, text_unit, solid.bounds, warnings) if words else 0
 
     if cfg.table_in:
-        rows = read_table(cfg.table_in)
+        rows = rows_of_storey(read_table(cfg.table_in), cfg, warnings)
         changed = apply_table(openings, rows, cfg, warnings, solid, result.unit_scale)
         if changed:
             plan.__dict__.pop("solid_walls", None)  # widths/kinds changed: the filled walls too
@@ -416,11 +504,27 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     if skirting_items(result.items):
         plan.skirting = skirting_strips(result.items, solid, openings, cfg)
 
-    plan.roof, plan.flat_roof, roof_report, flat_roof_report = _build_roof(doc, cfg, result, solid, elevations, warnings)
-
     footprint = building_footprint(solid)
     for o in openings:
         o.face_sign = facing_sign(o, footprint)
+    if cfg.part:  # an upper storey of a stack: the conversion that stacks it sets its height, builds its mesh, writes the files
+        return ConversionReport(
+            output=output_path, unit=result.unit, unit_guessed=result.unit_guessed, **_counts(solid, openings, columns), faces=0,
+            groups=[], warnings=warnings, elevations=elevation_report, rooms=_room_rows(rooms), labels=labels,
+            wall_height=cfg.wall_height, wall_height_source=wall_height_source, openings=openings, plan=plan, false_walls=false,
+            room_objects=rooms, analysis=cfg.analysis, cfg=cfg)
+    roof_cfg, roof_solid = cfg, solid  # the roof stands on the walls of the top storey
+    floors: list[Floor] = []
+    if stack is not None and stack.candidates:
+        floors = _stack_storeys(doc, input_path, output_path, cfg, stack, plan, openings, elevation_report, wall_height_source,
+                                warnings)
+        if floors:
+            cfg, wall_height_source = floors[0].cfg, floors[0].height_source  # its walls now end under the slab of the next
+            top = floors[-1]
+            roof_cfg = replace(cfg, wall_height=top.level + top.height)  # the eaves, above the floor the elevations start from
+            roof_solid = moved(top.plan.solid_walls, top.shift)
+    plan.roof, plan.flat_roof, roof_report, flat_roof_report = _build_roof(doc, roof_cfg, result, roof_solid, elevations, warnings)
+
     garden = None
     if cfg.garden:
         # the walls may have a gap (a doorway wider than a passage): what the floor bridges is inside as well
@@ -442,8 +546,11 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
             elif not apply_garden_table(garden, read_garden_table(cfg.garden_table_in), cfg, warnings):
                 warnings.append("Tabella del giardino: nessuna riga con celle MODIFICA_* compilate da applicare.")
         plan.garden = garden
-    mesh = build_mesh(plan, cfg, warnings)
+    mesh = build_mesh(plan, cfg, warnings, roof=not floors)
     garden = plan.garden  # (None when its mesh could not be built)
+    if floors:
+        mesh = stack_mesh(floors, mesh, plan, roof_cfg, roof_cfg.wall_height, warnings)
+    every_opening = [o for fl in floors for o in fl.openings] if floors else openings
     offset = (0.0, 0.0)
     if cfg.origin != "drawing":
         x0, y0, x1, y1 = solid.bounds
@@ -452,16 +559,16 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
     write_obj(mesh, output_path, cfg.out_units, cfg.mirror)
     json_path = None
     if cfg.c4d_json:
-        json_path = write_json(to_model_dict(mesh, output_path.stem, offset, openings,
+        json_path = write_json(to_model_dict(mesh, output_path.stem, offset, every_opening,
                                              garden.objects if garden else None),
                                output_path.with_name(output_path.stem + "_model.json"))
 
     table_path = None
-    if cfg.write_table and openings:
+    if cfg.write_table and every_opening:
         table_path = output_path.with_name(output_path.stem + "_aperture.csv")
         if cfg.table_in and Path(cfg.table_in).resolve() == table_path.resolve():
             table_path = output_path.with_name(output_path.stem + "_aperture_nuova.csv")  # never overwrite the input
-        write_table(table_path, openings, result.unit_scale)
+        write_table(table_path, every_opening, result.unit_scale, stacked=bool(floors))
 
     garden_table_path = None
     if cfg.write_garden_table and garden is not None and garden.objects:
@@ -474,13 +581,7 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         output=output_path,
         unit=result.unit,
         unit_guessed=result.unit_guessed,
-        size_m=_extent(solid),
-        wall_area_m2=solid.area,
-        wall_pieces=len(polygons_of(solid)),
-        doors=sum(o.kind == "door" for o in openings),
-        passages=sum(o.kind == "passage" for o in openings),
-        windows=sum(o.kind == "window" for o in openings),
-        columns=len(polygons_of(columns)),
+        **_counts(solid, openings, columns),
         faces=mesh.face_count,
         groups=list(mesh.groups),
         warnings=warnings,
@@ -490,18 +591,20 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         origin_offset=offset,
         json_path=json_path,
         table_path=table_path,
-        rooms=[{"name": r.name, "area_m2": r.area, "height": r.height, "named": r.named} for r in rooms],
+        rooms=_room_rows(rooms),
         labels=labels,
         wall_height=cfg.wall_height,
         wall_height_source=wall_height_source,
         mesh=mesh,
-        openings=openings,
+        openings=every_opening,
         plan=plan,
         false_walls=false,
         room_objects=rooms,
         garden=garden,
         garden_table_path=garden_table_path,
         analysis=cfg.analysis,
+        floors=floors,
+        cfg=cfg,
     )
     created = [output_path.name, output_path.with_suffix(".mtl").name]
     created += [p.name for p in (json_path, table_path, garden_table_path) if p]
@@ -515,8 +618,13 @@ def convert(input_path: str | Path, output_path: str | Path | None = None,
         report.preview_path = preview_3d(mesh, output_path.with_name(output_path.stem + "_anteprima_3d.png"))
         created.append(report.preview_path.name)
         try:
-            report.overlay_path = plan_overlay(report, output_path.with_name(output_path.stem + "_controllo_pianta.png"))
+            report.overlay_path = plan_overlay(report, output_path.with_name(output_path.stem + "_controllo_pianta.png"),
+                                               openings)
             created.append(report.overlay_path.name)
+            for fl in floors[1:]:  # a picture to check for every storey above
+                path = plan_overlay(fl.report, output_path.with_name(f"{output_path.stem}_controllo_pianta_{storey_tag(fl.index)}.png"))
+                report.overlay_paths.append(path)
+                created.append(path.name)
         except ImportError:
             report.images_note = "pianta di controllo non creata: serve matplotlib (pip install matplotlib)"
         except Exception as exc:  # a picture must never stop the conversion

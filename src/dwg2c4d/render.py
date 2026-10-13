@@ -11,12 +11,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .mesh import Mesh
+from .mesh import Mesh, split_storey
 
 COLORS = {
     "Muri": (0.86, 0.84, 0.80), "Muri_esterno": (0.84, 0.74, 0.62), "Muri_interno": (0.93, 0.92, 0.90),
     "Pilastri": (0.75, 0.75, 0.75), "Muretti": (0.70, 0.68, 0.64), "Cordoli": (0.56, 0.55, 0.54), "Pavimento": (0.66, 0.60, 0.54),
-    "Soffitto": (0.95, 0.95, 0.95), "Tetto": (0.72, 0.40, 0.31), "Copertura": (0.88, 0.88, 0.86), "Pannelli": (0.20, 0.22, 0.30), "Vetri": (0.50, 0.72, 0.88),
+    "Soffitto": (0.95, 0.95, 0.95), "Solaio": (0.74, 0.74, 0.72), "Tetto": (0.72, 0.40, 0.31), "Copertura": (0.88, 0.88, 0.86), "Pannelli": (0.20, 0.22, 0.30), "Vetri": (0.50, 0.72, 0.88),
     "Telai": (0.97, 0.97, 0.95), "Tramezzi": (0.90, 0.88, 0.84), "Battiscopa": (0.98, 0.98, 0.97), "Ante": (0.60, 0.42, 0.25), "Maniglie": (0.12, 0.12, 0.14),
     "Pavimentazione": (0.74, 0.73, 0.72), "Bordi": (0.45, 0.45, 0.47), "Prato": (0.50, 0.70, 0.38),
     "Terreno": (0.58, 0.50, 0.40), "Vasca": (0.84, 0.88, 0.90), "Acqua": (0.40, 0.68, 0.86),
@@ -32,9 +32,10 @@ def mesh_triangles(mesh: Mesh, hide: tuple[str, ...] = (), clip: tuple[float, fl
     tris, cols = [], []
     verts = mesh.vertices
     for group, faces in mesh.groups.items():
-        if group in hide:
+        kind = split_storey(group)[1]  # P1_Muri is a Muri of the storey P1
+        if group in hide or kind in hide:
             continue
-        color = COLORS.get(group) or COLORS.get(group.split("_", 1)[0], (0.8, 0.8, 0.8))
+        color = COLORS.get(kind) or COLORS.get(kind.split("_", 1)[0], (0.8, 0.8, 0.8))
         for ids, _ in faces:
             pts = [verts[i] for i in ids]
             if clip is not None:

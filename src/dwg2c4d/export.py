@@ -12,7 +12,7 @@ import json
 import math
 from pathlib import Path
 
-from .mesh import Mesh, split_storey, storey_tag
+from .mesh import Mesh, split_storey
 
 # mesh group -> (null name, material key)
 GROUPS = {
@@ -30,6 +30,7 @@ GROUPS = {
     "Tramezzi": ("Murature", "partition"),
     "Battiscopa": ("Battiscopa", "skirting"),
     "Soffitto": ("Soffitti", "ceiling"),
+    "Solaio": ("Solai", "slab"),
     "Tetto": ("Tetto", "roof"),
     "Copertura": ("Tetto", "flat_roof"),
     "Pannelli": ("Tetto", "pv_panel"),
@@ -68,6 +69,7 @@ MATERIALS = {
     "skirting": {"name": "Battiscopa", "color": [0.96, 0.96, 0.95], "rough": 0.5},
     "floor": {"name": "Pavimento", "color": [0.60, 0.56, 0.52], "rough": 0.5},
     "ceiling": {"name": "Soffitto", "color": [0.95, 0.95, 0.95], "rough": 0.9},
+    "slab": {"name": "Solaio", "color": [0.72, 0.72, 0.70], "rough": 0.9},
     "roof": {"name": "Tetto", "color": [0.62, 0.32, 0.24], "rough": 0.7},
     "flat_roof": {"name": "Copertura piana", "color": [0.88, 0.88, 0.86], "rough": 0.8},
     "pv_panel": {"name": "Pannello fotovoltaico", "color": [0.13, 0.15, 0.22], "rough": 0.3},
@@ -104,7 +106,7 @@ def _frames(mesh: Mesh, openings, origin_offset: tuple[float, float], garden_obj
                     low[key] = min(low.get(key, math.inf), mesh.vertices[vid][2])
     frames = {}
     for o in openings or []:
-        key = o.id if o.storey is None else f"{storey_tag(o.storey)}_{o.id}"
+        key = o.key
         if key not in low:
             continue
         sign = o.face_sign or 1

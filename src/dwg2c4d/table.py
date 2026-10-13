@@ -23,6 +23,7 @@ COLUMNS = [
     "MODIFICA_tipo", "MODIFICA_larghezza", "MODIFICA_davanzale", "MODIFICA_altezza", "MODIFICA_ante",
     "MODIFICA_cerniera", "MODIFICA_tieni",
 ]
+STOREY_COLUMN = "piano"  # the number of the storey (0 ground), in the table of a model of several storeys
 KIND_NAME = {"window": "finestra", "door": "porta", "passage": "vano"}
 NAME_KIND = {"finestra": "window", "f": "window", "porta": "door", "p": "door", "vano": "passage", "v": "passage",
              "passaggio": "passage"}
@@ -75,17 +76,18 @@ def _hinge_cell(o: Opening) -> str:
     return ""
 
 
-def write_table(path: str | Path, openings: list[Opening], unit_scale: float) -> Path:
-    """``unit_scale``: metres per drawing unit, to give x/y in the coordinates of the CAD file."""
+def write_table(path: str | Path, openings: list[Opening], unit_scale: float, stacked: bool = False) -> Path:
+    """``unit_scale``: metres per drawing unit, to give x/y in the coordinates of the CAD file (of the plan of the storey the
+    opening is in). ``stacked``: the model has several storeys, whose sigle repeat (F01 on every floor): a ``piano`` column tells."""
     path = Path(path)
     with path.open("w", newline="", encoding="utf-8-sig") as fh:
         w = csv.writer(fh, delimiter=";")
-        w.writerow(COLUMNS)
-        for o in sorted(openings, key=lambda o: o.id):
+        w.writerow([STOREY_COLUMN, *COLUMNS] if stacked else COLUMNS)
+        for o in sorted(openings, key=lambda o: (o.storey or 0, o.id)):
             src = o.src
             origin = ", ".join(f"{k}: {src[k]}" for k in ("width", "height", "sill", "kind") if k in src)
             ante = len(o.leaves) if o.kind == "door" else (o.sashes if o.kind == "window" else "")
-            w.writerow([
+            w.writerow([*([o.storey or 0] if stacked else []),
                 o.id, KIND_NAME[o.kind], _num(o.center[0] / unit_scale), _num(o.center[1] / unit_scale),
                 _num(o.width * 100), _num(o.thickness * 100), _num(o.z0 * 100), _num((o.z1 - o.z0) * 100),
                 ante, _hinge_cell(o), origin, src.get("leaves") or src.get("sashes") or "",
@@ -100,6 +102,20 @@ def read_table(path: str | Path) -> list[dict[str, str]]:
         fh.seek(0)
         delimiter = ";" if header.count(";") >= header.count(",") else ","
         return list(csv.DictReader(fh, delimiter=delimiter))
+
+
+def rows_of_storey(rows: list[dict[str, str]], cfg: Config, warnings: list[str]) -> list[dict[str, str]]:
+    """The rows of an openings table that are for the plan being converted. A table of a model of several storeys has the
+    ``piano`` column; a row with no number (or a table without the column, written for one storey) is for the converted plan,
+    the lowest. Rows of storeys that are not in this model are told in the warnings and left out."""
+    if not rows or STOREY_COLUMN not in rows[0]:
+        return [] if cfg.part else rows
+    own = str(cfg.storey if cfg.storey is not None else 0)
+    mine = [r for r in rows if (r.get(STOREY_COLUMN) or "").strip() == own or (not cfg.part and not (r.get(STOREY_COLUMN) or "").strip())]
+    if not cfg.part and cfg.storey is None and len(mine) < len(rows):
+        warnings.append(f"Tabella: {len(rows) - len(mine)} righe sono di altri piani (colonna {STOREY_COLUMN}) e questo modello non "
+                        "impila i piani: le ho lasciate stare.")
+    return mine
 
 
 NEW_ROW_CELLS = ("tipo", "larghezza", "davanzale", "altezza", "ante", "cerniera")  # what a row with no sigla may say about the opening it adds

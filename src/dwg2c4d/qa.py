@@ -7,6 +7,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 from .config import UNIT_TO_METERS
+from .geom import polygons_of
 from .render import save_views
 
 KIND_COLOR = {"window": "#1f77b4", "door": "#d62728", "passage": "#ff7f0e"}
@@ -14,6 +15,45 @@ KIND_NAME = {"window": "finestra", "door": "porta", "passage": "vano"}
 
 
 # --- text -------------------------------------------------------------------------------------
+
+HEIGHT_SOURCE = {"scritta": "dalla scritta 'h' nei locali", "indicata": "indicata", "predefinita": "predefinita",
+                 "prospetto": "dai prospetti: altezza di interpiano o linea di gronda"}
+
+
+def _elevation_line(ev: dict, label: str) -> str:
+    """The line of the report for one elevation matched to the plan (``label``: what comes before the colon)."""
+    side = {"south": "sud", "north": "nord"}.get(ev["side"], ev["side"])
+    zero = {"porta": "dal fondo della porta", "indicata": "indicata", "quota +0,00": "dal segno di quota",
+            "linea di terra": "dalla sommita' della linea di terra", "blocco figura": "dai piedi della figura umana",
+            "quota del piano": "dalla quota del piano"}.get(ev["zero_source"], ev["zero_source"])
+    found = f", trovato da solo sul layer {ev['found_on']}" if ev.get("found_on") else ""
+    if ev.get("view"):  # an elevation that is not in line with the plan: matched by the row of its windows
+        found = (f", vista {ev['view']} abbinata alla facciata dal confronto delle aperture "
+                 f"(affidabilita' {ev['confidence']}, scarto medio {ev['residual'] * 100:.0f} cm)")
+        if not ev.get("north_known", True):
+            found += "; il lato e' nel riferimento del disegno (nord = alto), il foglio non lo conferma"
+    return (f"  {label} {side:<5}    : {ev['matched']} di {ev['total']} aperture con le quote del "
+            f"prospetto (quota zero {zero}{found})")
+
+
+def _storey_lines(report) -> list[str]:
+    """The storeys of a stacked model, above the converted plan: where each stands, what its plan gave. (The lines of the
+    converted plan are the ones every report has.)"""
+    out = []
+    for fl in report.floors[1:]:
+        solid = fl.plan.solid_walls
+        doors, windows = (sum(o.kind == k for o in fl.openings) for k in ("door", "window"))
+        out.append(f"  {f'Piano {fl.index}':<19}: vista {fl.view} ({fl.how}), spostata di ({fl.shift[0]:.2f}, {fl.shift[1]:.2f}) m "
+                   f"sulla pianta sotto (i contorni dei muri combaciano per il {fl.iou * 100:.0f} %); pavimento a {fl.level:.2f} m, "
+                   f"solaio di {fl.slab * 100:.0f} cm sotto")
+        out.append(f"  {f'Piano {fl.index} muri':<19}: {len(polygons_of(solid))} corpi, {solid.area:.1f} m2 in pianta; alti "
+                   f"{fl.height:g} m ({HEIGHT_SOURCE[fl.height_source]}); porte / finestre {doors} / {windows}; "
+                   f"pilastri {len(polygons_of(fl.plan.columns))}")
+        out.extend(_elevation_line(ev, f"Piano {fl.index} prosp.") for ev in fl.report.elevations)
+        out.extend(f"  {f'Locale piano {fl.index}':<19}: {r['name']}  {r['area_m2']:.1f} m2" + ("" if r["named"] else "  (senza nome)")
+                   for r in fl.report.rooms)
+    return out
+
 
 def summary_lines(report) -> list[str]:
     """The summary printed by the command line and written to the report file."""
@@ -33,34 +73,25 @@ def summary_lines(report) -> list[str]:
         kinds = ", ".join(f"{n} {_KIND_IT.get(k, k)}" for k, n in Counter(v.kind for v in a.views).most_common())
         chosen = f"convertita la vista {a.plan.id}" if a.plan is not None else "nessuna pianta riconosciuta"
         out.append(f"  Foglio             : {len(a.views)} viste ({kinds}); {chosen}")
+    if report.floors:
+        base = report.floors[0]
+        out.append(f"  Piani              : {len(report.floors)} piani impilati in un modello solo: il piano {base.index} e' la pianta "
+                   f"convertita (vista {base.view}, {base.how}), le righe qui sotto che non dicono altro sono sue")
     out.append(f"  Ingombro muri      : {w:.2f} x {h:.2f} m")
     out.append(f"  Muri               : {report.wall_pieces} corpi, {report.wall_area_m2:.1f} m2 in pianta")
     out.append(f"  Porte / finestre   : {report.doors} / {report.windows}")
     if report.passages:
         out.append(f"  Vani senza simbolo : {report.passages} (dedotti dai muri: verifica nella tabella)")
-    src = {"scritta": "dalla scritta 'h' nei locali", "indicata": "indicata", "predefinita": "predefinita",
-           "prospetto": "dai prospetti: altezza di interpiano o linea di gronda"}
-    out.append(f"  Altezza muri       : {report.wall_height:g} m ({src[report.wall_height_source]})")
+    out.append(f"  Altezza muri       : {report.wall_height:g} m ({HEIGHT_SOURCE[report.wall_height_source]})")
     if report.labels:
         out.append(f"  Scritte            : quote lette per {report.labels} aperture su "
-                   f"{len(report.openings)}")
+                   f"{len(base_openings(report))}")
     for room in report.rooms:
         height = f", h {room['height']:g} m" if room["height"] else ""
         mark = "" if room["named"] else "  (senza nome)"
         out.append(f"  Locale             : {room['name']}  {room['area_m2']:.1f} m2{height}{mark}")
     for ev in report.elevations:
-        side = {"south": "sud", "north": "nord"}.get(ev["side"], ev["side"])
-        zero = {"porta": "dal fondo della porta", "indicata": "indicata", "quota +0,00": "dal segno di quota",
-                "linea di terra": "dalla sommita' della linea di terra", "blocco figura": "dai piedi della figura umana",
-                "quota del piano": "dalla quota del piano"}.get(ev["zero_source"], ev["zero_source"])
-        found = f", trovato da solo sul layer {ev['found_on']}" if ev.get("found_on") else ""
-        if ev.get("view"):  # an elevation that is not in line with the plan: matched by the row of its windows
-            found = (f", vista {ev['view']} abbinata alla facciata dal confronto delle aperture "
-                     f"(affidabilita' {ev['confidence']}, scarto medio {ev['residual'] * 100:.0f} cm)")
-            if not ev.get("north_known", True):
-                found += "; il lato e' nel riferimento del disegno (nord = alto), il foglio non lo conferma"
-        out.append(f"  Prospetto {side:<5}    : {ev['matched']} di {ev['total']} aperture con le quote del "
-                   f"prospetto (quota zero {zero}{found})")
+        out.append(_elevation_line(ev, "Prospetto"))
     if report.roof:
         r = report.roof
         how = {"indicata": "indicata", "scritta": "scritta nel foglio", "prospetto": "dedotta dal prospetto",
@@ -79,6 +110,7 @@ def summary_lines(report) -> list[str]:
                    f"{f['thickness'] * 100:.0f} cm{parapet}{panels}, dalla vista {f['view']} della copertura")
     if report.columns:
         out.append(f"  Pilastri           : {report.columns}")
+    out.extend(_storey_lines(report))
     if report.garden is not None:
         from .garden import summary
 
@@ -97,12 +129,17 @@ def summary_lines(report) -> list[str]:
     return out
 
 
+def base_openings(report) -> list:
+    """The openings of the converted plan (the lowest storey of a stack, else all of them)."""
+    return [o for o in report.openings if not report.floors or o.storey == report.floors[0].index]
+
+
 def opening_notes(report) -> "OrderedDict[str, list[str]]":
     """{note: [ids]}: what the program was unsure about, grouped so a repeated remark reads once."""
     notes: "OrderedDict[str, list[str]]" = OrderedDict()
-    for o in sorted(report.openings, key=lambda o: o.id):
+    for o in sorted(report.openings, key=lambda o: (o.storey or 0, o.id)):
         for n in o.notes:
-            notes.setdefault(n, []).append(o.id)
+            notes.setdefault(n, []).append(o.key)
     return notes
 
 
@@ -113,9 +150,9 @@ def write_report(report, path: str | Path, created: list[str]) -> Path:
     lines += [f"Creato {name}" for name in created] + [""]
     lines += summary_lines(report)
     lines += ["", "APERTURE", "-" * 60]
-    for o in sorted(report.openings, key=lambda o: o.id):
+    for o in sorted(report.openings, key=lambda o: (o.storey or 0, o.id)):
         off = "" if o.keep else "  [eliminata dalla tabella]"
-        lines.append(f"  {o.id}  {KIND_NAME[o.kind]:<8} {o.width * 100:5.0f} x {(o.z1 - o.z0) * 100:3.0f} cm, "
+        lines.append(f"  {o.key}  {KIND_NAME[o.kind]:<8} {o.width * 100:5.0f} x {(o.z1 - o.z0) * 100:3.0f} cm, "
                      f"da {o.z0 * 100:3.0f} cm   {o.label}{off}")
     notes = opening_notes(report)
     if notes:
@@ -138,9 +175,10 @@ def preview_3d(mesh, path: str | Path) -> Path:
                       hide=("Soffitto",))
 
 
-def plan_overlay(report, path: str | Path) -> Path:
+def plan_overlay(report, path: str | Path, openings: list | None = None) -> Path:
     """The plan seen from above: walls, rooms with names and heights, every opening with its id,
-    size and sill. Needs matplotlib."""
+    size and sill. Needs matplotlib. ``openings``: those to draw (default: all of the report's; a stacked model's report
+    holds the openings of every storey, the plan is of one)."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -203,7 +241,7 @@ def plan_overlay(report, path: str | Path) -> Path:
                                ls="--", zorder=3))
     if not plan.skirting.is_empty:
         draw(plan.skirting, fc="#c040c0", ec="#c040c0", lw=0.3, zorder=4)
-    for o in report.openings:
+    for o in report.openings if openings is None else openings:
         color = KIND_COLOR[o.kind]
         alpha = 0.9 if o.keep else 0.25
         draw(o.cut, fc=color, ec=color, lw=0.8, zorder=5, alpha=alpha)
@@ -219,7 +257,8 @@ def plan_overlay(report, path: str | Path) -> Path:
     ax.autoscale()
     ax.margins(0.06)
     ax.grid(alpha=0.15)
-    ax.set_title("Controllo: muri (grigio), tramezzi (grigio chiaro), muretti e cordoli (verde acqua), locali, aperture con "
+    storey = f"Piano {report.cfg.storey} (vista {report.analysis.plan.id}). " if report.cfg is not None and report.cfg.part else ""
+    ax.set_title(storey + "Controllo: muri (grigio), tramezzi (grigio chiaro), muretti e cordoli (verde acqua), locali, aperture con "
                  "sigla, larghezza×altezza e quota da terra in cm (blu finestre, rosso porte, arancio vani; * = vedi note); "
                  "tratteggiati: arredi (verde) e scale (arancio) non estrusi"
                  + ("; giardino: pavimentazione, prato, acqua, siepi/alberi/cespugli/arredi con sigla"

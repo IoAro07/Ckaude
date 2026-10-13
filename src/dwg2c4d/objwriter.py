@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .mesh import Mesh
+from .mesh import Mesh, split_storey
 
 OUT_SCALE = {"m": 1.0, "cm": 100.0, "mm": 1000.0}
 
@@ -18,6 +18,7 @@ MATERIALS = {
     "Cordoli": ((0.52, 0.51, 0.50), 1.0),
     "Pavimento": ((0.60, 0.56, 0.52), 1.0),
     "Soffitto": ((0.95, 0.95, 0.95), 1.0),
+    "Solaio": ((0.72, 0.72, 0.70), 1.0),
     "Vetri": ((0.70, 0.85, 0.95), 0.3),
     "Tetto": ((0.62, 0.32, 0.24), 1.0),
     "Copertura": ((0.88, 0.88, 0.86), 1.0),
@@ -47,7 +48,9 @@ SHARED = ("Telai", "Ante", "Vetri", "Maniglie", "Tronco", "Chioma", "Siepe", "Ce
 
 def material_of(group: str) -> str:
     """Material of a mesh group: the parts of each opening (Telai_F01...) share the base one; a floor
-    per room (Pavimento_Sala) keeps its own so each room can get another finish."""
+    per room (Pavimento_Sala) keeps its own so each room can get another finish. The storeys of a stacked model
+    (P1_Muri) share the materials of the walls, the floors... of the other storeys."""
+    group = split_storey(group)[1]
     base = group.split("_", 1)[0]
     return base if base in SHARED else group
 
