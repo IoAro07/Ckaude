@@ -68,4 +68,4 @@ def written_heights(low: BaseGeometry, words: list) -> tuple[BaseGeometry, list[
         notes.append(f"Muretti: {n} {'muro basso ha' if n == 1 else 'muri bassi hanno'} l'altezza scritta nel disegno vicino a "
                      f"{'lui' if n == 1 else 'loro'} ({', '.join(f'{h:g} m da {t!r}' for _, h, t in written)}): controlla che la scritta "
                      "sia di quel muro.")
-    return union(b for i, b in enumerate(bodies) if i not in taken), written, notes
+    return (union(b for i, b in enumerate(bodies) if i not in taken) if taken else low), written, notes

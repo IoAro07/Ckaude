@@ -43,8 +43,9 @@ def test_the_text_belongs_to_the_nearest_low_wall_within_reach_and_the_others_ke
 
 
 def test_a_text_farther_than_the_reach_is_not_that_walls():
-    rest, written, notes = written_heights(box(0, 0, 10, 0.3), [word("Hmuro= 1,00 ml.", 5.0, REACH + 1.0)])
-    assert written == [] and rest.equals(box(0, 0, 10, 0.3)) and notes == []
+    wall = box(0, 0, 10, 0.3)
+    rest, written, notes = written_heights(wall, [word("Hmuro= 1,00 ml.", 5.0, REACH + 1.0)])
+    assert written == [] and rest is wall and notes == []  # the very same shape: nothing was touched, the mesh is what it was
 
 
 def test_two_walls_two_texts():
