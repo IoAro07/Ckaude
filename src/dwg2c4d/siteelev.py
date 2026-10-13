@@ -40,6 +40,7 @@ FRONT_OVERLAP = 0.3  # a roof that overlaps the roof of a facade in the elevatio
 FRONT_LOWER = 0.5  # m: ... and is lower than it by this much (else it says nothing)
 CUE_MIN = 1.0  # m: a roof this close to the line through the facade (or its middle) says nothing of which side it is
 EDGE_SLACK = 0.3  # m: a symbol this far beyond the ends of the roof of its facade is still under it
+OVER_EAVES = 0.35  # m: a window an elevation draws reaches this far above the eaves line of its roof and is still on that wall (the tiles end under the top of the wall)
 TOP_CLEAR = 0.25  # m: the top of an opening is this far under the eaves, at most
 MIN_HEIGHT = 0.4  # m: an opening that stands less high than this above its floor (and under the eaves) is not put
 DOUBLE_DOOR = 1.3  # m: a door wider than this has two leaves
@@ -337,8 +338,8 @@ def _leaves(width: float) -> list[dict]:
 def _owner(facades: list[Facade], x: float, top: float) -> Facade | None:
     """The facade a symbol of an elevation belongs to: the one whose roof is over it, the lowest such roof when several
     (a lean-to's roof over a door, the farm's roof over the lean-to's). ``x``: along the drawing; ``top``: the height of the
-    symbol's top above the floor."""
-    over = [f for f in facades if f.band.x0 - EDGE_SLACK <= x <= f.band.x1 + EDGE_SLACK and f.band.eave >= top]
+    symbol's top above the floor (up to ``OVER_EAVES`` above the eaves line counts as under it)."""
+    over = [f for f in facades if f.band.x0 - EDGE_SLACK <= x <= f.band.x1 + EDGE_SLACK and f.band.eave + OVER_EAVES >= top]
     return min(over, key=lambda f: f.band.eave, default=None)
 
 
