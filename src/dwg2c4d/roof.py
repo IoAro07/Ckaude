@@ -39,6 +39,10 @@ RIDGE_MIN_RISE = 0.3  # a silhouette line must be this far above the eaves to co
 RIDGE_MATCH = 0.8  # fraction of the longer of {ridge, silhouette line} that must overlap in x
 MIN_RIDGE = 1.0  # shorter horizontal roof lines (connectors, valleys) are not ridges (m)
 ON_OUTLINE = 1e-4
+WIDE_LINE = 0.9  # a line this share of the widest one of an elevation runs along the whole facade
+UPPER_EAVES = 1.5  # m: a long line this far above the walls in use is the eaves of a storey over the plan, not a cornice
+MAX_MEASURED_PITCH = 60.0  # degrees: ridge heights from an elevation that imply a steeper roof are not believed
+MAX_MEASURED_K = math.tan(math.radians(MAX_MEASURED_PITCH))
 STEP_TOL = 0.02  # neighbouring faces closer in height than this meet (no wall between them) (m)
 
 
@@ -241,6 +245,7 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
     face_k: dict[int, float] = {}
     measured: list[float] = []
     fixed: dict[tuple[int, int], float] = {}
+    too_steep = 0
     for i in eave:
         ratios = []
         for ks, h, y, x0, x1 in run_info:
@@ -250,15 +255,20 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
                 if (i, *k) in dist and dist[(i, *k)] > 0.05:
                     ratios.append(h / dist[(i, *k)])
                     fixed[k] = h
-        if ratios:
+        if ratios and sum(ratios) / len(ratios) > MAX_MEASURED_K:
+            too_steep += 1  # an elevation that shows more storeys than the plan puts its ridge far too high
+        elif ratios:
             face_k[i] = sum(ratios) / len(ratios)
             measured.append(face_k[i])
+    if too_steep and not measured:
+        warnings.append(f"Tetto: le altezze dei colmi nei prospetti darebbero falde piu' ripide di {MAX_MEASURED_PITCH:.0f} gradi: "
+                        "i prospetti mostrano forse piu' piani di quello convertito, o sono in un'altra scala. Le ho ignorate.")
     if measured:
         source = "prospetto"
         fallback_k = float(np.median(measured))
     else:
         fallback_k = default_k
-        if ridge_hints and cfg.roof_pitch is None and written_pitch is None:
+        if ridge_hints and cfg.roof_pitch is None and written_pitch is None and not too_steep:
             warnings.append("Tetto: nessun colmo della pianta del tetto corrisponde alle linee orizzontali "
                             "del prospetto (stesse coordinate X?): pendenza predefinita.")
 
@@ -356,11 +366,20 @@ def build_roof(items: list[Item], cfg: Config, unit_scale: float,
 
 
 def ridge_hints_from(elevations, wall_height: float) -> list[tuple[float, float, float]]:
-    """Silhouette lines high enough above the eaves to be ridges: (x0, x1, height above eaves)."""
+    """Silhouette lines high enough above the eaves to be ridges: (x0, x1, height above eaves). When the elevation
+    draws a line at least as long under a ridge line and a storey or more above the walls in use (the eaves of the
+    storeys over the plan: a roof two storeys up), the rise is measured from that line, and it is not a ridge."""
     hints = []
     for ev in elevations:
-        for y, x0, x1 in ev.hlines:
-            rise = (y - ev.zero) - wall_height
-            if rise >= RIDGE_MIN_RISE and x1 - x0 >= 1.0:
-                hints.append((x0, x1, rise))
+        lines = [(y - ev.zero, x0, x1) for y, x0, x1 in ev.hlines]
+        widest = max((x1 - x0 for _, x0, x1 in lines), default=0.0)
+        for h, x0, x1 in lines:
+            rise = h - wall_height
+            if rise < RIDGE_MIN_RISE or x1 - x0 < 1.0:
+                continue
+            if rise >= UPPER_EAVES and x1 - x0 >= WIDE_LINE * widest and any(
+                    u >= h + RIDGE_MIN_RISE and b - a >= 1.0 and a >= x0 - NODE_GRID and b <= x1 + NODE_GRID for u, a, b in lines):
+                continue  # a ridge stands over this line along the whole facade: it is the eaves of a higher roof
+            eaves = [e for e, a, b in lines if e >= wall_height + UPPER_EAVES and e <= h - RIDGE_MIN_RISE and b - a >= x1 - x0 - 0.1]
+            hints.append((x0, x1, h - max(eaves) if eaves else rise))
     return hints

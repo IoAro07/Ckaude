@@ -202,3 +202,104 @@ def test_two_separate_roofs_in_one_view_are_both_kept():
 def test_a_view_with_no_closed_plane_has_no_roof():
     assert rv.clean_roof([item("0", LineString([(0, 0), (10, 0)])), item("Quote", LineString([(0, 1), (10, 1)]))]) is None
     assert rv.clean_roof([]) is None
+
+
+# --- the slope, the storeys, the notes ---------------------------------------------------------------
+
+from dwg2c4d.config import Config  # noqa: E402
+from dwg2c4d.elevation import Elevation  # noqa: E402
+from dwg2c4d.roof import Roof, build_roof  # noqa: E402
+
+
+@pytest.mark.parametrize("text,degrees", [
+    ("Pendenza 25 %", 14.04), ("PENDENZA 25%", 14.04), ("pendenza falde 30 %", 16.7), ("Pend. 20 gradi", 20.0),
+    ("pendenza: 35°", 35.0), ("Pendenza 12,5 %", 7.13), ("Pendenza 40 %", 21.8), ("slope pend 100 %", 45.0),
+])
+def test_a_slope_written_in_percent_or_degrees_is_read(text, degrees):
+    assert rv.pitch_from_texts([text])[0] == pytest.approx(degrees, abs=0.1)
+
+
+@pytest.mark.parametrize("text", ["Pendenza 2 %", "pendenza 0,5 %", "pendenza 90 gradi", "Pendenza scarico", "tetto 25 %", ""])
+def test_a_text_that_is_no_roof_slope_is_not_read(text):
+    assert rv.pitch_from_texts([text]) is None
+
+
+def test_of_several_written_slopes_the_one_written_most_often_wins():
+    deg, words = rv.pitch_from_texts(["Pendenza 25 %", "Pendenza 25 %", "Pendenza 35 %", "Pendenza 40 %"])
+    assert deg == pytest.approx(14.04, abs=0.05) and words == "25 %"
+
+
+def hip_items(tmp_overhang=0.0):
+    body = box(0, 0, 12, 8)
+    items = [item("Tetto", LineString(body.exterior.coords))]
+    items.append(item("Tetto", LineString([(4, 4), (8, 4)])))
+    for corner, end in (((0, 0), (4, 4)), ((0, 8), (4, 4)), ((12, 0), (8, 4)), ((12, 8), (8, 4))):
+        items.append(item("Tetto", LineString([corner, end])))
+    for it in items:
+        it.category = "roof"
+    return items
+
+
+def test_ridge_heights_from_an_elevation_that_imply_a_wild_pitch_are_ignored_and_said():
+    """The elevation shows two storeys: its ridge stands 8 m over the eaves of the one-storey plan, over a half span of 4 m: 63 degrees."""
+    warnings = []
+    roof = build_roof(hip_items(), Config(units="m", roof=True, roof_offset=(0.0, 0.0)), 1.0, (0, 0, 12, 8),
+                      [(4.0, 8.0, 8.0)], warnings)
+    assert roof is not None and roof.pitch_source == "predefinita"
+    assert any("piu' ripide" in w for w in warnings)
+
+
+def test_ridge_heights_from_an_elevation_that_make_a_sane_pitch_are_still_used():
+    warnings = []
+    roof = build_roof(hip_items(), Config(units="m", roof=True, roof_offset=(0.0, 0.0)), 1.0, (0, 0, 12, 8),
+                      [(4.0, 8.0, 2.0)], warnings)
+    assert roof.pitch_source == "prospetto" and roof.pitch_deg == pytest.approx(26.6, abs=0.2)
+
+
+def fake_roof(ridge=2.0):
+    return Roof([], [], [], 14.0, (14.0, 14.0), "scritta", ridge, 4, (0.0, 0.0), 0)
+
+
+def fake_found():
+    reg = rv.Registration(0, False, (-54.0, 0.0), 0.72, 0.6)
+    return rv.ViewRoof([], 6, reg, 0.6, (16.9, 16.8), False)
+
+
+def test_elevations_that_reach_far_above_the_roof_are_said_to_show_more_storeys():
+    ev = Elevation("south", 0.0, "porta", [], [(8.1, 0.0, 12.0)])
+    notes = rv.view_roof_notes(fake_found(), fake_roof(), None, [ev], 3.2)
+    assert any("piu' piani" in n for n in notes)
+
+
+def test_elevations_that_end_at_the_roof_say_nothing_about_storeys():
+    ev = Elevation("south", 0.0, "porta", [], [(5.3, 0.0, 12.0)])
+    assert not any("piu' piani" in n for n in rv.view_roof_notes(fake_found(), fake_roof(), None, [ev], 3.2))
+    assert not any("piu' piani" in n for n in rv.view_roof_notes(fake_found(), fake_roof(), None, [], 3.2))
+
+
+def test_the_notes_tell_where_the_roof_came_from_and_how_it_was_put_on_the_plan():
+    note = rv.view_roof_notes(fake_found(), fake_roof(), (14.04, "25 %"), [], 3.2)
+    assert "vista 6" in note[0] and "-54.00" in note[0] and "72 %" in note[0] and "0.60 m" in note[0]
+    assert any("25 %" in n for n in note)
+
+
+def test_the_rise_of_a_ridge_is_measured_from_the_eaves_of_the_storeys_over_the_plan():
+    """Walls of 3.2 m, a second storey, its eaves at 6.2 m along the whole facade and the ridge at 8.0 m."""
+    from dwg2c4d.roof import ridge_hints_from
+
+    ev = Elevation("south", 0.0, "porta", [], [(3.2, 0.0, 16.9), (6.2, 0.0, 16.9), (8.0, 2.0, 13.7)])
+    assert ridge_hints_from([ev], 3.2) == [(2.0, 13.7, pytest.approx(1.8))]
+
+
+def test_the_ridge_of_a_one_storey_roof_is_measured_from_the_walls_as_ever():
+    from dwg2c4d.roof import ridge_hints_from
+
+    ev = Elevation("south", 0.0, "porta", [], [(3.2, 0.0, 12.0), (5.2, 3.0, 9.0)])
+    assert ridge_hints_from([ev], 3.2) == [(3.0, 9.0, pytest.approx(2.0))]
+
+
+def test_a_chimney_over_a_ridge_does_not_make_the_ridge_an_eaves_line():
+    from dwg2c4d.roof import ridge_hints_from
+
+    ev = Elevation("south", 0.0, "porta", [], [(3.2, 0.0, 12.0), (5.2, 0.0, 12.0), (6.5, 5.0, 5.5)])
+    assert ridge_hints_from([ev], 3.2) == [(0.0, 12.0, pytest.approx(2.0))]

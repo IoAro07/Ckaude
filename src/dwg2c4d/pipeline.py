@@ -158,7 +158,7 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
     if not (cfg.roof or cfg.roof_auto):
         return None, None
     own: list[str] = []
-    roof, view = None, None
+    roof, view, overhang = None, None, None
     rr = read_items(doc, cfg, area=cfg.roof_area, unit=result.unit)
     items = rr.items if cfg.roof else [it for it in rr.items if it.category == "roof" and not is_elevation_layer(it.layer)]
     if items or cfg.roof:  # nothing asked, nothing drawn: no roof and no remark
@@ -169,18 +169,18 @@ def _build_roof(doc, cfg: Config, result, solid: BaseGeometry, elevations: list,
                                result.unit_scale, own)
         if found is not None:
             pitch = written_pitch(cfg.analysis)
-            roof = build_roof(found.items, replace(cfg, roof_offset=(0.0, 0.0)), result.unit_scale, solid.bounds, [], own,
-                              pitch[0] if pitch else None)
+            roof = build_roof(found.items, replace(cfg, roof_offset=(0.0, 0.0)), result.unit_scale, solid.bounds,
+                              ridge_hints_from(elevations, cfg.wall_height), own, pitch[0] if pitch else None)
             if roof is not None:
-                view = found.view
+                view, overhang = found.view, found.overhang
                 own = [n for n in own if not n.startswith("Tetto: le linee del tetto non formano")]
-                own.extend(view_roof_notes(found, roof, pitch))
+                own.extend(view_roof_notes(found, roof, pitch, elevations, cfg.wall_height))
     warnings.extend(own)
     if roof is None:
         return None, None
     return roof, {"pitch_deg": roof.pitch_deg, "pitch_range": roof.pitch_range, "pitch_source": roof.pitch_source,
                   "ridge_height": roof.ridge_height + cfg.wall_height, "faces": roof.faces,
-                  "ridges_from_elevation": roof.ridges_from_elevation, "view": view}
+                  "ridges_from_elevation": roof.ridges_from_elevation, "view": view, "overhang": overhang}
 
 
 def convert(input_path: str | Path, output_path: str | Path | None = None,

@@ -54,6 +54,7 @@ MAX_OVERHANG = 1.5  # m: ... and the exact search never grows it more than this
 MIN_IOU = 0.45  # the roof is on the plan if it overlaps the building (grown by the eaves) at least this well
 MIN_COVER = 0.6  # ... and at least this share of the roof stands over the building (grown)
 MIRROR_MARGIN = 0.1  # a mirrored pose is taken only if it overlaps this much better (iou) than any that is not
+STOREY_SLACK = 0.5  # m: the elevations may reach this far above the roof before they are said to show more storeys
 SAME_LINES = 0.05  # m: the lines of the roof in two poses are the same when they lie this close
 TIE = 0.97  # a pose that scores at least this share of the best one fits as well: the plain one (no turn) is taken
 CENTRE_WEIGHT = 0.02  # a shift that moves the centre of the roof away from the centre of the walls costs this much per diagonal
@@ -416,7 +417,7 @@ class ViewRoof:
     view: int
     registration: Registration
     overhang: float | None  # m: from the wall line the view draws under the eaves, else from the registration
-    size: tuple[float, float]  # m: the roof plan
+    size: tuple[float, float]  # m: the outline of the roof
     ambiguous: bool  # the roof fits the plan in another pose too, and the lines of the roof do not look the same in it
 
 
@@ -487,8 +488,9 @@ def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale:
         drawn = unary_union([p.geom for it in clean.items for p in it.prims])
         ambiguous = any(place(drawn, alt).difference(place(drawn, reg).buffer(SAME_LINES)).length > 0.02 * drawn.length
                         for alt in reg.alternatives)
-        found = ViewRoof(placed, v.id, reg, clean.overhang if clean.overhang is not None else reg.overhang, v.size_m(scale),
-                         ambiguous)
+        bx0, by0, bx1, by1 = clean.outline.bounds
+        found = ViewRoof(placed, v.id, reg, clean.overhang if clean.overhang is not None else reg.overhang,
+                         (bx1 - bx0, by1 - by0), ambiguous)
         if best is None or reg.iou > best.registration.iou:
             best = found
     if best is not None:
@@ -506,15 +508,17 @@ def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale:
     return None
 
 
-def view_roof_notes(found: ViewRoof, roof: "Roof", pitch: tuple[float, str] | None) -> list[str]:
-    """What the report tells about a roof taken from a view: where it came from, how it was put on the plan, the slope.
-    Every one of these is a reading of the drawing, not something the user said: it has to be checkable."""
+def view_roof_notes(found: ViewRoof, roof: "Roof", pitch: tuple[float, str] | None, elevations: list,
+                    wall_height: float) -> list[str]:
+    """What the report tells about a roof taken from a view: where it came from, how it was put on the plan, the slope,
+    and the storeys the elevations show that the plan does not. Every one of these is a reading of the drawing, not
+    something the user said: it has to be checkable."""
     reg = found.registration
     w, h = found.size
     moved = f"ruotato di {reg.turns * 90} gradi" if reg.turns else "non ruotato"
     if reg.mirror:
         moved += " e rovesciato (era speculare alla pianta)"
-    notes = [f"Tetto: costruito dalla vista della copertura (vista {found.view}, {w:.0f} x {h:.0f} m, disegnata altrove nel foglio): "
+    notes = [f"Tetto: costruito dalla vista della copertura (vista {found.view}, {w:.1f} x {h:.1f} m, disegnata altrove nel foglio): "
              f"messo sulla pianta {moved} e spostato di {reg.shift[0]:.2f}, {reg.shift[1]:.2f} m, facendo combaciare il suo contorno "
              f"con i muri (sovrapposizione {reg.iou * 100:.0f} %, sporto {found.overhang:.2f} m). Controlla nell'anteprima 3D "
              "che sia al suo posto."]
@@ -526,4 +530,9 @@ def view_roof_notes(found: ViewRoof, roof: "Roof", pitch: tuple[float, str] | No
     elif roof.pitch_source == "predefinita":
         notes.append(f"Tetto: nessuna pendenza scritta ne' ricavabile dai prospetti: uso {roof.pitch_deg:.0f} gradi (--pendenza per "
                      "cambiarla).")
+    top = max((y - ev.zero for ev in elevations for y, _, _ in ev.hlines), default=0.0)
+    if top > wall_height + roof.ridge_height + STOREY_SLACK:
+        notes.append(f"Tetto: i prospetti arrivano a {top:.1f} m sopra il pavimento, il tetto che ho costruito a "
+                     f"{wall_height + roof.ridge_height:.1f} m: mostrano piu' piani di quello convertito. Il tetto e' posato sui muri "
+                     f"di questo piano ({wall_height:g} m), non su quelli dei piani sopra, che non sono modellati.")
     return notes

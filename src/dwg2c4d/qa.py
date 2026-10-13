@@ -67,7 +67,7 @@ def summary_lines(report) -> list[str]:
                "predefinita": "predefinita"}
         lo, hi = r["pitch_range"]
         slope = f"{r['pitch_deg']:.0f}" if hi - lo < 1.0 else f"{lo:.0f}-{hi:.0f}"
-        view = f", dalla vista {r['view']} della copertura" if r.get("view") else ""
+        view = f", dalla vista {r['view']} della copertura (sporto {r['overhang']:.2f} m)" if r.get("view") else ""
         out.append(f"  Tetto              : {r['faces']} falde, pendenza {slope} gradi "
                    f"({how[r['pitch_source']]}), colmo a {r['ridge_height']:.2f} m{view}")
     if report.columns:
