@@ -303,3 +303,18 @@ def test_a_chimney_over_a_ridge_does_not_make_the_ridge_an_eaves_line():
 
     ev = Elevation("south", 0.0, "porta", [], [(3.2, 0.0, 12.0), (5.2, 0.0, 12.0), (6.5, 5.0, 5.5)])
     assert ridge_hints_from([ev], 3.2) == [(0.0, 12.0, pytest.approx(2.0))]
+
+
+def test_of_two_poses_that_overlap_alike_the_one_where_every_body_of_the_roof_stands_on_the_building_wins():
+    """A long main roof and a pavilion at one end, over a building that has a stump at its other end too: the two ends fit
+    the main roof as well as each other (the overlap alone does not tell them apart), but only at one end the
+    pavilion stands on walls."""
+    building = box(0, 0, 120, 30).union(box(120, -2, 123, 32)).union(box(-3, 8, 0, 22))
+    main, pavilion = box(0.3, 0.3, 119.7, 29.7), box(120.2, -1.8, 122.8, 31.8)
+    roof = main.union(pavilion)
+    drawn = drawn_elsewhere(roof, 3, False, (400.0, 300.0))
+    reg = rv.fit_roof(drawn, building)
+    assert reg is not None and reg.sound
+    smallest = min(laid_back(drawn, reg).geoms, key=lambda g: g.area)
+    assert smallest.centroid.x == pytest.approx(121.5, abs=1.0)  # the pavilion is at the end that has the walls
+    assert not reg.alternatives

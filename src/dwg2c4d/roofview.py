@@ -41,7 +41,8 @@ GRID = 1e-6  # m: input snapping, as in roof.py
 PATTERN_PARTS = 60  # a layer with this many pieces in the view, all short, is a hatch drawn with lines (tiles)
 PATTERN_LENGTH = 1.0  # m: ... "short" is a median length under this
 JUNK_LAYERS = ("sezion", "section", "quot", "dimens", "text", "testi", "tratteg", "hatch", "campit", "pattern",
-               "pannell", "fotovolt", "photovolt", "solar", "panel")  # prefixes of the words a layer name is made of
+               "pannell", "fotovolt", "photovolt", "solar", "panel", "tabell", "legend", "cartigl")  # prefixes of the words a layer name is made of
+INSIDE_SHARE = 0.5  # a closed shape that fills at most this share of a plane it stands in, and touches nothing, is no plane
 EAVES_INSET = (0.2, 1.5)  # m: a loop this far inside the outline all round is the wall under the eaves
 INSET_FIT = 0.05  # ... when it differs from the outline shrunk by that much by less than this share of its area
 
@@ -55,6 +56,7 @@ MIN_IOU = 0.45  # the roof is on the plan if it overlaps the building (grown by 
 MIN_COVER = 0.6  # ... and at least this share of the roof stands over the building (grown)
 MIRROR_MARGIN = 0.1  # a mirrored pose is taken only if it overlaps this much better (iou) than any that is not
 STOREY_SLACK = 0.5  # m: the elevations may reach this far above the roof before they are said to show more storeys
+COMPONENT_MARGIN = 0.05  # of two poses that fit as well, the one whose bodies stand on the building this much better wins
 SAME_LINES = 0.05  # m: the lines of the roof in two poses are the same when they lie this close
 TIE = 0.97  # a pose that scores at least this share of the best one fits as well: the plain one (no turn) is taken
 CENTRE_WEIGHT = 0.02  # a shift that moves the centre of the roof away from the centre of the walls costs this much per diagonal
@@ -175,13 +177,12 @@ def _faces(lines: list[LineString]) -> list[Polygon]:
 
 
 def _outline(parts: list[_Part]) -> BaseGeometry:
-    """The outline of the roof as far as the drawing says it: the closed outlines that are big enough and no strips, or
-    else the planes the long lines make. Empty when there is none."""
+    """The outline of the roof as far as the drawing says it: the closed outlines that are big enough and no strips, and
+    the planes the long lines make (a roof drawn with lines and open polylines has no closed outline of its own). Empty
+    when there is none."""
     loops = [poly for p in parts if (poly := _loop(p)) is not None and poly.area >= MIN_ROOF_AREA and thinness(poly) >= FASCIA]
-    if loops:
-        return union(loops)
     lines = [p.line for p in parts if p.line.length >= math.sqrt(MIN_ROOF_AREA)]
-    return union(_faces(lines)) if lines else Polygon()
+    return union([*loops, *(_faces(lines) if lines else [])])
 
 
 def _eaves_inset(loop: Polygon, outline: BaseGeometry) -> float | None:
@@ -250,6 +251,10 @@ def clean_roof(items: list[Item]) -> CleanRoof | None:
                 overhang = inset if overhang is None else min(overhang, inset)
                 continue
         if p.line.difference(grown).length > 1e-6:
+            ends = [Point(p.line.coords[0]), Point(p.line.coords[-1])]
+            if all(not grown.covers(e) for e in ends):
+                continue  # it crosses the outline and goes on at both ends: a section line, a dimension
+            kept.extend(shapely.set_precision(g, GRID) for g in _pieces(p.line.intersection(grown)))  # it overshoots at one end
             continue
         kept.append(shapely.set_precision(p.line, GRID))
     kept = [l for l in kept if not l.is_empty]
@@ -257,17 +262,19 @@ def clean_roof(items: list[Item]) -> CleanRoof | None:
         return None
     segs = _pieces(unary_union(kept))
     lines = _prune(_pieces(unary_union(segs + closure_segments(segs, CLOSE_GAP))))
-    groups = []
+    groups: list[tuple[list[LineString], list[Polygon]]] = []
     for comp in _components(lines):
         planes = _faces(comp)
         if planes:
-            groups.append((comp, union(planes)))
-    groups = [(c, r) for i, (c, r) in enumerate(groups)
-              if not any(j != i and r.area < o.area and o.buffer(1e-6).covers(r) for j, (_, o) in enumerate(groups))]
+            groups.append((comp, planes))
+    regions = [union(f) for _, f in groups]
+    groups = [g for i, g in enumerate(groups)
+              if not any(j != i and plane.area * INSIDE_SHARE >= regions[i].area and plane.buffer(1e-6).covers(regions[i])
+                         for j, (_, other) in enumerate(groups) for plane in other)]
     if not groups:
         return None
     lines = [l for comp, _ in groups for l in comp]
-    return CleanRoof([Item("0", None, "roof", [Prim(l, "line") for l in lines])], union(r for _, r in groups), overhang)
+    return CleanRoof([Item("0", None, "roof", [Prim(l, "line") for l in lines])], union(p for _, planes in groups for p in planes), overhang)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -390,13 +397,28 @@ def fit_roof(roof: BaseGeometry, building: BaseGeometry) -> Registration | None:
     best = results[0]
     if best[3] and plain and best[0] < plain[0][0] + MIRROR_MARGIN:
         best = plain[0]  # a turned copy is far likelier than a mirrored one: the mirror must be clearly better
-    tied = [r for r in results if r is not best and r[0] >= TIE * best[0] and (not r[3] or best[3])]
-    if tied:  # a square roof fits the same building in several poses: the one drawn as it is wins
-        plain = [r for r in [best, *tied] if r[2] == 0 and not r[3]]
-        if plain:
-            best = plain[0]
-            tied = [r for r in results if r is not best and r[0] >= TIE * best[0] and (not r[3] or best[3])]
-    return _registration(best, building, tied)
+    group = [best, *(r for r in results if r is not best and r[0] >= TIE * best[0] and (not r[3] or best[3]))]
+    if len(group) > 1:  # poses that fit as well as one another: the bodies of the roof that stand on the building decide
+        covers = {id(r): _component_cover(r, building) for r in group}
+        ranked = sorted(group, key=lambda r: -covers[id(r)])
+        if covers[id(ranked[0])] - covers[id(ranked[1])] >= COMPONENT_MARGIN:
+            best = ranked[0]
+        else:  # a square roof fits the same building in several poses: the one drawn as it is wins
+            plain = [r for r in group if r[2] == 0 and not r[3]]
+            best = plain[0] if plain else best
+        group = [r for r in group if r is not best and covers[id(best)] - covers[id(r)] < COMPONENT_MARGIN]
+    else:
+        group = []
+    return _registration(best, building, group)
+
+
+def _component_cover(result: tuple, building: BaseGeometry) -> float:
+    """How well the separate bodies of the roof (a main roof, canopies, pavilions) stand on the building, each counting
+    once whatever its size: the mean over them of the share of the body over the building grown by the eaves."""
+    _, _, _, _, tx, ty, d, posed = result
+    grown = building.buffer(d, join_style="mitre")
+    covers = [p.intersection(grown).area / p.area for p in polygons_of(affinity.translate(posed, tx, ty)) if p.area >= MIN_ROOF_AREA]
+    return float(np.mean(covers)) if covers else 0.0
 
 
 def _registration(result: tuple, building: BaseGeometry, tied: list[tuple] = ()) -> Registration:
@@ -523,8 +545,11 @@ def view_roof_notes(found: ViewRoof, roof: "Roof", pitch: tuple[float, str] | No
              f"con i muri (sovrapposizione {reg.iou * 100:.0f} %, sporto {found.overhang:.2f} m). Controlla nell'anteprima 3D "
              "che sia al suo posto."]
     if found.ambiguous:
-        notes.append("Tetto: il contorno combacia con la pianta anche in altre posizioni (forma simmetrica): ho scelto quella "
-                     "non ruotata; controlla che i colmi vadano nel verso giusto.")
+        others = ", ".join(f"{(a.turns - reg.turns) % 4 * 90} gradi" for a in reg.alternatives)
+        notes.append(f"Tetto: il contorno combacia con la pianta quasi altrettanto bene anche ruotato di {others} (la forma e' "
+                     "simmetrica) e i colmi cambierebbero di posto: ho scelto "
+                     + ("quella non ruotata" if reg.turns == 0 and not reg.mirror else "quella che copre meglio i corpi del tetto")
+                     + "; controlla nell'anteprima 3D che i corpi del tetto stiano dal lato giusto.")
     if roof.pitch_source == "scritta" and pitch:
         notes.append(f"Tetto: pendenza {roof.pitch_deg:.0f} gradi, quella scritta nel foglio ({pitch[1]}).")
     elif roof.pitch_source == "predefinita":
