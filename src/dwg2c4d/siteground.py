@@ -76,8 +76,7 @@ def site_garden(doc, cfg, analysis, site, walls: list[BaseGeometry], notes: list
     others = [v.bbox for v in analysis.views if v.id not in site.views and v.kind in GARDEN_SKIPPED_KINDS]
     zones = [v.bbox for v in analysis.views if v.kind == "elevation"]
     inside = union([site.roofs, *(b.outline for b in site.buildings)])
-    where = replace(cfg, garden_exclude=[*cfg.garden_exclude, *others], garden_reach=cfg.garden_reach or _box(views),
-                    layers=OpenAirRules(cfg.layers.overrides))
+    where = replace(cfg, garden_exclude=[*cfg.garden_exclude, *others], garden_reach=cfg.garden_reach or _box(views))
     try:
         garden = build_garden(doc, where, analysis.unit.scale, inside, zones, notes, union(walls))
     except Exception as exc:  # the garden is a help: whatever goes wrong in it is never the reason a conversion fails
@@ -95,14 +94,15 @@ def site_garden(doc, cfg, analysis, site, walls: list[BaseGeometry], notes: list
 def around_site(doc, cfg, analysis, site, notes: list[str]) -> Around:
     """The garden, the terrain and the low walls of the site (``notes`` gets what the report says of them). The terrain sets the
     floor height of every building (``Building.base``)."""
+    open_air = replace(cfg, layers=OpenAirRules(cfg.layers.overrides))  # (no plan of rooms: the layer of the floors is paving)
     outlines = []
     if cfg.fences:  # the free-standing walls first: the garden leaves them their ground
         try:
-            outlines = wall_outlines(doc, cfg, analysis, site)
+            outlines = wall_outlines(doc, open_air, analysis, site)
         except Exception as exc:  # a help: whatever goes wrong in it is never the reason a conversion fails
             notes.append(f"Muri liberi non cercati: {type(exc).__name__}: {exc}. Il resto della conversione e' completo; per escluderli "
                          "usa --no-recinzioni.")
-    garden = site_garden(doc, cfg, analysis, site, outlines, notes)
+    garden = site_garden(doc, open_air, analysis, site, outlines, notes)
     terrain = None
     if cfg.terrain or cfg.terrain_auto:
         shells = garden.shells if garden is not None else []

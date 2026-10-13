@@ -178,3 +178,99 @@ def test_contour_lines_far_from_the_buildings_give_no_terrain_and_the_remark_say
     report = convert(path, tmp_path / "t.obj", Config(**TERRAIN))
     assert report.terrain is None and [b.base for b in report.site.buildings] == [0.0, 0.0]
     assert any("Terreno: le curve di livello del layer CURVE-LIV stanno a" in w for w in report.warnings)
+
+
+# --- the free-standing walls -----------------------------------------------------------------------------------------
+
+STRIP = rect(-1000, -1100, 0, -1060)  # a wall 10 m long and 40 cm thick, west of the pool
+ROUND_UP = 0.02  # m: the slabs of the model are snapped to a grid of a centimetre or so
+
+
+def walled(tmp_path, cfg=None, rings=(STRIP,), texts=(), layer="Polilinea sup. calpestabile", **kw):
+    """The garden sheet with closed outlines (``rings``, cm) on ``layer`` and written ``texts``: (text, x, y) in cm."""
+    path = garden_sheet(tmp_path / "t.dxf", **kw)
+    doc = ezdxf.readfile(path)
+    msp = doc.modelspace()
+    doc.layers.add(layer)
+    for ring in rings:
+        msp.add_lwpolyline(ring, close=True, dxfattribs={"layer": layer})
+    for text, x, y in texts:
+        msp.add_text(text, height=20, dxfattribs={"layer": "TESTI", "insert": (x, y)})
+    doc.saveas(path)
+    report = convert(path, tmp_path / "t.obj", cfg or Config(auto=True, images=False, roof_auto=True, garden=True, fences=True))
+    return report, Obj(tmp_path / "t.obj")
+
+
+def test_a_long_thin_closed_outline_in_the_open_is_a_wall_as_high_as_the_text_beside_it_says(tmp_path):
+    report, obj = walled(tmp_path, texts=[("Hmuro= 1,00 ml.", -600, -1030)])
+    (wall,) = report.site.around.walls.walls
+    assert (wall.height, wall.text) == (1.0, "Hmuro= 1,00 ml.") and wall.shape.area == pytest.approx(4.0, abs=0.01)
+    assert "Muretti" in obj.groups and obj.bbox("Muretti")[1][1] == pytest.approx(1.0, abs=ROUND_UP)
+    assert any(w.startswith("Muri liberi: altezze scritte") and "1 m da 'Hmuro= 1,00 ml.'" in w for w in report.warnings)
+
+
+def test_a_wall_with_two_heights_written_at_its_ends_has_both(tmp_path):
+    report, obj = walled(tmp_path, texts=[("Hmuro= 1,00 ml.", -950, -1030), ("Hmuro= 0,50 ml.", -50, -1030)])
+    west, east = sorted(report.site.around.walls.walls, key=lambda w: w.shape.centroid.x)
+    assert (west.height, east.height) == (1.0, 0.5)  # the nearest text decides, point by point
+    assert west.shape.area + east.shape.area == pytest.approx(4.0, abs=0.01) and west.shape.distance(east.shape) < 0.01  # the wall is whole
+    assert obj.bbox("Muretti")[1][1] == pytest.approx(1.0, abs=ROUND_UP)
+
+
+def test_a_wall_no_text_reaches_has_the_default_height_and_the_report_says_it_is_a_guess(tmp_path):
+    report, obj = walled(tmp_path)
+    (wall,) = report.site.around.walls.walls
+    assert (wall.height, wall.text) == (0.5, "") and obj.bbox("Muretti")[1][1] == pytest.approx(0.5, abs=ROUND_UP)
+    assert any("senza nessuna altezza scritta" in w and "--altezza-muretti" in w for w in report.warnings)
+
+
+def test_a_height_the_user_gives_beats_the_one_the_drawing_writes(tmp_path):
+    cfg = Config(auto=True, images=False, roof_auto=True, garden=True, fences=True, low_wall_height=0.8)
+    report, _ = walled(tmp_path, cfg, texts=[("Hmuro= 1,00 ml.", -600, -1030)])
+    (wall,) = report.site.around.walls.walls
+    assert (wall.height, wall.text) == (0.8, "")
+
+
+def test_a_text_that_no_wall_is_near_is_reported_and_used_by_nothing(tmp_path):
+    report, _ = walled(tmp_path, texts=[("Hmuro= 1,00 ml.", -600, -1030), ("Hmuro= 0,50 ml.", 1500, -1100)])
+    assert [w.height for w in report.site.around.walls.walls] == [1.0]
+    assert any("'Hmuro= 0,50 ml.' non ha nessun muro libero vicino" in w for w in report.warnings)
+
+
+@pytest.mark.parametrize("ring", [rect(-1000, -1100, -800, -1060),  # 2 m long: a pillar, a step
+                                  rect(-1000, -1100, 0, -900),  # 2 m wide: a surface
+                                  rect(-1000, -1100, 0, -1098)],  # 2 cm: a line
+                         ids=["short", "wide", "line"])
+def test_outlines_that_are_no_thin_long_strips_are_no_walls(tmp_path, ring):
+    report, obj = walled(tmp_path, rings=(ring,))
+    assert report.site.around.walls is None and "Muretti" not in obj.groups and "Cordoli" not in obj.groups
+
+
+def test_a_strip_under_a_roof_is_no_free_standing_wall(tmp_path):
+    report, obj = walled(tmp_path, rings=(rect(100, 300, 1100, 340),))  # across the hip roof
+    assert report.site.around.walls is None
+
+
+def test_the_free_standing_walls_can_be_left_out_with_the_fences(tmp_path):
+    report, obj = walled(tmp_path, Config(auto=True, images=False, roof_auto=True, garden=True, fences=False))
+    assert report.site.around.walls is None and "Muretti" not in obj.groups
+
+
+def test_a_thin_strip_is_a_curb_and_a_wall_stands_on_the_terrain(tmp_path):
+    report, obj = walled(tmp_path, rings=(rect(-1000, -1100, 0, -1082),), texts=[])  # 18 cm
+    (wall,) = report.site.around.walls.walls
+    assert wall.curb and wall.height == 0.15 and "Cordoli" in obj.groups
+
+
+def test_the_hatch_that_fills_a_wall_is_no_paving_and_a_hatch_on_the_layer_of_the_floors_is(tmp_path):
+    path = garden_sheet(tmp_path / "t.dxf")
+    doc = ezdxf.readfile(path)
+    msp = doc.modelspace()
+    doc.layers.add("Pavimenti")
+    hatch(msp, STRIP, "Pavimenti", rgb=(200, 120, 90))  # the brick of the wall
+    hatch(msp, rect(1100, -700, 1600, -100), "Pavimenti", rgb=(200, 120, 90))  # 30 m2 of paving beside the lawn
+    msp.add_lwpolyline(STRIP, close=True, dxfattribs={"layer": "Pavimenti"})  # (the outline of the wall is on that layer too)
+    doc.saveas(path)
+    report = convert(path, tmp_path / "t.obj", Config(auto=True, images=False, roof_auto=True, garden=True, fences=True))
+    assert report.garden.area("paving") == pytest.approx(30.0, abs=0.5)  # the strip of the wall (4 m2) is not ground
+    assert len(report.site.around.walls.walls) == 1
