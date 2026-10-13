@@ -5,7 +5,7 @@ by a quarter, in the same scale, on layers ('0') that no name calls roof. The an
 (``View.kind == "roof"``). What the roof builder (roof.py) needs from it is the outline and the ridge, hip and valley
 lines in the frame of the plan; the view also holds the lines tiles are drawn with, panels, skylights, dimensions,
 section marks, arrows, the gutters and the wall lines under the eaves. ``clean_roof`` takes those out and
-``register_roof`` finds the move (quarter turns and a shift) that lays the outline over the building.
+``fit_roof`` finds the move (quarter turns and a shift) that lays the outline over the building.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 import numpy as np
 import shapely
@@ -23,6 +23,7 @@ from shapely import affinity
 from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import polygonize, unary_union
+from shapely.strtree import STRtree
 
 from .config import LayerRules
 from .geom import polygons_of, union
@@ -249,7 +250,7 @@ def _components(lines: list[LineString]) -> list[list[LineString]]:
     return list(groups.values())
 
 
-def clean_roof(items: list[Item], tiles: list[tuple[float, float]] = ()) -> CleanRoof | None:
+def clean_roof(items: list[Item], tiles: Sequence[tuple[float, float]] = ()) -> CleanRoof | None:
     """The roof structure of a roof view: its outline and its ridge, hip and valley lines. Out go the layers of
     dimensions, texts, section marks and tile patterns; small closed outlines (skylights, chimneys, panels) and strips
     (gutters); the wall line that runs inside the outline all round (that is the wall under the eaves: it tells the
@@ -308,20 +309,18 @@ def clean_roof(items: list[Item], tiles: list[tuple[float, float]] = ()) -> Clea
     overhang = min((d for loop, d in insets if under.covers(loop)), default=None)  # the wall under the eaves of a pitched roof
     for loop, d in insets:  # ... but on a flat roof a loop that close to the edge is the inner face of the parapet
         if d <= PARAPET_INSET and not under.covers(loop) and flat_region.covers(loop):
-            thin.extend(polygons_of(polygon_of(flat_region, loop).difference(loop)))
+            thin.extend(polygons_of(_holding(flat_region, loop).difference(loop)))
     return CleanRoof(pitched, flat, thin, overhang)
 
 
-def polygon_of(region: BaseGeometry, inside: Polygon) -> BaseGeometry:
+def _holding(region: BaseGeometry, inside: Polygon) -> BaseGeometry:
     """The polygon of ``region`` that holds ``inside``."""
     return next((p for p in polygons_of(region) if p.covers(inside)), region)
 
 
-def _sort_planes(planes: list[Polygon], tiles: list[tuple[float, float]]) -> tuple[list[Polygon], list[Polygon]]:
+def _sort_planes(planes: list[Polygon], tiles: Sequence[tuple[float, float]]) -> tuple[list[Polygon], list[Polygon]]:
     """(the planes of pitched roofs, the planes of flat roofs). Planes that share an edge (a ridge, a hip, a valley) are one
     pitched roof; a plane alone is flat unless a hatch of tiles lies in it."""
-    from shapely.strtree import STRtree
-
     tree = STRtree(planes)
     group = list(range(len(planes)))
 
@@ -425,13 +424,6 @@ def _refine(fit: _Fit, tx: float, ty: float, d: float) -> tuple[float, float, fl
         if not moved:
             step /= 2.0
     return tx, ty, d, best[0], best[1]
-
-
-def register_roof(roof: BaseGeometry, building: BaseGeometry) -> Registration | None:
-    """The move that lays the outline of a roof plan over the building, or None when it fits nowhere (``fit_roof`` is the
-    best move whatever it is worth)."""
-    reg = fit_roof(roof, building)
-    return reg if reg is not None and reg.sound else None
 
 
 def fit_roof(roof: BaseGeometry, building: BaseGeometry) -> Registration | None:
@@ -597,7 +589,7 @@ def roof_views(analysis) -> list:
 def roof_from_view(doc, cfg, analysis, building: BaseGeometry, unit: str, scale: float,
                    warnings: list[str]) -> ViewRoof | None:
     """The roof of the sheet's roof plan, laid over ``building`` (the footprint of the plan, metres): of the views that are
-    roof plans the one whose outline fits the building best (``register_roof``). None when there is none or none fits
+    roof plans the one whose outline fits the building best (``fit_roof``). None when there is none or none fits
     (the warnings say so: a roof put in the wrong place is worse than no roof)."""
     from dataclasses import replace
 

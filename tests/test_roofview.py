@@ -27,10 +27,16 @@ def laid_back(drawn, reg):
 
 # --- the registration ----------------------------------------------------------------------------
 
+def register(roof, building):
+    """The registration when it is sound, else None."""
+    reg = rv.fit_roof(roof, building)
+    return reg if reg is not None and reg.sound else None
+
+
 @pytest.mark.parametrize("turns", [0, 1, 2, 3])
 def test_a_roof_plan_turned_by_any_quarter_and_drawn_far_away_is_laid_over_the_house(turns):
     drawn = drawn_elsewhere(ROOF, turns, False, (-53.97 + 400, 17.5 - 500))
-    reg = rv.register_roof(drawn, HOUSE)
+    reg = register(drawn, HOUSE)
     assert reg is not None and reg.turns == (4 - turns) % 4 and not reg.mirror
     assert laid_back(drawn, reg).symmetric_difference(ROOF).area < 0.5
     assert reg.iou > 0.9 and reg.overhang == pytest.approx(0.6, abs=0.1) and not reg.tied
@@ -40,14 +46,14 @@ def test_a_mirrored_roof_plan_is_laid_over_the_house_when_it_fits_much_better_th
     stairs = Polygon([(0, 0), (14, 0), (14, 3), (10, 3), (10, 6), (4, 6), (4, 11), (0, 11)])  # no turn of it is its mirror
     roof = stairs.buffer(0.6, join_style="mitre")
     drawn = drawn_elsewhere(roof, 0, True, (100.0, -20.0))
-    reg = rv.register_roof(drawn, stairs)
+    reg = register(drawn, stairs)
     assert reg is not None and reg.mirror and reg.iou > 0.9
     assert laid_back(drawn, reg).symmetric_difference(roof).area < 0.5
 
 
 def test_a_roof_that_is_its_own_mirror_is_never_mirrored():
     box_house = box(0, 0, 12, 8)
-    reg = rv.register_roof(box_house.buffer(0.6, join_style="mitre"), box_house)
+    reg = register(box_house.buffer(0.6, join_style="mitre"), box_house)
     assert reg is not None and not reg.mirror and reg.turns == 0
 
 
@@ -55,32 +61,32 @@ def test_a_roof_that_covers_only_part_of_the_building_is_still_found():
     """The ground floor is wider than the roof of the floor above (a portico): the overlap is what counts."""
     ground = HOUSE.union(box(12, 0, 17, 6))
     drawn = drawn_elsewhere(ROOF, 1, False, (300.0, 40.0))
-    reg = rv.register_roof(drawn, ground)
+    reg = register(drawn, ground)
     assert reg is not None
     assert laid_back(drawn, reg).symmetric_difference(ROOF).area < 1.0
 
 
 def test_a_roof_that_looks_like_nothing_of_the_plan_is_not_placed():
     strip = box(0, 0, 40, 3)
-    assert rv.register_roof(strip, box(0, 0, 10, 10)) is None
+    assert register(strip, box(0, 0, 10, 10)) is None
 
 
 def test_a_square_roof_fits_in_every_pose_and_the_one_drawn_as_it_is_wins():
     square = box(0, 0, 10, 10)
-    reg = rv.register_roof(box(100, 50, 110, 60), square)
+    reg = register(box(100, 50, 110, 60), square)
     assert reg is not None and reg.turns == 0 and reg.tied
     assert reg.shift == pytest.approx((-100.0, -50.0), abs=0.05)
 
 
 def test_a_roof_that_fits_in_many_places_is_put_on_the_middle_of_the_building():
-    reg = rv.register_roof(box(100, 50, 110, 54), box(0, 0, 14, 4))  # 10 m of roof over 14 m of house: any of 4 m of shifts
+    reg = register(box(100, 50, 110, 54), box(0, 0, 14, 4))  # 10 m of roof over 14 m of house: any of 4 m of shifts
     assert reg is not None
     moved = rv.place(box(100, 50, 110, 54), reg)
     assert moved.centroid.x == pytest.approx(7.0, abs=0.3)
 
 
 def test_a_roof_covering_a_small_part_of_a_long_building_is_not_placed():
-    assert rv.register_roof(box(0, 0, 4, 4), box(0, 0, 30, 4)) is None
+    assert register(box(0, 0, 4, 4), box(0, 0, 30, 4)) is None
 
 
 # --- the cleaning --------------------------------------------------------------------------------
@@ -434,7 +440,7 @@ def test_a_roof_that_stands_on_less_than_the_cover_share_of_the_building_is_not_
     """A roof 14 x 18 m over a house 10 x 6 m: the house grown by the eaves is the most of it (46 % of the roof)."""
     reg = rv.fit_roof(box(-2, -6, 12, 12), box(0, 0, 10, 6))
     assert reg.iou >= rv.MIN_IOU and reg.cover < rv.MIN_COVER and not reg.sound
-    assert rv.register_roof(box(-2, -6, 12, 12), box(0, 0, 10, 6)) is None
+    assert register(box(-2, -6, 12, 12), box(0, 0, 10, 6)) is None
 
 
 def test_a_roof_that_fits_in_many_places_over_the_house_is_put_in_the_middle_even_when_the_overlap_is_poor():
