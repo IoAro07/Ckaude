@@ -118,6 +118,12 @@ def test_the_floor_level_most_texts_agree_on_wins_and_a_height_in_another_datum_
     assert written_floor_level(["+0.00 (12.30)", "PIANTA"], 291.0, 301.0) is None
 
 
+def test_a_level_that_other_texts_contradict_is_said():
+    texts = ["+0.00 (297.40)", "+0.00 (297.40)", "QUOTA PIANO FINITO 297.38", "-0.40 (297.00)"]
+    value, how = written_floor_level(texts, 291.0, 301.0)
+    assert value == pytest.approx(297.40) and how == "3 scritte; altre scritte dicono 297.38 (1)"  # -0.40 (297.00) puts the zero at 297.40 too
+
+
 # --- the placement ---------------------------------------------------------------------------------
 
 def test_a_placement_and_its_inverse_and_the_chain_of_two():

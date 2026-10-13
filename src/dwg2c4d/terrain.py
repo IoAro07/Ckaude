@@ -278,7 +278,9 @@ def written_floor_level(texts: list[str], low: float, high: float) -> tuple[floa
         return None
     top = max(votes.values())
     value = max((v for v, n in votes.items() if n == top), key=lambda v: sum(n for w, n in votes.items() if abs(w - v) <= 0.015))
-    return value, f"{sum(n for w, n in votes.items() if abs(w - value) <= 0.015)} scritte"
+    agree = sum(n for w, n in votes.items() if abs(w - value) <= 0.015)
+    other = sorted((w, n) for w, n in votes.items() if abs(w - value) > 0.015)
+    return value, f"{agree} scritte" + (f"; altre scritte dicono {', '.join(f'{w:.2f} ({n})' for w, n in other)}" if other else "")
 
 
 def sheet_texts(doc) -> list[str]:
