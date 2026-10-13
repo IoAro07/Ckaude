@@ -215,6 +215,7 @@ def _room_rows(rooms: list[Room]) -> list[dict]:
     return [{"name": r.name, "area_m2": r.area, "height": r.height, "named": r.named} for r in rooms]
 
 
+SURE_PAIRS = 3  # an elevation that pairs this many symbols with openings of the top storey is sure enough of its facade to give its eaves
 STOREY_OFF = dict(garden=False, roof=False, roof_auto=False, elevations=[], images=False, c4d_json=False, write_table=False,
                   write_garden_table=False, garden_table_in=None, area=None, roof_area=None, roof_offset=None)  # what an upper storey leaves to the base
 
@@ -271,7 +272,8 @@ def _stack_storeys(doc, input_path: Path, output_path: Path, cfg: Config, stack:
         o.storey = base.index
     top = floors[-1]
     if top.height_source == "predefinita" and cfg.user.wall_height_auto:  # the roof stands on it: the elevations know where its walls end
-        agreed = agreed_height([(e["confidence"] == "alta", e["storey_height"]) for e in top.report.elevations if e.get("storey_height")])
+        agreed = agreed_height([(e["confidence"] == "alta" or e["matched"] >= SURE_PAIRS, e["storey_height"])
+                                for e in top.report.elevations if e.get("storey_height")])
         if agreed is not None:
             top.height, top.height_source = agreed, "prospetto"
     notes = place_storeys(floors, consensus_levels([e["levels"] for e in elevation_report if e.get("levels")]),

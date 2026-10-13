@@ -49,7 +49,7 @@ def _storey_lines(report) -> list[str]:
         out.append(f"  {f'Piano {fl.index} muri':<19}: {len(polygons_of(solid))} corpi, {solid.area:.1f} m2 in pianta; alti "
                    f"{fl.height:g} m ({HEIGHT_SOURCE[fl.height_source]}); porte / finestre {doors} / {windows}; "
                    f"pilastri {len(polygons_of(fl.plan.columns))}")
-        out.extend(_elevation_line(ev, f"Piano {fl.index} prosp.") for ev in fl.report.elevations)
+        out.extend(_elevation_line(ev, f"Prosp. P{fl.index}") for ev in fl.report.elevations)
         out.extend(f"  {f'Locale piano {fl.index}':<19}: {r['name']}  {r['area_m2']:.1f} m2" + ("" if r["named"] else "  (senza nome)")
                    for r in fl.report.rooms)
     return out

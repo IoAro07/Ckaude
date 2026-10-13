@@ -12,7 +12,7 @@ import json
 import math
 from pathlib import Path
 
-from .mesh import Mesh, split_storey
+from .mesh import Mesh, split_storey, storey_name
 
 # mesh group -> (null name, material key)
 GROUPS = {
@@ -146,7 +146,7 @@ def to_model_dict(mesh: Mesh, name: str, origin_offset: tuple[float, float] = (0
         if tag:
             if tag not in used:
                 used.add(tag)
-                groups.append({"name": tag, "label": tag, "parent": name})
+                groups.append({"name": tag, "label": storey_name(tag), "parent": name})
             parent, kind = tag, null
             null = f"{tag}_{null}"
         if null not in used:

@@ -27,6 +27,11 @@ def storey_tag(index: int) -> str:
     return f"P{index}" if index >= 0 else f"PM{-index}"
 
 
+def storey_name(tag: str) -> str:
+    """The name of a storey for a person (P0 -> 'Piano 0', PM1 -> 'Piano -1')."""
+    return f"Piano {-int(tag[2:]) if tag.startswith('PM') else int(tag[1:])}"
+
+
 def split_storey(group: str) -> tuple[str, str]:
     """(tag, name) of a group of a stacked model ('P1_Telai_F01' -> ('P1', 'Telai_F01')); ('', name) for any other."""
     m = STOREY_TAG.match(group)

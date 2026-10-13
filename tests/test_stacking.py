@@ -9,7 +9,7 @@ from shapely.geometry import box
 from dwg2c4d import Config, convert
 from dwg2c4d.autodetect import analyze
 from dwg2c4d.cli import main
-from dwg2c4d.mesh import split_storey, storey_tag
+from dwg2c4d.mesh import split_storey, storey_name, storey_tag
 from dwg2c4d.stacking import (DEFAULT_SLAB, Floor, consensus_levels, find_storeys, place_storeys, register, slab_pieces,
                               stacking_on, storey_of_view)
 from helpers import Obj
@@ -95,7 +95,7 @@ def test_the_json_puts_every_storey_in_a_null_of_its_own(tmp_path):
     names = [g["name"] for g in model["groups"]]
     assert {"P0", "P1", "P0_Murature", "P1_Murature", "P1_Solai"} <= set(names)
     storey_null = next(g for g in model["groups"] if g["name"] == "P1")
-    assert storey_null["parent"] == model["name"]
+    assert storey_null["parent"] == model["name"] and storey_null["label"] == "Piano 1"
     assert next(g for g in model["groups"] if g["name"] == "P1_Murature")["parent"] == "P1"
     assert {o["name"]: o["group"] for o in model["objects"]}["P1_Muri"] == "P1_Murature"
     assert names.index("P1") < names.index("P1_Murature")  # the importer needs the parents first
@@ -291,6 +291,7 @@ def test_storey_tags_name_the_groups_of_a_stack():
     assert [storey_tag(i) for i in (0, 1, 2, -1)] == ["P0", "P1", "P2", "PM1"]
     assert split_storey("P1_Telai_F01") == ("P1", "Telai_F01") and split_storey("PM1_Muri") == ("PM1", "Muri")
     assert split_storey("Pavimento_Sala") == ("", "Pavimento_Sala") and split_storey("Telai_P01") == ("", "Telai_P01")
+    assert [storey_name(t) for t in ("P0", "P2", "PM1")] == ["Piano 0", "Piano 2", "Piano -1"]
 
 
 def test_the_command_line_takes_piani_no_piani_and_the_slab(tmp_path, capsys):

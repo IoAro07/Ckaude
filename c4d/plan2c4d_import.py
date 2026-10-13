@@ -125,7 +125,7 @@ def build(doc, model, use_corona=True, use_layers=True, phong_angle_deg=40.0):
     palette = {"Murature": (0.85, 0.85, 0.8), "Pavimenti": (0.6, 0.45, 0.3), "Battiscopa": (1, 1, 1),
                "Infissi": (0.3, 0.6, 0.9), "Soffitti": (0.9, 0.9, 0.9), "Giardino": (0.4, 0.65, 0.3),
                "Piscina": (0.3, 0.6, 0.85), "Alberi": (0.2, 0.5, 0.2), "Siepi": (0.15, 0.4, 0.15),
-               "Cespugli": (0.3, 0.6, 0.25), "Arredi_esterni": (0.85, 0.7, 0.45)}
+               "Cespugli": (0.3, 0.6, 0.25), "Arredi_esterni": (0.85, 0.7, 0.45), "Solai": (0.7, 0.7, 0.68)}
     for g in model["groups"]:
         if g["name"] == model["name"]:
             continue
@@ -137,11 +137,15 @@ def build(doc, model, use_corona=True, use_layers=True, phong_angle_deg=40.0):
         nulls[g["name"]] = n
         if g.get("origin"):          # asse del gruppo (infissi): le mesh dei figli sono relative ad esso
             n.SetMl(frame_matrix(g))
-        if use_layers and g["parent"] == model["name"] and g["name"] in palette:
-            lay = make_layer(doc, g["name"], palette[g["name"]])
-            if lay is not None:
-                layers[g["name"]] = lay
-                n[c4d.ID_LAYER_LINK] = lay
+        # un livello per tipo di gruppo: i gruppi di un piano (P1_Murature) dicono il tipo nella chiave "layer"
+        kind = g["name"] if g["parent"] == model["name"] else g.get("layer")
+        if use_layers and kind in palette:
+            if kind not in layers:
+                lay = make_layer(doc, kind, palette[kind])
+                if lay is not None:
+                    layers[kind] = lay
+            if kind in layers:
+                n[c4d.ID_LAYER_LINK] = layers[kind]
 
     phong = math.radians(phong_angle_deg)
     total_p = total_f = 0
