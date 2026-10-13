@@ -224,12 +224,27 @@ def plan_overlay(report, path: str | Path) -> Path:
     ax.set_aspect("equal")
     ax.autoscale()
     ax.margins(0.06)
+    terrain = plan.terrain
+    if terrain is not None:  # the ground under the plan: contour lines every metre and the flat platform dashed, drawn within the plan
+        import numpy as np
+
+        xlim, ylim = ax.get_xlim(), ax.get_ylim()
+        ny, nx = terrain.shape
+        gx, gy = np.meshgrid(terrain.x0 + np.arange(nx + 1) * terrain.step, terrain.y0 + np.arange(ny + 1) * terrain.step)
+        ax.contour(gx, gy, terrain.z, levels=np.arange(math.floor(terrain.z.min()), math.ceil(terrain.z.max()) + 1.0),
+                   colors="#b08850", linewidths=0.5, zorder=0.1)
+        for poly in polygons_of(terrain.platform):
+            ax.plot(*poly.exterior.xy, "--", color="#8a6a3a", lw=0.8, zorder=0.15)
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
     ax.grid(alpha=0.15)
     ax.set_title("Controllo: muri (grigio), tramezzi (grigio chiaro), muretti e cordoli (verde acqua), locali, aperture con "
                  "sigla, larghezza×altezza e quota da terra in cm (blu finestre, rosso porte, arancio vani; * = vedi note); "
                  "tratteggiati: arredi (verde) e scale (arancio) non estrusi"
                  + ("; giardino: pavimentazione, prato, acqua, siepi/alberi/cespugli/arredi con sigla"
-                    if garden is not None else ""), fontsize=9)
+                    if garden is not None else "")
+                 + ("; terreno: curve di livello ogni metro (marrone) e piattaforma piana (tratteggio)"
+                    if terrain is not None else ""), fontsize=9)
     path = Path(path)
     fig.savefig(path, dpi=100, bbox_inches="tight")
     plt.close(fig)

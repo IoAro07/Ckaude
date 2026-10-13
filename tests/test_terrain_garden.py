@@ -153,13 +153,13 @@ def test_a_curb_follows_the_ground_and_a_low_wall_too(tmp_path):
 
 
 def test_the_json_for_cinema_4d_puts_the_terrain_in_its_own_group_with_its_own_material(tmp_path):
-    report = sloping_garden(tmp_path, c4d_json=True)[0]
+    sloping_garden(tmp_path, c4d_json=True)
     model = json.loads((tmp_path / "g_model.json").read_text())
     ground = next(o for o in model["objects"] if o["name"] == "Terreno")
     assert ground["group"] == "Terreno" and ground["material"] == "terrain"
     assert "terrain" in model["materials"] and "soil" not in model["materials"]
     assert any(g["name"] == "Terreno" for g in model["groups"])
-    flat = sloping_garden(tmp_path, c4d_json=True, terrain_auto=False)[0]
+    sloping_garden(tmp_path, c4d_json=True, terrain_auto=False)
     model = json.loads((tmp_path / "g_model.json").read_text())
     soil = next(o for o in model["objects"] if o["name"] == "Terreno")
     assert soil["group"] == "Giardino" and soil["material"] == "soil"

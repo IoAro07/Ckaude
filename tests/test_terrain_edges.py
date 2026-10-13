@@ -78,6 +78,25 @@ def test_contour_vertices_far_beyond_the_terrain_are_not_triangulated(monkeypatc
     assert seen == [int(((near[:, 0] >= -35) & (near[:, 0] <= 35)).sum())]  # only the points within 15 m of the terrain went in
 
 
+def test_the_check_picture_of_the_plan_draws_the_contour_lines_of_the_terrain_within_the_plan(tmp_path, monkeypatch):
+    from matplotlib.axes import Axes
+    from test_terrain import run
+
+    seen = []
+    real = Axes.contour
+
+    def spy(self, *args, **kw):
+        seen.append(self)
+        return real(self, *args, **kw)
+
+    monkeypatch.setattr(Axes, "contour", spy)
+    report, _ = run(tmp_path, images=True)
+    assert len(seen) == 1 and report.overlay_path is not None and report.overlay_path.exists()
+    seen.clear()
+    run(tmp_path, images=True, terrain_auto=False)
+    assert seen == []  # no terrain: the picture is what it was
+
+
 def test_the_3d_preview_shows_the_terrain_only_round_the_house(tmp_path, monkeypatch):
     import dwg2c4d.qa as qa
     from test_terrain import run
