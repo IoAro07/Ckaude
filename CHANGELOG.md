@@ -4,6 +4,16 @@ La versione in uso la dice `python -m dwg2c4d --version` (e la prima riga di `co
 deve coincidere con quella di `pyproject.toml` e con la riga in testa al [README](README.md). Dopo ogni aggiornamento
 decomprimi il progetto in una **cartella nuova** e controlla che la versione sia quella attesa.
 
+## [0.7.1] — 2026-10-13
+
+- **Recinzione del lotto** (`lotfence`): muretto con copertina, pilastri con cappello, ringhiera a montanti, cancello
+  aperto e rete, riconosciuti dalle forme del disegno; altezze e passo dei montanti dal prospetto; gruppi separati per i
+  materiali (`Muretto`, `Copertina`, `Pilastri_lotto`, `Ringhiera`, `Recinzione_pali`, `Recinzione_rete`);
+  `--no-recinzioni`, `--altezza-muretto-lotto`.
+- **Modalita' sito** (`sitemode`, `siteelev`): un foglio con la sola planimetria generale e i tetti degli edifici si
+  converte in volumi chiusi con tetto (gronda, colmo e pendenza dai prospetti) e con le aperture dei prospetti sulle
+  facciate; `--sito`, `--no-sito`, `--sporto-sito`, `--spessore-muri-sito`, `--altezza-piano`.
+
 ## [0.7.0] — 2026-10-13
 
 **Dal confronto con i modelli 3D fatti a mano** (Test2, Test3, Test6, Test7): lo strumento usa tutta la tavola.

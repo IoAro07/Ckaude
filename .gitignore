@@ -13,4 +13,4 @@ output/
 tests/data/
 
 # worktrees of parallel agents
-.claude/worktrees/
+.claude/

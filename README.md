@@ -1,6 +1,6 @@
 # dwg2c4d — da planimetria 2D (DWG/DXF) a modello 3D per Cinema 4D
 
-**Versione 0.7.0** (13 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
+**Versione 0.7.1** (13 ottobre 2026) · [cronologia delle versioni](CHANGELOG.md) · `python -m dwg2c4d --version` mostra quella in uso
 
 Legge una pianta 2D, ne **estrude i muri** (con i tramezzi a parte), **apre porte, finestre e vani** con le
 quote che trova (scritte del disegno, prospetti), costruisce **infissi dettagliati** (imbotto, cornice, telai, ante,
@@ -27,14 +27,14 @@ Il codice sta nel repository pubblico <https://github.com/IoAro07/DXF23D> (il ra
   qualsiasi (per esempio `C:\dwg2c4d`).
 - **Con git**: `git clone https://github.com/IoAro07/DXF23D.git`
 
-In alternativa il file `dwg2c4d-0.7.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
-dwg2c4d-0.7.0-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
+In alternativa il file `dwg2c4d-0.7.1-py3-none-any.whl` (se te l'hanno consegnato): `pip install
+dwg2c4d-0.7.1-py3-none-any.whl` installa tutto senza scaricare il progetto, ma non include gli script `.bat` né lo
 script di Cinema 4D, che stanno nella cartella del progetto.
 
 **Per aggiornare** a una versione nuova: scarica di nuovo il progetto in una **cartella nuova** (o `git pull`) e rifai
 `installa.bat`. I file `converti.bat` ed `elenca_layer.bat` usano comunque sempre il codice della cartella in cui stanno
 (`src`), anche se in Python è rimasta installata una copia vecchia. Quando parte, `converti.bat` stampa la riga
-`dwg2c4d 0.7.0  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
+`dwg2c4d 0.7.1  (percorso)` e il report (`*_report.txt`) la riporta in testa: se la versione non è quella attesa, stai
 usando una cartella vecchia. `python -m dwg2c4d --version` fa lo stesso da terminale.
 
 *Perché la cartella nuova*: pip lascia dentro il progetto una cartella `build`; uno ZIP non porta il fuso orario, quindi
@@ -584,6 +584,33 @@ non chiude una stanza è un muretto. Le scale disegnate a righe non diventano bl
 tolto o abbassato è elencato nel riepilogo; `--muri-tutti` spegne tutto (tutto ciò che sta sui layer dei muri è muro).
 Un layer di terreno o di strade (`calpestabile`, `terreno`, `coppi`, `curve di livello`) non viene mai proposto come
 muri; una planimetria generale chiesta con `--vista` viene costruita bassa e lo dice.
+
+**Recinzione del lotto** (`--no-recinzioni`, `--altezza-muretto-lotto`). Il muretto che chiude il lotto, i pilastri, la
+ringhiera e la rete si riconoscono dalle **forme** del disegno, su qualunque layer che non sia un muro della casa (i
+nomi `Muretto`, `Recinzione`, `Ringhiera`, `Cancello` aiutano ma non servono): il muretto è una coppia di linee
+parallele lunghe a 8-40 cm una dall'altra, i pilastri sono piccoli quadrati o cerchi chiusi alle estremità, agli angoli e
+ai due lati di un cancello, la ringhiera è una coppia di linee sottili (1-4 cm) lungo il muretto, il cancello è il vuoto
+tra due pilastri, la rete è una linea singola sottile che unisce un pilastro alla casa. Una coppia di linee da sola non
+prova nulla (un giunto, un cordolo): serve un pilastro a un'estremità, o la ringhiera lungo, o un nome di layer che lo
+dica. **Altezze e disegno** vengono dal prospetto disegnato in linea con la pianta (linea di terra, cima del muretto e
+della copertina, cima dei pilastri, correnti e passo dei montanti della ringhiera); quello che il prospetto non dice è
+predefinito (muretto 0,80 m, ringhiera 0,60 m sopra il muretto, un montante ogni 12 cm) e il riepilogo dice quale.
+Gruppi separati per assegnare i materiali: `Muretto`, `Copertina`, `Pilastri_lotto`, `Ringhiera`, `Recinzione_pali`,
+`Recinzione_rete`; il vuoto del cancello resta aperto; sul terreno, se c'è, seguono il suolo.
+
+**Modalità sito** (`--sito`/`--no-sito`, `--sporto-sito`, `--spessore-muri-sito`, `--altezza-piano`). Un foglio che non
+disegna la pianta di nessun edificio ma ha una **planimetria generale in cui ogni edificio è disegnato come tetto**
+(campiture di coppi su ogni falda, frecce di pendenza) e, altrove, i prospetti di alcuni, non dà più l'errore: i tetti
+si raggruppano in **edifici** e in **corpi** (falde che si incontrano lungo un colmo, un displuvio o un compluvio; una falda
+che scende come la vicina è una tettoia appoggiata, un corpo a sé), ciascuno diventa un volume chiuso con il suo tetto: i
+muri sono il contorno del tetto meno lo sporto (0,5 m se nessun prospetto dice altro, `--sporto-sito`), spessi 0,40 m e
+**vuoti dentro** (l'interno non si conosce), con pavimento. **Gronda, colmo e pendenza** di ogni corpo vengono dai
+prospetti che lo mostrano (abbinati per la lunghezza dei lati e per i titoli e le tracce di sezione), altrimenti 3 m per
+piano (`--altezza-piano`, un piano per i corpi piccoli, due per gli altri) con un avviso. Le **porte e le finestre dei
+prospetti** sono messe sulle facciate degli edifici che i prospetti mostrano, senza una pianta: l'avviso dice quante, quali
+non si sono potute mettere (loggiati, pensiline, aperture sotto la quota zero) e che la facciata è dedotta dal confronto dei
+tetti: controllale. Il risultato non è una ricostruzione: sono volumi con il tetto e le aperture dei prospetti, non
+ambienti.
 
 **Finestre a nastro.** Una finestra disegnata solo dal suo vetro (due o più linee parallele a meno di 6 cm, lunghe
 almeno 60 cm, nel muro esterno, su un layer che si chiama `Linee`) è riconosciuta come finestra: le campate vicine
