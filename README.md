@@ -23,8 +23,10 @@ pianta.dwg  ──►  dwg2c4d  ──►  pianta.obj + .mtl  (+ _model.json)  �
 Il codice sta nel repository pubblico <https://github.com/IoAro07/DXF23D> (il ramo predefinito è
 `claude/dwg-to-3d-cinema4d-0c0if5`: non serve alcun login). Due modi:
 
-- **Scaricarlo come ZIP**: nella pagina del repository *Code → Download ZIP*, poi decomprimi in una cartella
-  qualsiasi (per esempio `C:\dwg2c4d`).
+- **Scaricarlo come ZIP**: nella pagina **Releases** del repository (colonna a destra) scarica `DXF23D-X.Y.Z.zip` (per
+  esempio `DXF23D-0.8.0.zip`: nome e versione, e la cartella dentro ha lo stesso nome), poi decomprimi in una cartella
+  qualsiasi (per esempio `C:\dwg2c4d`). Il pulsante *Code → Download ZIP* scarica invece il ramo, e GitHub lo chiama con il
+  nome del ramo: meglio la release.
 - **Con git**: `git clone https://github.com/IoAro07/DXF23D.git`
 
 In alternativa il file `dwg2c4d-0.8.0-py3-none-any.whl` (se te l'hanno consegnato): `pip install
