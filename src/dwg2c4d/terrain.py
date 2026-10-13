@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import shapely
 from scipy.interpolate import LinearNDInterpolator, NearestNDInterpolator
+from scipy.ndimage import gaussian_filter
 from scipy.spatial import Delaunay
 from shapely.geometry import MultiPoint, box
 from shapely.geometry.base import BaseGeometry
@@ -57,7 +58,7 @@ GRID = 1.0  # m: size of the cells of the mesh of the terrain
 MAX_CELLS = 40000  # the cells grow when the terrain would have more
 PLATFORM_MARGIN = 2.0  # m: the flat ground reaches this far beyond the walls (more than the diagonal of a cell: no cell is half flat there)
 SLOPE_MAX = 0.5  # rise / run: how steep the embankment between the platform and the natural ground is at most (1 : 2)
-CROP = 15.0  # m: contour vertices this far beyond the terrain are no use to its edge
+SMOOTH = 1.0  # m: the interpolated ground is blurred by this (the triangles between two vertices of one contour are flat: terraces)
 POOL_MARGIN = 1.0  # m: the flat ground reaches this far beyond a pool (which is dug flat, at the level of the house)
 
 # --- the finished floor ---
@@ -196,11 +197,11 @@ def lattice(levels: list[float]) -> tuple[list[float], float] | None:
         on = mm[np.minimum(r, step - r) <= tol]
         if best is None or len(on) > len(best):
             best = on
-    if best is None or len(best) < 2:
+    if best is None or len(best) < MIN_LEVELS_ASKED:
         return None
     cuts = np.flatnonzero(np.diff(best) > MAX_HOLE * step) + 1  # the groups of levels, split at the wide holes
     best = max(np.split(best, cuts), key=len)
-    if len(best) < 2:
+    if len(best) < MIN_LEVELS_ASKED:
         return None
     run = np.diff(best)
     if (np.abs(run - step) <= tol).sum() < STEP_SHARE * len(run):
@@ -319,7 +320,7 @@ def build_ground(points: np.ndarray, window: tuple[float, float, float, float], 
     ``floor`` the height of the finished floor in them; ``level`` where the platform lies (relative to the floor)."""
     step, nx, ny = _grid(window)
     xs, ys = np.meshgrid(window[0] + np.arange(nx + 1) * step, window[1] + np.arange(ny + 1) * step)
-    natural = surface(points, xs.ravel(), ys.ravel()).reshape(xs.shape) - floor
+    natural = gaussian_filter(surface(points, xs.ravel(), ys.ravel()).reshape(xs.shape), SMOOTH / step, mode="nearest") - floor
     away = shapely.distance(platform, shapely.points(xs.ravel(), ys.ravel())).reshape(xs.shape)
     z = level + np.clip(natural - level, -SLOPE_MAX * away, SLOPE_MAX * away)
     return Terrain(window[0], window[1], step, z, level, float(z.min()) - thickness, platform, hole)
@@ -412,12 +413,12 @@ def build_terrain(doc, cfg: Config, analysis, unit_scale: float, building: BaseG
         warnings.append(f"Terreno: le curve di livello del layer {c.layer} stanno a {near:.0f} m dalla casa: non coprono il "
                         "punto dove sta l'edificio, nessun terreno (curve di un altro lotto?).")
         return None
-    window = box(*building.bounds).buffer(MARGIN).intersection(box(*MultiPoint(points[:, :2]).bounds)).bounds
-    if window[2] - window[0] < 1.0 or window[3] - window[1] < 1.0:
-        return None
+    platform = _platform(parts, pools)
+    covered = box(*MultiPoint(points[:, :2]).bounds).union(platform)  # the lines reach as far as they do, but the platform is on it
+    window = box(*building.bounds).buffer(MARGIN).union(platform).intersection(box(*covered.bounds)).bounds
     floor = written_floor_level(sheet_texts(doc), c.levels[0], c.levels[-1]) or (_ground_under(points, building), FLOOR_FROM_GROUND)
     level = -cfg.floor_thickness
-    t = build_ground(points, window, _platform(parts, pools), pools, floor[0], level, cfg.terrain_thickness)
+    t = build_ground(points, window, platform, pools, floor[0], level, cfg.terrain_thickness)
     t.info = {"layer": c.layer, "levels": len(c.levels), "step": c.step, "low": c.levels[0], "high": c.levels[-1],
               "floor": floor[0], "floor_source": floor[1], "level": level, "size": (window[2] - window[0], window[3] - window[1]),
               "thickness": cfg.terrain_thickness, "view": view_id, "registered": registered, "shift": placement.shift,
